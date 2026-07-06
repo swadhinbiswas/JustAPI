@@ -1,0 +1,81 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/justapi-core",
+    "crates/justapi-py",
+    "crates/justapi-cli",
+    "crates/justapi-bench",
+    "crates/justapi-inference",
+]
+exclude = ["fuzz"]
+
+[workspace.package]
+version = "2.0.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+# Internal crates
+justapi-core = { path = "crates/justapi-core" }
+justapi-py = { path = "crates/justapi-py" }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# HTTP stack
+hyper = { version = "1", features = ["full"] }
+hyper-util = { version = "0.1", features = ["tokio", "http1", "http2", "server"] }
+http-body-util = "0.1"
+
+# Python bindings
+pyo3 = { version = "0.29", features = ["extension-module", "experimental-async", "abi3-py311"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_urlencoded = "0.7"
+simd-json = { version = "0.14", features = ["serde_impl"] }
+jsonschema = { version = "0.46", default-features = false }
+
+# Observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+
+# Routing
+matchit = "0.9"
+
+# WebSocket
+tokio-tungstenite = "0.24"
+tokio-stream = "0.1"
+tokio-util = "0.7"
+sha1 = "0.10"
+base64 = "0.22"
+
+# TLS
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+tokio-rustls = { version = "0.26" }
+rustls-pemfile = { version = "2" }
+
+# Compression
+flate2 = "1"
+brotli = "7"
+zstd = "0.13"
+
+# OpenTelemetry
+opentelemetry = "0.26"
+opentelemetry_sdk = { version = "0.26", features = ["rt-tokio"] }
+opentelemetry-stdout = { version = "0.26", features = ["trace"] }
+opentelemetry-otlp = { version = "0.26", features = ["grpc-tonic"] }
+tracing-opentelemetry = "0.27"
+
+# Utilities
+anyhow = "1"
+thiserror = "1"
+clap = { version = "4", features = ["derive"] }
+async-trait = "0.1"
+jsonwebtoken = "9"
+governor = "0.8"
+
+# Database
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "sqlite", "mysql", "migrate"] }
