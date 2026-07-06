@@ -1,0 +1,19 @@
+# JustAPI — rustfmt configuration
+# Applied by `cargo fmt` and CI.
+# See https://rust-lang.github.io/rustfmt/
+
+edition = "2021"
+
+# ── Formatting style ─────────────────────────────────────────
+max_width = 100
+use_small_heuristics = "Max"
+tab_spaces = 4
+
+# ── Imports ──────────────────────────────────────────────────
+imports_granularity = "Crate"
+group_imports = "StdExternalCrate"
+
+# ── Misc ─────────────────────────────────────────────────────
+format_code_in_doc_comments = true
+wrap_comments = true
+normalize_comments = true

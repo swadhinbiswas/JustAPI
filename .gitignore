@@ -1,0 +1,130 @@
+# ============================================================
+# JustAPI — .gitignore
+# Rust workspace + PyO3 Python bindings + Docker + Helm
+# ============================================================
+
+# ── Rust / Cargo ─────────────────────────────────────────────
+/target/
+**/target/
+**/*.rs.bk
+*.rlib
+*.rmeta
+
+# Cargo build-script output
+# (Cargo.lock is checked in for binaries — intentional)
+
+# ── Python ───────────────────────────────────────────────────
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Python packaging
+*.egg-info/
+*.egg
+dist/
+build/
+*.whl
+
+# Maturin build artifacts
+*.so
+*.dylib
+*.dll
+
+# Type checking / linting
+.mypy_cache/
+**/.mypy_cache/
+.dmypy.json
+dmypy.json
+.pytype/
+.ruff_cache/
+
+# Testing
+.pytest_cache/
+**/.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# ── IDE / Editor ─────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+*.sublime-workspace
+*.sublime-project
+.project
+.classpath
+.settings/
+
+# ── OS ───────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+Desktop.ini
+._*
+
+# ── Environment / Secrets ────────────────────────────────────
+.env
+!.env.example
+*.pem
+*.key
+*.crt
+!crates/**/tests/**/*.pem
+!crates/**/tests/**/*.key
+
+# ── Fuzzing ──────────────────────────────────────────────────
+fuzz/target/
+fuzz/corpus/
+fuzz/artifacts/
+
+# ── Documentation build ──────────────────────────────────────
+site/
+
+# ── Docker ───────────────────────────────────────────────────
+# Don't ignore Dockerfile or docker-compose — they are source.
+
+# ── Helm ─────────────────────────────────────────────────────
+helm/**/charts/
+helm/**/*.tgz
+
+# ── Benchmark data (large, generated) ────────────────────────
+# Benchmark scripts are tracked; raw output is not.
+benchmarks/*.json
+benchmarks/*.csv
+benchmarks/results/
+
+# ── Misc generated / temporary ───────────────────────────────
+*.log
+*.tmp
+*.bak
+*.orig
+*.rej
+perf.data
+perf.data.old
+flamegraph.svg
+heaptrack.*
+
+# ── Scratch files left at repo root ──────────────────────────
+/part1.rs
+/part2.rs
+/part3.rs
+/header.rs
+/test_gov.rs
+/test_upg.rs
+/split.py
+/split_native.py
+/split_server.py
+/restore.py
+/generate_commits.sh
+/demo_app.py
+/protection.json
