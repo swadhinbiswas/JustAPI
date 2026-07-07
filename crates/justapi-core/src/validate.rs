@@ -1,0 +1,366 @@
+use std::fmt;
+
+use http_body_util::BodyExt;
+use http_body_util::Full;
+use hyper::body::Bytes;
+use hyper::{Response, StatusCode};
+use serde::de::DeserializeOwned;
+
+use crate::ResponseBody;
+
+// ---------------------------------------------------------------------------
+// Validation error types
+// ---------------------------------------------------------------------------
+
+/// A structured validation error with field-level messages (RFC 9457 format).
+#[derive(Debug, Clone)]
+pub struct ValidationError {
+    pub errors: Vec<FieldError>,
+}
+
+impl ValidationError {
+    pub fn new(field: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            errors: vec![FieldError {
+                field: field.into(),
+                message: message.into(),
+            }],
+        }
+    }
+
+    pub fn multiple(errors: Vec<FieldError>) -> Self {
+        Self { errors }
+    }
+
+    pub fn add(&mut self, field: impl Into<String>, message: impl Into<String>) {
+        self.errors.push(FieldError {
+            field: field.into(),
+            message: message.into(),
+        });
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.errors.is_empty()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct FieldError {
+    pub field: String,
+    pub message: String,
+}
+
+impl fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (i, err) in self.errors.iter().enumerate() {
+            if i > 0 {
+                write!(f, "; ")?;
+            }
+            write!(f, "{}: {}", err.field, err.message)?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for ValidationError {}
+
+/// Build an RFC 9457 Problem Details response for validation failures (422).
+pub fn validation_error_response(err: &ValidationError) -> Response<ResponseBody> {
+    let body = serde_json::json!({
+        "type": "https://justapi.dev/errors/validation",
+        "title": "Validation Error",
+        "status": 422,
+        "detail": err.to_string(),
+        "errors": err.errors.iter().map(|e| {
+            serde_json::json!({
+                "field": e.field,
+                "message": e.message,
+            })
+        }).collect::<Vec<_>>(),
+    })
+    .to_string();
+
+    Response::builder()
+        .status(StatusCode::UNPROCESSABLE_ENTITY)
+        .header("content-type", "application/problem+json")
+        .header("content-length", body.len().to_string())
+        .body(crate::UnsyncBoxBody::new(
+            Full::new(Bytes::from(body))
+                .map_err(|e: std::convert::Infallible| -> anyhow::Error { match e {} }),
+        ))
+        .unwrap()
+}
+
+// ---------------------------------------------------------------------------
+// Schema trait
+// ---------------------------------------------------------------------------
+
+/// A type that can be parsed from raw HTTP data and validated.
+///
+/// Automatically blanket-implemented for any `DeserializeOwned + Send + Sync + 'static`.
+pub trait Schema: DeserializeOwned + Send + Sync + 'static {
+    /// Validate the parsed value. Returns `Ok(())` by default.
+    fn validate(&self) -> Result<(), ValidationError> {
+        Ok(())
+    }
+
+    /// Parse from a JSON byte slice, then validate.
+    fn parse_body(body: &[u8]) -> Result<Self, ValidationError> {
+        let value: Self = serde_json::from_slice(body)
+            .map_err(|e| ValidationError::new("body", format!("Invalid JSON: {}", e)))?;
+        value.validate()?;
+        Ok(value)
+    }
+}
+
+/// Blanket implementation: any `DeserializeOwned + Send + Sync + 'static` is a Schema.
+impl<T: DeserializeOwned + Send + Sync + 'static> Schema for T {}
+
+// ---------------------------------------------------------------------------
+// Type coercion (string → T)
+// ---------------------------------------------------------------------------
+
+/// Trait for types that can be coerced from a URL path/query parameter string.
+pub trait Coerce: Sized {
+    fn coerce(s: &str) -> Result<Self, ValidationError>;
+}
+
+macro_rules! impl_coerce_via_from_str {
+    ($($t:ty),* $(,)?) => {
+        $(
+            impl Coerce for $t {
+                fn coerce(s: &str) -> Result<Self, ValidationError> {
+                    s.parse().map_err(|_| {
+                        ValidationError::new("", format!("invalid value: expected {}, got '{}'", stringify!($t), s))
+                    })
+                }
+            }
+        )*
+    };
+}
+
+impl_coerce_via_from_str!(String, i8, i16, i32, i64, i128, u8, u16, u32, u64, u128, f32, f64, bool);
+
+impl Coerce for char {
+    fn coerce(s: &str) -> Result<Self, ValidationError> {
+        let mut chars = s.chars();
+        match (chars.next(), chars.next()) {
+            (Some(c), None) => Ok(c),
+            _ => Err(ValidationError::new(
+                "",
+                format!("invalid value: expected a single character, got '{}'", s),
+            )),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Query parameter parsing
+// ---------------------------------------------------------------------------
+
+/// Parse query string into a typed struct using serde.
+///
+/// Supports `?key=value&key2=value2` format with URL-encoding.
+/// Handles nested structs, optional fields, and type coercion.
+pub fn parse_query<T: DeserializeOwned>(query: &str) -> Result<T, ValidationError> {
+    let cleaned = query.trim_start_matches('?');
+    serde_urlencoded::from_str(cleaned)
+        .map_err(|e| ValidationError::new("query", format!("parse error: {}", e)))
+}
+
+// ---------------------------------------------------------------------------
+// JSON Schema validation
+// ---------------------------------------------------------------------------
+
+/// Validate a JSON byte slice against a JSON Schema string.
+///
+/// Returns `ValidationError` with field-level errors on failure.
+/// The schema should be a valid JSON Schema (Draft 2020-12 or earlier).
+pub fn validate_json_schema(body: &[u8], schema_json: &str) -> Result<(), ValidationError> {
+    let body_value: serde_json::Value = serde_json::from_slice(body)
+        .map_err(|e| ValidationError::new("body", format!("Invalid JSON: {}", e)))?;
+
+    let schema_value: serde_json::Value = serde_json::from_str(schema_json)
+        .map_err(|e| ValidationError::new("schema", format!("Invalid schema JSON: {}", e)))?;
+
+    let validator = jsonschema::options()
+        .build(&schema_value)
+        .map_err(|e| ValidationError::new("schema", format!("Schema compilation error: {}", e)))?;
+
+    let mut verr = ValidationError { errors: Vec::new() };
+    for error in validator.iter_errors(&body_value) {
+        let path = error.instance_path().to_string();
+        let field = if path.is_empty() || path == "/" || path == "#" {
+            "body".to_string()
+        } else {
+            path.trim_start_matches('/').to_string()
+        };
+        verr.add(field, error.to_string());
+    }
+    if verr.is_empty() {
+        Ok(())
+    } else {
+        Err(verr)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde::Deserialize;
+
+    #[derive(Debug, Deserialize, PartialEq)]
+    struct UserParams {
+        name: String,
+        age: Option<i32>,
+    }
+
+    #[test]
+    fn test_path_param_coerce_string() {
+        assert_eq!(String::coerce("hello").unwrap(), "hello");
+    }
+
+    #[test]
+    fn test_path_param_coerce_i32() {
+        assert_eq!(i32::coerce("42").unwrap(), 42i32);
+        assert!(i32::coerce("not_a_number").is_err());
+    }
+
+    #[test]
+    fn test_path_param_coerce_i64() {
+        assert_eq!(i64::coerce("9999999999").unwrap(), 9_999_999_999i64);
+    }
+
+    #[test]
+    fn test_path_param_coerce_f64() {
+        assert_eq!(f64::coerce("2.5").unwrap(), 2.5_f64);
+    }
+
+    #[test]
+    fn test_path_param_coerce_bool() {
+        assert!(bool::coerce("true").unwrap());
+        assert!(!bool::coerce("false").unwrap());
+        assert!(bool::coerce("invalid").is_err());
+    }
+
+    #[test]
+    fn test_schema_parse_valid_json() {
+        let json = br#"{"name": "Alice", "age": 30}"#;
+        let params: UserParams = Schema::parse_body(json).unwrap();
+        assert_eq!(params.name, "Alice");
+        assert_eq!(params.age, Some(30));
+    }
+
+    #[test]
+    fn test_schema_parse_invalid_json() {
+        let json = b"not json";
+        let result: Result<UserParams, ValidationError> = Schema::parse_body(json);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Invalid JSON"));
+    }
+
+    #[test]
+    fn test_validation_error_display() {
+        let err = ValidationError::multiple(vec![
+            FieldError {
+                field: "name".into(),
+                message: "required".into(),
+            },
+            FieldError {
+                field: "age".into(),
+                message: "must be positive".into(),
+            },
+        ]);
+        let msg = err.to_string();
+        assert!(msg.contains("name: required"));
+        assert!(msg.contains("age: must be positive"));
+    }
+
+    #[test]
+    fn test_validation_error_response_format() {
+        let err = ValidationError::new("email", "invalid email address");
+        let resp = validation_error_response(&err);
+        assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let content_type = resp.headers().get("content-type").unwrap();
+        assert_eq!(content_type, "application/problem+json");
+    }
+
+    #[test]
+    fn test_query_parse_simple() {
+        #[derive(Debug, Deserialize, PartialEq)]
+        struct Simple {
+            name: String,
+            age: i32,
+        }
+        let result: Simple = parse_query("name=Alice&age=30").unwrap();
+        assert_eq!(result.name, "Alice");
+        assert_eq!(result.age, 30);
+    }
+
+    #[test]
+    fn test_query_parse_percent_encoded() {
+        #[derive(Debug, Deserialize, PartialEq)]
+        struct Q {
+            name: String,
+        }
+        let result: Q = parse_query("name=Hello%20World").unwrap();
+        assert_eq!(result.name, "Hello World");
+    }
+
+    #[test]
+    fn test_query_parse_optional_fields() {
+        #[derive(Debug, Deserialize, PartialEq)]
+        struct WithOptional {
+            required: String,
+            optional: Option<String>,
+        }
+        let result: WithOptional = parse_query("required=hello").unwrap();
+        assert_eq!(result.required, "hello");
+        assert_eq!(result.optional, None);
+
+        let result: WithOptional = parse_query("required=hello&optional=world").unwrap();
+        assert_eq!(result.required, "hello");
+        assert_eq!(result.optional, Some("world".into()));
+    }
+
+    #[test]
+    fn test_validate_json_schema_valid() {
+        let body = br#"{"name": "Alice", "email": "a@b.com"}"#;
+        let schema = r#"{"type": "object", "properties": {"name": {"type": "string"}, "email": {"type": "string"}}, "required": ["name", "email"], "additionalProperties": false}"#;
+        assert!(validate_json_schema(body, schema).is_ok());
+    }
+
+    #[test]
+    fn test_validate_json_schema_missing_field() {
+        let body = br#"{"name": "Alice"}"#;
+        let schema = r#"{"type": "object", "properties": {"name": {"type": "string"}, "email": {"type": "string"}}, "required": ["name", "email"]}"#;
+        let result = validate_json_schema(body, schema);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("email"));
+        assert!(err.to_string().contains("required"));
+    }
+
+    #[test]
+    fn test_validate_json_schema_wrong_type() {
+        let body = br#"{"name": "Alice", "email": "a@b.com", "age": "not a number"}"#;
+        let schema = r#"{"type": "object", "properties": {"name": {"type": "string"}, "email": {"type": "string"}, "age": {"type": "integer"}}, "required": ["name", "email"]}"#;
+        let result = validate_json_schema(body, schema);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("not of type"));
+    }
+
+    #[test]
+    fn test_validate_json_schema_invalid_body() {
+        let body = b"not json";
+        let schema = r#"{"type": "object"}"#;
+        let result = validate_json_schema(body, schema);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Invalid JSON"));
+    }
+}
