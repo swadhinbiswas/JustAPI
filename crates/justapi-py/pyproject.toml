@@ -1,0 +1,59 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "justapi"
+version = "2.0.0"
+description = "JustAPI Runtime — a Rust-powered, FastAPI-class web framework for Python. Blazing-fast routing, native JSON validation, dependency injection, OpenAPI, WebSockets, SSE, background tasks, and an embedded DAG engine — all from a single pip install."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "JustAPI contributors" }]
+keywords = [
+    "web",
+    "framework",
+    "api",
+    "fastapi",
+    "rust",
+    "pyo3",
+    "async",
+    "openapi",
+    "websocket",
+    "rest",
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Rust",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Internet :: WWW/HTTP :: HTTP Servers",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+    "Typing :: Typed",
+]
+dependencies = []
+
+[project.optional-dependencies]
+pydantic = ["pydantic>=2.0"]
+jinja = ["jinja2>=3.0"]
+full = ["pydantic>=2.0", "jinja2>=3.0"]
+
+[project.urls]
+Homepage = "https://github.com/anomalyco/justapi"
+Repository = "https://github.com/anomalyco/justapi"
+Documentation = "https://github.com/anomalyco/justapi#readme"
+"Bug Tracker" = "https://github.com/anomalyco/justapi/issues"
+
+[tool.maturin]
+module-name = "justapi._justapi"
+python-source = "python"
+manifest-path = "Cargo.toml"
+strip = true
+abi3-py311 = true
+include = ["README.md", "LICENSE"]
