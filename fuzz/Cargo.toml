@@ -1,0 +1,57 @@
+[package]
+name = "justapi-fuzz"
+version = "0.1.0"
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+justapi-core = { path = "../crates/justapi-core" }
+jsonwebtoken = "9"
+serde_json = "1"
+http = "1"
+serde_urlencoded = "0.7"
+
+[[bin]]
+name = "fuzz_router"
+path = "fuzz_targets/fuzz_router.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_file_paths"
+path = "fuzz_targets/fuzz_file_paths.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_body"
+path = "fuzz_targets/fuzz_body.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_query_params"
+path = "fuzz_targets/fuzz_query_params.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_headers"
+path = "fuzz_targets/fuzz_headers.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_jwt"
+path = "fuzz_targets/fuzz_jwt.rs"
+test = false
+doc = false
+bench = false
