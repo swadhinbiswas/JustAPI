@@ -1,0 +1,31 @@
+[package]
+name = "justapi-inference"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tokio = { workspace = true }
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+serde = { workspace = true }
+serde_json = { workspace = true }
+futures = "0.3"
+bytes = "1.12.0"
+async-stream = "0.3"
+rand = "0.8"
+candle-core = "0.11.0"
+candle-nn = "0.11.0"
+candle-transformers = { version = "0.11.0", optional = true }
+tokenizers = { version = "0.22", optional = true }
+
+[features]
+default = []
+# GPU backends (feature-gated; require the matching toolkit to COMPILE).
+# CPU is the default backend and always available.
+cuda = ["candle-core/cuda", "candle-nn/cuda"]
+# Real weight loading + tokenizer (GGUF/safetensors). Heavy: pulls in
+# candle-transformers + tokenizers. NOT in default features so the lean
+# build/test path stays fast.
+real = ["dep:candle-transformers", "dep:tokenizers"]
