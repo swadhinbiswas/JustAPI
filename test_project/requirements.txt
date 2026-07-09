@@ -1,0 +1,2 @@
+# Add your Python dependencies here
+# justapi is pre-installed with the runtime
