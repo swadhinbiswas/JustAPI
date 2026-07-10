@@ -1,0 +1,130 @@
+# Default values for JustAPI Helm chart.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+# Number of replicas
+replicaCount: 2
+
+image:
+  repository: ghcr.io/anomalyco/justapi
+  tag: latest
+  pullPolicy: IfNotPresent
+  # Override the image's entrypoint command
+  command: []
+  args:
+    - serve
+    - --addr
+    - "0.0.0.0:8080"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  automount: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  fsGroup: 1000
+
+securityContext:
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 1000
+
+service:
+  type: ClusterIP
+  port: 8080
+  annotations: {}
+  labels: {}
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+  hosts:
+    - host: api.justapi.dev
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: justapi-tls
+      hosts:
+        - api.justapi.dev
+
+resources:
+  limits:
+    cpu: 1
+    memory: 512Mi
+  requests:
+    cpu: 250m
+    memory: 128Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+# Liveness, readiness, startup probes
+probes:
+  liveness:
+    path: /live
+    initialDelaySeconds: 5
+    periodSeconds: 15
+    timeoutSeconds: 3
+    failureThreshold: 3
+  readiness:
+    path: /ready
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 2
+  startup:
+    path: /live
+    initialDelaySeconds: 1
+    periodSeconds: 5
+    timeoutSeconds: 2
+    failureThreshold: 30
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+env:
+  - name: RUST_LOG
+    value: info
+  - name: DATABASE_URL
+    valueFrom:
+      secretKeyRef:
+        name: justapi-db
+        key: url
+  - name: REDIS_URL
+    valueFrom:
+      secretKeyRef:
+        name: justapi-redis
+        key: url
+
+configMap:
+  enabled: true
+  data:
+    RUST_LOG: info
+    OTEL_SERVICE_NAME: justapi
+
+# Secret values (provide via --set or external secrets)
+secrets:
+  db:
+    url: postgres://justapi:changeme@justapi-postgres:5432/justapi
+  redis:
+    url: redis://justapi-redis:6379
