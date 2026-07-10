@@ -1,0 +1,10 @@
+# Security policy for JustAPI
+# https://justapi.dev/.well-known/security.txt
+
+Contact: mailto:security@justapi.dev
+Encryption: https://justapi.dev/pgp-key.txt
+Preferred-Languages: en
+Canonical: https://justapi.dev/.well-known/security.txt
+Policy: https://justapi.dev/docs/security/policy.md
+Hiring: https://justapi.dev/careers
+Expires: 2027-07-05T00:00:00Z
