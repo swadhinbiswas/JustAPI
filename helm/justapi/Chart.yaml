@@ -1,0 +1,18 @@
+apiVersion: v2
+name: justapi
+description: Helm chart for JustAPI — high-performance Python web framework
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/anomalyco/justapi
+sources:
+  - https://github.com/anomalyco/justapi
+maintainers:
+  - name: JustAPI Team
+    email: team@justapi.dev
+keywords:
+  - python
+  - web
+  - framework
+  - rust
+  - high-performance
