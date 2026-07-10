@@ -1,0 +1,22 @@
+name: Fuzzing
+
+on:
+  schedule:
+    - cron: '0 2 * * *' # Run at 2 AM every day
+  workflow_dispatch:
+
+jobs:
+  fuzz:
+    name: cargo-fuzz
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz
+
+      - name: Run HTTP Parser Fuzzer
+        run: cargo +nightly fuzz run fuzz_http_parser -- -max_total_time=300
