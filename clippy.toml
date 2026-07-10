@@ -1,0 +1,11 @@
+# JustAPI — clippy configuration
+# Applied by `cargo clippy` and CI.
+# See https://doc.rust-lang.org/clippy/
+
+# ── Deny these lints in CI (also enforced via RUSTFLAGS=-Dwarnings) ──
+avoid-breaking-exported-api = false
+
+# ── Thresholds ───────────────────────────────────────────────
+cognitive-complexity-threshold = 30
+too-many-arguments-threshold = 10
+type-complexity-threshold = 300

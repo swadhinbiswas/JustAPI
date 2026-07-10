@@ -1,0 +1,11 @@
+# Miri configuration for stacked borrows and strict provenance checking.
+# Applied automatically when running `cargo miri test`.
+[miri]
+# Use the strict provenance model (required by wasmtime's VM pointers)
+# and treat deallocation with size/align mismatches as UB.
+rustc_flags = ["-Zmiri-strict-provenance", "-Zmiri-symbolic-alignment-check", "-Zmiri-track-raw-pointers"]
+
+[env]
+# Bump the fuel limit when running under miri to avoid spurious
+# "out of fuel" errors in WASM tests.
+JUSTAPI_MIRI = "1"
