@@ -1,0 +1,14 @@
+site_name: JustAPI
+site_description: 700k RPS Python Web Framework backed by Rust
+theme:
+  name: material
+  palette:
+    scheme: default
+    primary: deep purple
+    accent: deep purple
+nav:
+  - Home: index.md
+  - Getting Started: getting_started.md
+  - Migrating from FastAPI: migrating_from_fastapi.md
+  - API Reference: api_reference.md
+  - Plugins: plugins.md
