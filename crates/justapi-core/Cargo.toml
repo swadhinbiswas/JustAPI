@@ -52,7 +52,7 @@ tokio-rustls = { workspace = true, optional = true }
 rustls-pemfile = { workspace = true, optional = true }
 sqlx = { workspace = true, optional = true }
 chrono = { version = "0.4", optional = true }
-rand = "0.8"
+rand = "0.10"
 inventory = "0.3.24"
 tonic = "0.14.6"
 prost = "0.14.4"

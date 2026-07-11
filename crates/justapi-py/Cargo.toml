@@ -22,5 +22,5 @@ anyhow.workspace = true
 tokio-util.workspace = true
 tonic = "0.14.6"
 tokio-stream.workspace = true
-tokio-tungstenite = "0.24"
+tokio-tungstenite = "0.29"
 pyo3-async-runtimes = { version = "0.29.0", features = ["tokio", "tokio-runtime"] }
