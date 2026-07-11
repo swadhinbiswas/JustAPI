@@ -58,7 +58,7 @@ cloud-native readiness.
 | 37 | OTel Distributed Tracing | ✅ complete | OTLP, contextvars, 225 tests |
 | 38 | Hardware-Accelerated JWT & Security | ✅ complete | RS256/ES256, CORS builder, IpRateLimiter, 236 tests |
 | 39 | SAST, Fuzzing & Memory Safety | ✅ complete | 6 fuzz targets, miri, SAFETY comments, 236 tests |
-| 40 | The JustAPI 2.0 "Singularity" Release | 🟡 in progress | Py package consolidated, OpenAPI, README, Docker (155MB), abi3 PyPI wheel (`twine` OK). PyPI upload pending token + manylinux_2_28 build |
+| 40 | The JustAPI 2.0 "Singularity" Release | 🟡 in progress | Consolidated Py package, OpenAPI, README, Docker (155MB), abi3 wheel, ARCHITECTURE.md, CONTRIBUTING.md. PyPI upload pending token + manylinux_2_28 build |
 | 41 | Native Inference Engine Foundation | ✅ complete | `justapi-inference` crate on Candle (CPU default; cuda feature-gated), `Engine`/`Model` trait, streaming, 24 tests pass |
 | 42 | KV-Cache Manager (PagedAttention, Rust) | ✅ complete | `KvBlockPool` paged allocator + clock eviction, `PrefixCache` hash-based prefix reuse, `Sequence` handles. 16 tests, 260 workspace total |
 | 43 | Continuous-Batching Scheduler | ✅ complete | `Scheduler` with prefill/decode interleave, chunked prefill, back-pressure, prefix-cache integration. 9 tests, 269 workspace total |
@@ -733,7 +733,7 @@ Based on a massive deep-dive into the modern Python ecosystem (Litestar, Robyn),
 - [x] **Benchmarks (BENCHMARKS.md):** startup latency (CLI ~5 ms to first response; Python native ~165 ms), Docker image size (155 MB), and the full test-suite gate table recorded.
 - [x] All gates green: `cargo test --workspace` (236), `clippy -- -D warnings` clean, `cargo fmt --check` clean, `cargo miri test` (2), Python `pytest` (53 passed / 1 skipped), `twine check` PASSED.
 - [ ] Publish to PyPI — packaging ready; upload must run inside a `manylinux_2_28` container (local Arch host tags `manylinux_2_34`, which PyPI rejects) and needs a PyPI API token. See BENCHMARKS.md publish notes.
-- [ ] Full `ARCHITECTURE.md` and `CONTRIBUTING.md`
+- [x] Full `ARCHITECTURE.md` and `CONTRIBUTING.md`
 
 ---
 
