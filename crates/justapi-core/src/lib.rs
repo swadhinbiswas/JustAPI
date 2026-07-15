@@ -72,6 +72,19 @@ pub fn json_response(status: hyper::StatusCode, body: &str) -> Response<Response
         .unwrap()
 }
 
+/// Canonical error envelope. Every non-2xx response in justapi uses this single
+/// shape so clients have one contract to parse (see ADR-052). `detail` carries
+/// the human-readable message; the numeric status lives in the HTTP status
+/// line. Sensitive internals must never be placed in `detail` for 5xx.
+pub fn error_response(status: hyper::StatusCode, detail: &str) -> Response<ResponseBody> {
+    json_response(status, &serde_json::json!({ "detail": detail }).to_string())
+}
+
+/// 422 validation error using the canonical `{"detail": ...}` envelope.
+pub fn validation_response(detail: &str) -> Response<ResponseBody> {
+    error_response(hyper::StatusCode::UNPROCESSABLE_ENTITY, detail)
+}
+
 /// Lift an `anyhow::Result<Bytes>` stream into a streaming response.
 pub fn streaming_response(
     status: hyper::StatusCode,

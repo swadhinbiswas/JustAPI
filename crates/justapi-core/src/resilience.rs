@@ -222,7 +222,7 @@ impl<B: Send + Sync + 'static> Middleware<B> for PerRouteCircuitBreakerMiddlewar
 }
 
 fn circuit_open_response() -> Response<ResponseBody> {
-    let body = r#"{"error":"service unavailable — circuit breaker open"}"#;
+    let body = r#"{"detail":"service unavailable — circuit breaker open"}"#;
     let mut resp = json_text_response(StatusCode::SERVICE_UNAVAILABLE, body);
     resp.headers_mut().insert("retry-after", "30".parse().unwrap());
     resp
@@ -254,7 +254,7 @@ impl<B: Send + 'static> Middleware<B> for TimeoutMiddleware {
 }
 
 fn timeout_response(timeout: Duration) -> Response<ResponseBody> {
-    let body = format!(r#"{{"error":"request timed out after {}ms"}}"#, timeout.as_millis());
+    let body = format!(r#"{{"detail":"request timed out after {}ms"}}"#, timeout.as_millis());
     json_text_response(StatusCode::GATEWAY_TIMEOUT, &body)
 }
 
@@ -356,7 +356,7 @@ impl<B: Send + 'static> Middleware<B> for BulkheadMiddleware {
             }
             _ => Ok(json_text_response(
                 StatusCode::SERVICE_UNAVAILABLE,
-                r#"{"error":"too many concurrent requests — bulkhead limit reached"}"#,
+                r#"{"detail":"too many concurrent requests — bulkhead limit reached"}"#,
             )),
         }
     }
@@ -442,7 +442,7 @@ impl<B: Send + 'static> Middleware<B> for FallbackMiddleware {
                 } else {
                     Ok(json_text_response(
                         StatusCode::INTERNAL_SERVER_ERROR,
-                        r#"{"error":"internal server error"}"#,
+                        r#"{"detail":"internal server error"}"#,
                     ))
                 }
             }
@@ -512,7 +512,7 @@ impl<B: Send + 'static> Middleware<B> for ChaosMiddleware {
             let roll: f64 = rand::random();
             if roll < self.config.error_p {
                 let body = format!(
-                    r#"{{"error":"chaos injected failure","status":{}}}"#,
+                    r#"{{"detail":"chaos injected failure","status":{}}}"#,
                     self.config.error_status.as_u16()
                 );
                 return Ok(json_text_response(self.config.error_status, &body));
@@ -577,7 +577,7 @@ mod tests {
     fn five_hundred_handler() -> HandlerFn<TestBody> {
         Arc::new(|_req: Request<TestBody>| {
             Box::pin(async {
-                Ok(json_response(StatusCode::INTERNAL_SERVER_ERROR, r#"{"error":"server error"}"#))
+                Ok(json_response(StatusCode::INTERNAL_SERVER_ERROR, r#"{"detail":"server error"}"#))
             })
         })
     }
@@ -645,7 +645,7 @@ mod tests {
                 if f.load(std::sync::atomic::Ordering::Relaxed) {
                     Ok(json_response(
                         StatusCode::INTERNAL_SERVER_ERROR,
-                        r#"{"error":"server error"}"#,
+                        r#"{"detail":"server error"}"#,
                     ))
                 } else {
                     Ok(json_response(StatusCode::OK, r#"{"ok":true}"#))
