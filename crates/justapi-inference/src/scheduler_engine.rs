@@ -124,14 +124,8 @@ impl SchedulerEngine {
 
         self.senders.lock().unwrap().insert(seq_id, tx);
         self.seq_model.lock().unwrap().insert(seq_id, model.clone());
-        self.seq_max_tokens
-            .lock()
-            .unwrap()
-            .insert(seq_id, params.max_tokens);
-        self.seq_params
-            .lock()
-            .unwrap()
-            .insert(seq_id, params.clone());
+        self.seq_max_tokens.lock().unwrap().insert(seq_id, params.max_tokens);
+        self.seq_params.lock().unwrap().insert(seq_id, params.clone());
 
         Ok(rx)
     }
@@ -184,11 +178,7 @@ impl SchedulerEngine {
                                 id: token,
                                 text,
                                 logprob: 0.0,
-                                finish_reason: if done {
-                                    Some(FinishReason::Length)
-                                } else {
-                                    None
-                                },
+                                finish_reason: if done { Some(FinishReason::Length) } else { None },
                             },
                         );
                     }
@@ -211,11 +201,7 @@ impl SchedulerEngine {
                                 id: token,
                                 text,
                                 logprob: 0.0,
-                                finish_reason: if done {
-                                    Some(FinishReason::Length)
-                                } else {
-                                    None
-                                },
+                                finish_reason: if done { Some(FinishReason::Length) } else { None },
                             },
                         );
                     }
@@ -274,12 +260,7 @@ fn get_seq_params(
     seq_params: &Arc<Mutex<HashMap<u64, SamplingParams>>>,
     seq_id: u64,
 ) -> SamplingParams {
-    seq_params
-        .lock()
-        .unwrap()
-        .get(&seq_id)
-        .cloned()
-        .unwrap_or_default()
+    seq_params.lock().unwrap().get(&seq_id).cloned().unwrap_or_default()
 }
 
 /// Sample a token id from logits according to `params`.
@@ -301,9 +282,7 @@ fn sample_token_with_params(logits: &[f32], params: &SamplingParams) -> u32 {
         let mut idx: Vec<usize> = (0..scaled.len()).collect();
         let k = params.top_k;
         idx.select_nth_unstable_by(k - 1, |&a, &b| {
-            scaled[b]
-                .partial_cmp(&scaled[a])
-                .unwrap_or(std::cmp::Ordering::Equal)
+            scaled[b].partial_cmp(&scaled[a]).unwrap_or(std::cmp::Ordering::Equal)
         });
         for &i in &idx[k..] {
             scaled[i] = f32::NEG_INFINITY;
@@ -325,11 +304,8 @@ fn sample_token_with_params(logits: &[f32], params: &SamplingParams) -> u32 {
     // reaches cumulative mass `top_p`, renormalise.
     if params.top_p < 1.0 {
         let mut order: Vec<usize> = (0..probs.len()).collect();
-        order.sort_by(|&a, &b| {
-            probs[b]
-                .partial_cmp(&probs[a])
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        order
+            .sort_by(|&a, &b| probs[b].partial_cmp(&probs[a]).unwrap_or(std::cmp::Ordering::Equal));
         let mut cum = 0.0_f32;
         for (rank, &i) in order.iter().enumerate() {
             cum += probs[i];
@@ -431,12 +407,7 @@ fn is_seq_done(
     scheduler: &Arc<Mutex<Scheduler>>,
     seq_max_tokens: &Arc<Mutex<HashMap<u64, usize>>>,
 ) -> bool {
-    let max = seq_max_tokens
-        .lock()
-        .unwrap()
-        .get(&seq_id)
-        .copied()
-        .unwrap_or(usize::MAX);
+    let max = seq_max_tokens.lock().unwrap().get(&seq_id).copied().unwrap_or(usize::MAX);
     let generated = scheduler.lock().unwrap().running_seq_generated(seq_id);
     match generated {
         Some(n) => n >= max,
@@ -491,11 +462,7 @@ mod tests {
     async fn scheduler_engine_generates_tokens() {
         let (_, _, se) = test_setup();
         let prompt = MockModel::tokenize("hello");
-        let params = SamplingParams {
-            max_tokens: 10,
-            temperature: 0.0,
-            ..Default::default()
-        };
+        let params = SamplingParams { max_tokens: 10, temperature: 0.0, ..Default::default() };
 
         let mut rx = se.generate("mock", &prompt, params).unwrap();
         let tokens = drain_receiver(&mut rx).await;
@@ -506,19 +473,12 @@ mod tests {
     async fn scheduler_engine_streams_multiple_tokens() {
         let (_, _, se) = test_setup();
         let prompt = MockModel::tokenize("hello world");
-        let params = SamplingParams {
-            max_tokens: 5,
-            temperature: 0.0,
-            ..Default::default()
-        };
+        let params = SamplingParams { max_tokens: 5, temperature: 0.0, ..Default::default() };
 
         let mut rx = se.generate("mock", &prompt, params).unwrap();
         let tokens = drain_receiver(&mut rx).await;
         assert!(!tokens.is_empty(), "should produce tokens");
-        assert!(
-            tokens.iter().all(|t| !t.text.is_empty()),
-            "every token should have text"
-        );
+        assert!(tokens.iter().all(|t| !t.text.is_empty()), "every token should have text");
     }
 
     #[tokio::test]
@@ -527,16 +487,9 @@ mod tests {
         // Need >= 16 tokens for at least one full block (BLOCK_SIZE=16).
         let prompt_text = "abcdefghijklmnopqrstuvwxyz0123456789"; // 36 tokens
         let prompt = MockModel::tokenize(prompt_text);
-        assert!(
-            prompt.len() >= 16,
-            "prompt must be >= 16 tokens for block caching"
-        );
+        assert!(prompt.len() >= 16, "prompt must be >= 16 tokens for block caching");
 
-        let params = SamplingParams {
-            max_tokens: 3,
-            temperature: 0.0,
-            ..Default::default()
-        };
+        let params = SamplingParams { max_tokens: 3, temperature: 0.0, ..Default::default() };
 
         // First request caches its prompt.
         let mut rx1 = se.generate("mock", &prompt, params.clone()).unwrap();
@@ -566,19 +519,11 @@ mod tests {
     #[tokio::test]
     async fn scheduler_engine_batches_concurrent_requests() {
         let (_, _, se) = test_setup();
-        let params = SamplingParams {
-            max_tokens: 4,
-            temperature: 0.0,
-            ..Default::default()
-        };
+        let params = SamplingParams { max_tokens: 4, temperature: 0.0, ..Default::default() };
 
         // Launch two concurrent requests; both should complete.
-        let mut rx_a = se
-            .generate("mock", &MockModel::tokenize("hello"), params.clone())
-            .unwrap();
-        let mut rx_b = se
-            .generate("mock", &MockModel::tokenize("world"), params.clone())
-            .unwrap();
+        let mut rx_a = se.generate("mock", &MockModel::tokenize("hello"), params.clone()).unwrap();
+        let mut rx_b = se.generate("mock", &MockModel::tokenize("world"), params.clone()).unwrap();
 
         let a = drain_receiver(&mut rx_a).await;
         let b = drain_receiver(&mut rx_b).await;
@@ -590,11 +535,7 @@ mod tests {
     #[tokio::test]
     async fn scheduler_engine_handles_many_concurrent_requests() {
         let (_, _, se) = test_setup();
-        let params = SamplingParams {
-            max_tokens: 2,
-            temperature: 0.0,
-            ..Default::default()
-        };
+        let params = SamplingParams { max_tokens: 2, temperature: 0.0, ..Default::default() };
 
         // Fire 8 concurrent requests (more than max_num_seqs=4 batch limit).
         let mut receivers = Vec::new();
@@ -637,10 +578,7 @@ mod tests {
     fn greedy_sampling_is_argmax() {
         // temperature 0 ⇒ deterministic argmax regardless of distribution.
         let logits = vec![-1.0, 0.5, 3.0, -2.0];
-        let params = SamplingParams {
-            temperature: 0.0,
-            ..Default::default()
-        };
+        let params = SamplingParams { temperature: 0.0, ..Default::default() };
         assert_eq!(sample_token_with_params(&logits, &params), 2);
     }
 
@@ -648,10 +586,7 @@ mod tests {
     fn sampling_honors_temperature() {
         // A sharp peak with very low temperature should always pick the peak.
         let logits = vec![-100.0, -100.0, 50.0, -100.0];
-        let params = SamplingParams {
-            temperature: 0.01,
-            ..Default::default()
-        };
+        let params = SamplingParams { temperature: 0.01, ..Default::default() };
         for _ in 0..50 {
             assert_eq!(sample_token_with_params(&logits, &params), 2);
         }
@@ -661,11 +596,7 @@ mod tests {
     fn sampling_top_k_truncates() {
         // top_k=1 ⇒ always the argmax even with high temperature noise.
         let logits = vec![1.0, 2.0, 10.0, 0.5];
-        let params = SamplingParams {
-            temperature: 2.0,
-            top_k: 1,
-            ..Default::default()
-        };
+        let params = SamplingParams { temperature: 2.0, top_k: 1, ..Default::default() };
         for _ in 0..50 {
             assert_eq!(sample_token_with_params(&logits, &params), 2);
         }
@@ -676,10 +607,7 @@ mod tests {
         // A flat distribution at high temperature should produce variety, not
         // a single token (stochasticity is exercised).
         let logits = vec![0.0, 0.0, 0.0, 0.0];
-        let params = SamplingParams {
-            temperature: 1.0,
-            ..Default::default()
-        };
+        let params = SamplingParams { temperature: 1.0, ..Default::default() };
         let mut seen = std::collections::HashSet::new();
         for _ in 0..200 {
             seen.insert(sample_token_with_params(&logits, &params));

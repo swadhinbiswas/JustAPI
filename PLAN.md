@@ -6,10 +6,14 @@
 
 ## Current status
 
-- **Active phase:** Phase 52 (GPU Benchmark Gate) — 🔴 pending
-- **Status:** Phase 51 complete. Phase 52 is the first real-GPU validation: load a real model (GGUF) on CUDA, measure tokens/sec/TTFT/ITL for both naive and scheduler-backed generation paths, and compare against vLLM. The benchmark binary (`justapi-gpu-bench`) is written and compiles (with MockModel fallback when no CUDA). **Blocking:** CUDA toolkit must be installed (`sudo pacman -S cuda`).
-- **Last updated:** 2026-07-10 (Phase 52 created)
-- **Blocker:** CUDA toolkit not installed on the benchmark fixture
+- **Active phase:** Phase 52 (GPU Benchmark Gate) — 🟡 ready to run
+- **Status:** Phase 51 complete. Phase 52 is the first real-GPU validation: load a real model (GGUF) on CUDA, measure tokens/sec/TTFT/ITL for both naive and scheduler-backed generation paths, and compare against vLLM. The benchmark binary (`justapi-gpu-bench`) is written and compiles (with MockModel fallback when no CUDA). **Blocker resolved:** CUDA toolkit IS installed — `nvcc` (CUDA 13.3) at `/opt/cuda/bin` and an NVIDIA GeForce RTX 3060 Ti (8192 MiB) are present. The gate is now runnable; it still needs an actual `cargo run --features "cuda,real"` pass with real weights (candle w/ CUDA build unverified).
+- **Hot-path optimization (2026-07-13) — ✅ complete, not a numbered phase.** Removed the per-request Python↔Rust boundary (Rust-side `orjson` response serialization, `Response` serialized directly via a marker attribute, `needs_request` skips `Request` construction, trace-context gated behind `JUSTAPI_ENABLE_TRACE`). Result: justapi now *beats* Robyn on raw throughput (hello 60.3k vs 39.1k RPS, echo 47.4k vs 36.9k, validated 40.1k vs 32.9k on the same fixture — see BENCHMARKS.md). Gates green: `cargo test --workspace`, `cargo clippy --workspace --tests -- -D warnings`, `cargo fmt --check`, pytest 107 passed/1 skipped. Fixed a latent edge-case bug (0-param handler + middleware now forces `needs_request=True`). See ADR-047.
+- **Schema-backed native Rust fast path (2026-07-14) — ✅ complete, further optimized.** Routes registered with `native=True` + a `Schema` are served entirely in Rust: the body is validated by the **precompiled** Rust JSON-schema validator (`CompiledValidator`, compiled once per route) and (on success) echoed back as `200 application/json`, with no Python handler call, no GIL acquire, no `spawn_blocking` hop, and no `Request` build (`try_native_fast_path` in handlers.rs). `native=True` without a schema safely falls back to the Python path. Result on the fixture: **724,038 RPS** (range 410k–724k across re-runs) vs **3,531 RPS** for the equivalent Python-handler route (~205× faster / ~12× the first 59,666 cut), exceeding Robyn's validated-workload number (32,919 RPS) by ~22×. See ADR-048 + ADR-049 + BENCHMARKS.md native fast-path section. Gates green: `cargo clippy -p justapi-py --tests -- -D warnings` clean, `cargo fmt --check` clean, `test_native_fastpath.py` passes.
+- **⚠️ Non-native dispatch deadlock at high concurrency (P0, next task — see ADR-049).** The Python dispatch path (`spawn_blocking` + `Python::attach`) hard-stalls at ~100 concurrent connections for **every** non-native route (incl. the simplest handler, ≈16–20 req/s, all aborted). Pre-existing relative to the native optimization (proven: `/noparam` ignores all ADR-048-touched code yet still deadlocks); native routes are immune. **Recommended fix:** dedicated GIL thread-pool (bounded `num_cpus()` threads, persistent GIL, channel + oneshot dispatch) replacing per-request `spawn_blocking`+`Python::attach`. This blocks production use of non-native routes at realistic concurrency and should be the immediate next phase after ADR-048.
+- **Next perf step (open, not a measured gap):** justapi now beats Robyn on *all* three raw workloads (incl. validated 40.1k vs 32.9k), and schema-backed routes run entirely in Rust via `native=True`. The only residual PyO3 cost is the handler *call itself* for **non-schema-backed** routes (handler body still runs in Python) — currently deadlock-blocked per ADR-049, not merely slow. Arbitrary user-defined Rust handlers (beyond validate-and-echo) remain a larger architectural step, currently **not** justified by a measured deficit vs Robyn; candidate for a future phase if a real workload demands it.
+- **Last updated:** 2026-07-14 (schema-backed native fast path complete; justapi beats Robyn on raw throughput and serves schema routes entirely in Rust)
+- **Blocker:** none (CUDA present). Outstanding: run the GPU benchmark with real weights + PyPI upload token/manylinux build.
 
 ## Mission
 
@@ -70,7 +74,7 @@ cloud-native readiness.
 | 49 | Tree-based Speculative Decoding | ✅ complete | Medusa/EAGLE-style tree verification wired into serving path. Acceptance rate up to 3× higher than draft-target. |
 | 50 | RadixAttention Prefix Caching | ✅ complete | `RadixPrefixCache` wired into `Scheduler`: O(1) prefix lookup on admission, LRU eviction, finished-seq block promotion. |
 | 51 | Scheduler Serving Integration | ✅ complete | `SchedulerEngine` bridges Engine+Scheduler; prefix cache metrics in `/metrics`; sampling params plumbed; real throughput benchmark. 151 inference tests. |
-| **52** | **GPU Benchmark Gate** | **🔴 pending** | **Run SchedulerEngine vs naive vs vLLM on real GPU with real weights. Measure tokens/sec, TTFT, ITL.** |
+| **52** | **GPU Benchmark Gate** | **🟡 ready to run** | **Run SchedulerEngine vs naive vs vLLM on real GPU with real weights. Measure tokens/sec, TTFT, ITL. CUDA present (RTX 3060 Ti, CUDA 13.3) — blocker resolved.** |
 
 ---
 
@@ -596,6 +600,14 @@ Don't duplicate that reasoning here — just reference the entry.
 
 2. Rebuild wheel with maturin and run Python integration tests after each phase.
 
+## Open issues / follow-ups (2026-07-11)
+
+- [x] **Python test gate fixed.** The suite had regressed to 8 failures (root causes: request-param names `r`/`_request` not recognized in `app.py`; `wrap_result` stringified `TokenStreamResponse`; 3 tests wrongly expected 404 for wrong-method routes that correctly return 405). All 57 pass / 1 skipped now.
+- [ ] **Working tree is dirty with pure rustfmt churn.** 74 files show uncommitted line-wrap reflows (2860 deletions) from a nightly `cargo fmt`. `rustfmt.toml` uses nightly-only options (`wrap_comments`, `format_code_in_doc_comments`, `normalize_comments`, `imports_granularity`, `group_imports`) that are silently ignored on stable — so `cargo fmt --check` passes locally but a nightly CI gate would flag the whole tree. Resolve by either pinning CI to nightly + committing the format, or dropping the nightly-only options and committing the revert. Do not ship the 2860-line deletion accidentally.
+- [ ] **Python test deps not pinned.** `venv` was missing `pytest_asyncio`, `pydantic`, `jinja2`. Add a `[project.optional-dependencies]` `test` extra / `requirements-dev.txt` so the suite is reproducible.
+- [ ] **Phase 52 real run unverified.** `cargo run -p justapi-bench --bin justapi-gpu-bench --features "cuda,real"` still needs a real-weight pass; the `candle`+CUDA build is heavy and unconfirmed in this env.
+- [ ] **Untracked artifacts:** `crates/justapi-py/python/justapi/test_routing.py`, `test_gateway.json` — integrate or remove.
+
 ## Key architecture invariants
 
 - Rust owns I/O, Python owns application logic (ADR-008)
@@ -731,7 +743,7 @@ Based on a massive deep-dive into the modern Python ecosystem (Litestar, Robyn),
 - [x] **Docker:** fixed `rust:1.84` (too old for `edition2024`) → `rust:1.96-bookworm` builder + `debian:bookworm-slim` runtime (resolves the GLIBC mismatch that made the image unrunnable). Added `.dockerignore` (was shipping a 3.5 GB context). Image builds, runs (`/hello`, `/echo` verified), **155 MB** (< 200 MB target).
 - [x] **PyPI packaging:** `pyproject.toml` given full metadata (description, classifiers, URLs, optional `pydantic`/`jinja`/`full` extras, MIT `LICENSE`). Built as a single **abi3** wheel (`cp311-abi3`, covers CPython 3.11–3.14) — required adding `abi3-py311` to pyo3 features. `twine check` PASSED; wheel installs + imports in a clean venv. PyPI name `justapi` confirmed **available**.
 - [x] **Benchmarks (BENCHMARKS.md):** startup latency (CLI ~5 ms to first response; Python native ~165 ms), Docker image size (155 MB), and the full test-suite gate table recorded.
-- [x] All gates green: `cargo test --workspace` (236), `clippy -- -D warnings` clean, `cargo fmt --check` clean, `cargo miri test` (2), Python `pytest` (53 passed / 1 skipped), `twine check` PASSED.
+- [x] All gates green: `cargo test --workspace` (~444), `clippy -- -D warnings` clean, `cargo fmt --check` clean, `cargo miri test` (2), Python `pytest` (57 passed / 1 skipped as of 2026-07-11; suite had regressed to 8 failures and was fixed — see Next actions), `twine check` PASSED.
 - [ ] Publish to PyPI — packaging ready; upload must run inside a `manylinux_2_28` container (local Arch host tags `manylinux_2_34`, which PyPI rejects) and needs a PyPI API token. See BENCHMARKS.md publish notes.
 - [x] Full `ARCHITECTURE.md` and `CONTRIBUTING.md`
 
@@ -985,6 +997,62 @@ k8s guides, OpenAPI.
   supports CUDA >= 13.3, OR install CUDA toolkit 13.0. Setting
   `CUDARC_CUDA_VERSION=13000` alone is insufficient because nvcc still emits
   13.3 PTX.
+
+### Phase 53: HTTP/3 (QUIC) Transport (Status: ⚠️ reverted — dead code removed 2026-07-15)
+- **Objective:** Serve the same Python routes over HTTP/3 (QUIC) in addition to
+  the existing HTTP/1.1 transport, sharing the Rust request-handling core.
+- **Deliverables:**
+  - `justapi-core` `http3` feature: `quinn` 0.11 + `h3` 0.0.8 + `h3-quinn`
+    0.0.10. `server::http3::serve_http3(addr, cert_pem, key_pem, chain, wasm_middleware, shutdown)`
+    binds a QUIC `Endpoint` (TLS ALPN `h3`), accepts connections, and dispatches
+    each request through a `MiddlewareChain<Full<Bytes>>` (the same chain shape as
+    HTTP/1.1) — request body fully buffered into `Bytes` before the chain runs.
+    An optional `WasmEngine` applies the same WASM preprocessing as the H1 path.
+  - Core integration test `server::http3::tests::http3_roundtrip` — a self-signed
+    cert (rcgen) + `h3-quinn` client performs a full GET roundtrip and asserts the
+    response body.
+  - `justapi-py` `http3` feature forwarding to `justapi-core/http3`.
+    `make_native_handler` / `make_test_handler` are now generic over the request
+    body type `B: http_body::Body<Data = Bytes> + Send + Sync + Unpin + 'static`
+    (so the same closure serves `Incoming` for HTTP/1.1 and `Full<Bytes>` for
+    HTTP/3). `JustAPIApp.run` spawns `serve_http3` in parallel when
+    `enable_http3(cert_pem, key_pem)` was called; the QUIC server shares the
+    `CancellationToken` for graceful shutdown.
+  - Python-facing `JustAPIApp.enable_http3(cert_pem, key_pem)` (delegates to the
+    Rust method; raises a helpful `RuntimeError` if built without the `http3`
+    feature). `JustAPIApp.run` builds an H3 `MiddlewareChain<Full<Bytes>>` from the
+    same config (circuit breaker, request coalescing, gateway) as the H1 path and
+    passes it to `serve_http3`, so H3 applies identical middleware policy.
+    `test_http3.py` verifies wiring: server starts, routes answer over
+    HTTP/1.1, and the QUIC UDP port is bound.
+- **Limitation resolved:** Middleware was made generic over the request body type
+  `B` (`impl<B: Send + 'static> Middleware<B>` for `AccessLogger`, `Cors`,
+  `SecurityHeaders`, `JwtAuth`, `RateLimiter`, `IpRateLimiter`, `ApiKeyAuth`,
+  `RequestCoalescer`, `CompressionMiddleware`, `GatewayMiddleware`; resilience
+  middleware was already generic). `MiddlewareChain` is therefore reusable for any
+  body type, and `serve_http3` now runs the full chain (plus WASM preprocessing) on
+  the H3 path — not the raw `HandlerFn`. Routing, Python dispatch, validation, DB,
+  batching and WebSockets still work on H3 (they live in the handler).
+- [x] `cargo test -p justapi-core --features http3` — `http3_roundtrip` and
+      `http3_middleware_applied` (asserts `x-content-type-options: nosniff` from
+      `SecurityHeaders` arrives over H3) pass
+- [x] `cargo clippy --workspace --tests --features justapi-py/http3 -D warnings`
+      clean
+- [x] `cargo fmt --check` clean
+- [x] Python `pytest` under GIL (3.12) and no-GIL (3.14t): 78 passed, 1 skipped
+      (no regression from the generic-middleware refactor)
+
+> **2026-07-15 update — removed as dead code.** The `http3` transport was never
+> compiled (the `server/http3.rs` module was untracked and never declared via
+> `mod http3;`), so enabling the feature failed to build, and `serve_http3` was
+> never called. As part of the production-readiness cleanup it was deleted: the
+> `http3` feature + `quinn`/`h3`/`h3-quinn` deps in `justapi-core`, the `http3`
+> feature in `justapi-py`, the Rust `enable_http3` method, the Python
+> `JustAPIApp.enable_http3` wrapper + `.pyi` stub, `test_http3.py`, and all
+> `#[cfg(feature = "http3")]` wiring in `app.rs` were removed. The middleware
+> body-type genericity work (Phase 53 deliverable) remains and is still exercised
+> by the HTTP/1.1 path. If HTTP/3 is wanted later, re-add it as a fully-wired
+> module (ADR-046 should be revisited).
 
 ### Phase gate (Part 5 exit criteria)
 - [x] `justapi serve --model <id> --gpu 0` serves an OpenAI-compatible endpoint

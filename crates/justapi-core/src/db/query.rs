@@ -96,12 +96,7 @@ pub struct Insert {
 
 impl Insert {
     pub fn new(table: impl Into<String>) -> Self {
-        Self {
-            table: table.into(),
-            columns: Vec::new(),
-            values: Vec::new(),
-            returning: None,
-        }
+        Self { table: table.into(), columns: Vec::new(), values: Vec::new(), returning: None }
     }
 
     pub fn columns(mut self, columns: impl IntoIterator<Item = impl Into<String>>) -> Self {
@@ -110,8 +105,7 @@ impl Insert {
     }
 
     pub fn values(mut self, values: impl IntoIterator<Item = impl Into<String>>) -> Self {
-        self.values
-            .push(values.into_iter().map(|v| v.into()).collect());
+        self.values.push(values.into_iter().map(|v| v.into()).collect());
         self
     }
 
@@ -131,12 +125,8 @@ impl Insert {
                 format!("({})", params.join(", "))
             })
             .collect();
-        let mut sql = format!(
-            "INSERT INTO {} ({}) VALUES {}",
-            self.table,
-            cols,
-            placeholders.join(", ")
-        );
+        let mut sql =
+            format!("INSERT INTO {} ({}) VALUES {}", self.table, cols, placeholders.join(", "));
         if let Some(ref ret) = self.returning {
             sql.push_str(" RETURNING ");
             sql.push_str(&ret.join(", "));
@@ -156,17 +146,11 @@ pub struct Update {
 
 impl Update {
     pub fn new(table: impl Into<String>) -> Self {
-        Self {
-            table: table.into(),
-            sets: Vec::new(),
-            conditions: Vec::new(),
-            returning: None,
-        }
+        Self { table: table.into(), sets: Vec::new(), conditions: Vec::new(), returning: None }
     }
 
     pub fn set(mut self, column: impl Into<String>, placeholder: impl Into<String>) -> Self {
-        self.sets
-            .push(format!("{} = {}", column.into(), placeholder.into()));
+        self.sets.push(format!("{} = {}", column.into(), placeholder.into()));
         self
     }
 
@@ -205,11 +189,7 @@ pub struct Delete {
 
 impl Delete {
     pub fn new(table: impl Into<String>) -> Self {
-        Self {
-            table: table.into(),
-            conditions: Vec::new(),
-            returning: None,
-        }
+        Self { table: table.into(), conditions: Vec::new(), returning: None }
     }
 
     pub fn r#where(mut self, condition: impl Into<String>) -> Self {
@@ -253,23 +233,13 @@ mod tests {
             .r#where("id = ?")
             .r#where("active = true")
             .build();
-        assert_eq!(
-            q,
-            "SELECT id, name, email FROM users WHERE id = ? AND active = true"
-        );
+        assert_eq!(q, "SELECT id, name, email FROM users WHERE id = ? AND active = true");
     }
 
     #[test]
     fn test_select_with_limit_offset() {
-        let q = Select::new("users")
-            .order_by("name ASC")
-            .limit(10)
-            .offset(20)
-            .build();
-        assert_eq!(
-            q,
-            "SELECT * FROM users ORDER BY name ASC LIMIT 10 OFFSET 20"
-        );
+        let q = Select::new("users").order_by("name ASC").limit(10).offset(20).build();
+        assert_eq!(q, "SELECT * FROM users ORDER BY name ASC LIMIT 10 OFFSET 20");
     }
 
     #[test]
@@ -288,18 +258,12 @@ mod tests {
             .values(["Alice", "alice@example.com"])
             .returning(["id"])
             .build();
-        assert_eq!(
-            q,
-            "INSERT INTO users (name, email) VALUES (?, ?) RETURNING id"
-        );
+        assert_eq!(q, "INSERT INTO users (name, email) VALUES (?, ?) RETURNING id");
     }
 
     #[test]
     fn test_update() {
-        let q = Update::new("users")
-            .set("name", "?")
-            .r#where("id = ?")
-            .build();
+        let q = Update::new("users").set("name", "?").r#where("id = ?").build();
         assert_eq!(q, "UPDATE users SET name = ? WHERE id = ?");
     }
 

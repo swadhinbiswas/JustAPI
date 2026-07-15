@@ -35,11 +35,7 @@ pub struct TreeNode {
 
 impl TreeNode {
     pub fn new(token: u32, score: f32) -> Self {
-        Self {
-            token,
-            score,
-            children: vec![],
-        }
+        Self { token, score, children: vec![] }
     }
 }
 
@@ -71,11 +67,8 @@ pub fn top_k_tokens(logits: &[f32], k: usize) -> Vec<(u32, f32)> {
     if k == 0 || logits.is_empty() {
         return vec![];
     }
-    let mut scored: Vec<(u32, f32)> = logits
-        .iter()
-        .enumerate()
-        .map(|(i, &s)| (i as u32, s))
-        .collect();
+    let mut scored: Vec<(u32, f32)> =
+        logits.iter().enumerate().map(|(i, &s)| (i as u32, s)).collect();
     scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     scored.truncate(k);
     scored
@@ -92,11 +85,7 @@ pub fn build_draft_tree(
     branch: usize,
 ) -> Result<DraftTree, ModelError> {
     if gamma == 0 || branch == 0 {
-        return Ok(DraftTree {
-            roots: vec![],
-            gamma: 0,
-            branch: 0,
-        });
+        return Ok(DraftTree { roots: vec![], gamma: 0, branch: 0 });
     }
 
     fn expand(
@@ -115,21 +104,13 @@ pub fn build_draft_tree(
             let mut child_ctx = ctx.to_vec();
             child_ctx.push(token);
             let children = expand(draft, &child_ctx, depth_remaining - 1, branch)?;
-            nodes.push(TreeNode {
-                token,
-                score,
-                children,
-            });
+            nodes.push(TreeNode { token, score, children });
         }
         Ok(nodes)
     }
 
     let roots = expand(draft, context, gamma, branch)?;
-    Ok(DraftTree {
-        roots,
-        gamma,
-        branch,
-    })
+    Ok(DraftTree { roots, gamma, branch })
 }
 
 /// Verify a draft tree by walking the longest matching path.
@@ -156,11 +137,8 @@ pub fn verify_tree(
     let mut ctx = context.to_vec();
 
     // Clone roots into frontier so we can own children when descending.
-    let mut frontier: Vec<(u32, Vec<TreeNode>)> = tree
-        .roots
-        .iter()
-        .map(|n| (n.token, n.children.clone()))
-        .collect();
+    let mut frontier: Vec<(u32, Vec<TreeNode>)> =
+        tree.roots.iter().map(|n| (n.token, n.children.clone())).collect();
 
     let mut n_accepted = 0usize;
 
@@ -173,10 +151,7 @@ pub fn verify_tree(
             accepted.push(target_tok);
             n_accepted += 1;
             ctx.push(target_tok);
-            frontier = children
-                .into_iter()
-                .map(|n| (n.token, n.children))
-                .collect();
+            frontier = children.into_iter().map(|n| (n.token, n.children)).collect();
             if frontier.is_empty() {
                 let logits = target.forward_logits(&ctx)?;
                 let bonus = sample_token(&logits, params, rng);
@@ -317,13 +292,7 @@ impl TreeSpeculativeModel {
         branch: usize,
         seed: u64,
     ) -> Self {
-        Self {
-            target,
-            draft,
-            gamma,
-            branch,
-            seed,
-        }
+        Self { target, draft, gamma, branch, seed }
     }
 }
 
@@ -371,11 +340,7 @@ mod tests {
 
     impl RangeModel {
         fn new(vocab: usize, offset: u32, spread: u32) -> Self {
-            Self {
-                vocab,
-                offset,
-                spread,
-            }
+            Self { vocab, offset, spread }
         }
     }
 
@@ -480,28 +445,16 @@ mod tests {
 
     #[test]
     fn tree_total_nodes_formula() {
-        let t = DraftTree {
-            roots: vec![],
-            gamma: 4,
-            branch: 3,
-        };
+        let t = DraftTree { roots: vec![], gamma: 4, branch: 3 };
         // 3 + 9 + 27 + 81 = 120
         assert_eq!(t.total_nodes(), 120);
     }
 
     #[test]
     fn tree_total_nodes_zero() {
-        let t = DraftTree {
-            roots: vec![],
-            gamma: 0,
-            branch: 3,
-        };
+        let t = DraftTree { roots: vec![], gamma: 0, branch: 3 };
         assert_eq!(t.total_nodes(), 0);
-        let t = DraftTree {
-            roots: vec![],
-            gamma: 4,
-            branch: 0,
-        };
+        let t = DraftTree { roots: vec![], gamma: 4, branch: 0 };
         assert_eq!(t.total_nodes(), 0);
     }
 
@@ -514,24 +467,13 @@ mod tests {
         // top-3 include the correct prediction at every depth.
         let target = MockModel::new(32);
         let draft = RangeModel::new(32, 0, 3);
-        let params = SamplingParams {
-            max_tokens: 20,
-            temperature: 0.0,
-            ..Default::default()
-        };
+        let params = SamplingParams { max_tokens: 20, temperature: 0.0, ..Default::default() };
         let prompt = vec![5u32];
         let baseline = collect(&target, &prompt, &params);
         let (spec, stats) = collect_tree(&target, &draft, &prompt, &params, 4, 3);
-        assert_eq!(
-            baseline, spec,
-            "tree speculation must not change the output"
-        );
+        assert_eq!(baseline, spec, "tree speculation must not change the output");
         // Acceptance should be high — perfect draft.
-        assert!(
-            stats.acceptance_rate() > 0.8,
-            "got {}",
-            stats.acceptance_rate()
-        );
+        assert!(stats.acceptance_rate() > 0.8, "got {}", stats.acceptance_rate());
         assert_eq!(stats.tree_branch, 3);
     }
 
@@ -541,11 +483,7 @@ mod tests {
     fn tree_gamma_zero_matches_plain() {
         let target = MockModel::new(32);
         let draft = MockModel::new(32);
-        let params = SamplingParams {
-            max_tokens: 12,
-            temperature: 0.0,
-            ..Default::default()
-        };
+        let params = SamplingParams { max_tokens: 12, temperature: 0.0, ..Default::default() };
         let prompt = vec![0u32];
         let baseline = collect(&target, &prompt, &params);
         let (spec, _) = collect_tree(&target, &draft, &prompt, &params, 0, 3);
@@ -558,11 +496,7 @@ mod tests {
     fn tree_branch_one_acts_like_single_path() {
         let target = MockModel::new(32);
         let draft = MockModel::new(32);
-        let params = SamplingParams {
-            max_tokens: 20,
-            temperature: 0.0,
-            ..Default::default()
-        };
+        let params = SamplingParams { max_tokens: 20, temperature: 0.0, ..Default::default() };
         let prompt = vec![3u32];
         let baseline = collect(&target, &prompt, &params);
         // With branch=1, tree has only one candidate per depth = essentially
@@ -579,21 +513,13 @@ mod tests {
         // Draft offset=10, centered on (prev+11)%V — never includes (prev+1).
         let target = MockModel::new(64);
         let draft = RangeModel::new(64, 10, 0);
-        let params = SamplingParams {
-            max_tokens: 30,
-            temperature: 0.0,
-            ..Default::default()
-        };
+        let params = SamplingParams { max_tokens: 30, temperature: 0.0, ..Default::default() };
         let prompt = vec![0u32];
         let baseline = collect(&target, &prompt, &params);
         let (spec, stats) = collect_tree(&target, &draft, &prompt, &params, 4, 3);
         assert_eq!(baseline, spec, "must preserve output even with bad draft");
         // Acceptance rate should be near 0.
-        assert!(
-            stats.acceptance_rate() < 0.1,
-            "got {}",
-            stats.acceptance_rate()
-        );
+        assert!(stats.acceptance_rate() < 0.1, "got {}", stats.acceptance_rate());
         // Tokens emitted == max_tokens (graceful, no loss)
         assert_eq!(spec.len(), 30);
     }
@@ -607,11 +533,7 @@ mod tests {
         // Target predicts (prev+1). So acceptance should be high.
         let target = MockModel::new(64);
         let draft = RangeModel::new(64, 0, 2);
-        let params = SamplingParams {
-            max_tokens: 40,
-            temperature: 0.0,
-            ..Default::default()
-        };
+        let params = SamplingParams { max_tokens: 40, temperature: 0.0, ..Default::default() };
         let prompt = vec![0u32];
 
         let (_spec1, stats1) = collect_tree(&target, &draft, &prompt, &params, 4, 1);
@@ -633,11 +555,7 @@ mod tests {
     fn tree_honors_max_tokens() {
         let target = MockModel::new(64);
         let draft = RangeModel::new(64, 0, 2);
-        let params = SamplingParams {
-            max_tokens: 15,
-            temperature: 0.0,
-            ..Default::default()
-        };
+        let params = SamplingParams { max_tokens: 15, temperature: 0.0, ..Default::default() };
         let (spec, _) = collect_tree(&target, &draft, &[0u32], &params, 4, 3);
         assert_eq!(spec.len(), 15);
     }
@@ -672,10 +590,7 @@ mod tests {
             gamma: 1,
             branch: 2,
         };
-        let params = SamplingParams {
-            temperature: 0.0,
-            ..Default::default()
-        };
+        let params = SamplingParams { temperature: 0.0, ..Default::default() };
         let mut rng = StdRng::seed_from_u64(0);
         let (accepted, bonus, n) = verify_tree(&target, &tree, &[0u32], &params, &mut rng).unwrap();
         assert_eq!(accepted, vec![1]);
@@ -692,10 +607,7 @@ mod tests {
             gamma: 1,
             branch: 2,
         };
-        let params = SamplingParams {
-            temperature: 0.0,
-            ..Default::default()
-        };
+        let params = SamplingParams { temperature: 0.0, ..Default::default() };
         let mut rng = StdRng::seed_from_u64(0);
         let (accepted, bonus, n) = verify_tree(&target, &tree, &[0u32], &params, &mut rng).unwrap();
         assert_eq!(accepted.len(), 0);
@@ -722,16 +634,9 @@ mod tests {
         let mut node_b = TreeNode::new(7, 3.0);
         node_b.children = vec![TreeNode::new(8, 3.0)];
 
-        let tree = DraftTree {
-            roots: vec![node_a, node_b],
-            gamma: 3,
-            branch: 2,
-        };
+        let tree = DraftTree { roots: vec![node_a, node_b], gamma: 3, branch: 2 };
         let target = MockModel::new(16);
-        let params = SamplingParams {
-            temperature: 0.0,
-            ..Default::default()
-        };
+        let params = SamplingParams { temperature: 0.0, ..Default::default() };
         let mut rng = StdRng::seed_from_u64(0);
         let (accepted, bonus, n) = verify_tree(&target, &tree, &[0u32], &params, &mut rng).unwrap();
         // Accepted: [1, 2, 3] — the matching path.
@@ -750,16 +655,9 @@ mod tests {
             TreeNode::new(10, 4.0),
         ];
 
-        let tree = DraftTree {
-            roots: vec![node_a],
-            gamma: 2,
-            branch: 2,
-        };
+        let tree = DraftTree { roots: vec![node_a], gamma: 2, branch: 2 };
         let target = MockModel::new(16);
-        let params = SamplingParams {
-            temperature: 0.0,
-            ..Default::default()
-        };
+        let params = SamplingParams { temperature: 0.0, ..Default::default() };
         let mut rng = StdRng::seed_from_u64(0);
         let (accepted, bonus, n) = verify_tree(&target, &tree, &[0u32], &params, &mut rng).unwrap();
         assert_eq!(accepted, vec![1]); // only first token accepted
@@ -774,11 +672,7 @@ mod tests {
     fn tree_stats_record_branch() {
         let target = MockModel::new(32);
         let draft = MockModel::new(32);
-        let params = SamplingParams {
-            max_tokens: 10,
-            temperature: 0.0,
-            ..Default::default()
-        };
+        let params = SamplingParams { max_tokens: 10, temperature: 0.0, ..Default::default() };
         let (_, stats) = collect_tree(&target, &draft, &[0u32], &params, 3, 3);
         assert_eq!(stats.tree_branch, 3);
         assert!(stats.steps > 0);
@@ -792,11 +686,7 @@ mod tests {
         // (both produce the same tokens as plain decode).
         let target = MockModel::new(32);
         let draft = MockModel::new(32);
-        let params = SamplingParams {
-            max_tokens: 20,
-            temperature: 0.0,
-            ..Default::default()
-        };
+        let params = SamplingParams { max_tokens: 20, temperature: 0.0, ..Default::default() };
         let prompt = vec![0u32];
         let baseline = collect(&target, &prompt, &params);
 
@@ -813,11 +703,7 @@ mod tests {
     fn tree_handles_empty_prompt() {
         let target = MockModel::new(32);
         let draft = MockModel::new(32);
-        let params = SamplingParams {
-            max_tokens: 5,
-            temperature: 0.0,
-            ..Default::default()
-        };
+        let params = SamplingParams { max_tokens: 5, temperature: 0.0, ..Default::default() };
         let (spec, _) = collect_tree(&target, &draft, &[], &params, 2, 2);
         assert_eq!(spec.len(), 5);
     }
@@ -834,11 +720,7 @@ mod tests {
         let draft = Arc::new(MockModel::new(32));
         let spec = TreeSpeculativeModel::new(target.clone(), draft, 4, 3, 0);
 
-        let params = SamplingParams {
-            max_tokens: 20,
-            temperature: 0.0,
-            ..Default::default()
-        };
+        let params = SamplingParams { max_tokens: 20, temperature: 0.0, ..Default::default() };
 
         let plain = collect(&*target, &[3u32], &params);
         let wrapped = collect(&spec, &[3u32], &params);

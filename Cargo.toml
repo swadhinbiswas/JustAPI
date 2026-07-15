@@ -14,6 +14,16 @@ version = "2.0.0"
 edition = "2021"
 license = "MIT"
 
+# Release builds abort on panic instead of unwinding. This is required for the
+# pyo3 extension-module FFI boundary: a Rust panic that unwinds across the
+# pyo3/Python boundary is undefined behaviour. With `panic = "abort"` a panic
+# safely terminates the process and the supervisor (Docker/k8s, systemd)
+# restarts it. This is why `gil_pool` does NOT wrap each GIL job in
+# `catch_unwind` (that measured as a ~3x regression on the GIL path). Dev/test
+# builds keep the default `unwind` so `cargo test` panics still surface.
+[profile.release]
+panic = "abort"
+
 [workspace.dependencies]
 # Internal crates
 justapi-core = { path = "crates/justapi-core" }

@@ -76,9 +76,7 @@ pub struct SharedArena {
 
 impl SharedArena {
     pub fn new() -> Self {
-        Self {
-            inner: Mutex::new(RequestArena::new()),
-        }
+        Self { inner: Mutex::new(RequestArena::new()) }
     }
 
     pub fn reset(&self) {
@@ -108,9 +106,7 @@ const BUCKET_SIZES: [usize; 4] = [1024, 4096, 16384, 65536];
 
 impl BufferPool {
     pub fn new() -> Self {
-        Self {
-            buckets: std::array::from_fn(|_| Mutex::new(Vec::new())),
-        }
+        Self { buckets: std::array::from_fn(|_| Mutex::new(Vec::new())) }
     }
 
     fn bucket_index(min_size: usize) -> usize {
@@ -126,8 +122,7 @@ impl BufferPool {
     pub fn acquire(&self, min_size: usize) -> Vec<u8> {
         let idx = Self::bucket_index(min_size);
         let mut pool = self.buckets[idx].lock().unwrap();
-        pool.pop()
-            .unwrap_or_else(|| Vec::with_capacity(BUCKET_SIZES[idx]))
+        pool.pop().unwrap_or_else(|| Vec::with_capacity(BUCKET_SIZES[idx]))
     }
 
     /// Return a buffer to the pool for reuse.

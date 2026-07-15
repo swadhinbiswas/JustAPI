@@ -28,27 +28,17 @@ fn is_valid_gguf(path: &Path) -> bool {
 
 /// Detect whether a model directory contains a valid `.gguf` file or safetensors.
 pub fn detect_format(model_dir: &Path) -> Result<ModelFormat, ModelError> {
-    let entries: Vec<_> = std::fs::read_dir(model_dir)
-        .map_err(ModelError::Io)?
-        .filter_map(|e| e.ok())
-        .collect();
+    let entries: Vec<_> =
+        std::fs::read_dir(model_dir).map_err(ModelError::Io)?.filter_map(|e| e.ok()).collect();
 
     let has_gguf = entries
         .iter()
-        .filter(|e| {
-            e.path()
-                .extension()
-                .map(|ext| ext == "gguf")
-                .unwrap_or(false)
-        })
+        .filter(|e| e.path().extension().map(|ext| ext == "gguf").unwrap_or(false))
         .any(|e| is_valid_gguf(&e.path()));
 
-    let has_safetensors = entries.iter().any(|e| {
-        e.path()
-            .extension()
-            .map(|ext| ext == "safetensors")
-            .unwrap_or(false)
-    });
+    let has_safetensors = entries
+        .iter()
+        .any(|e| e.path().extension().map(|ext| ext == "safetensors").unwrap_or(false));
 
     match (has_gguf, has_safetensors) {
         (true, _) => Ok(ModelFormat::Gguf),
@@ -124,9 +114,9 @@ impl ForwardState {
         let t = Tensor::from_slice(tokens, (1, tokens.len()), device)
             .map_err(|e| ModelError::Generation(e.to_string()))?;
         match self {
-            ForwardState::Gguf(m) => m
-                .forward(&t, index_pos)
-                .map_err(|e| ModelError::Generation(e.to_string())),
+            ForwardState::Gguf(m) => {
+                m.forward(&t, index_pos).map_err(|e| ModelError::Generation(e.to_string()))
+            }
             ForwardState::Safetensors { model, cache } => model
                 .forward(&t, index_pos, cache)
                 .map_err(|e| ModelError::Generation(e.to_string())),
@@ -233,6 +223,15 @@ impl RealModel {
                     .filter(|p| p.extension().map(|e| e == "safetensors").unwrap_or(false))
                     .cloned()
                     .collect();
+                // SAFETY: `from_mmaped_safetensors` memory-maps the safetensors
+                // files and reads tensor bytes directly from the mapped pages.
+                // This is sound as long as the files at `st_paths` are not
+                // concurrently modified or truncated for the lifetime of the
+                // returned `VarBuilder`; the framework treats loaded weights as
+                // immutable and does not write to them. The paths are validated
+                // above as existing `.safetensors` entries, so each mapping
+                // target is a regular, readable file rather than a directory or
+                // dangling path.
                 let vb =
                     unsafe { VarBuilder::from_mmaped_safetensors(&st_paths, DType::F32, &device) }
                         .map_err(|e| {
@@ -256,13 +255,7 @@ impl RealModel {
             config.vocab_size,
         );
 
-        Ok(Self {
-            format,
-            config,
-            device,
-            tokenizer,
-            state: Mutex::new(state),
-        })
+        Ok(Self { format, config, device, tokenizer, state: Mutex::new(state) })
     }
 
     /// The detected format.
@@ -283,9 +276,8 @@ impl RealModel {
 
 /// Load the Llama config: from `config.json` if present, else a sensible default.
 fn load_config(model_dir: &Path, entries: &[PathBuf]) -> Result<LlamaConfig, ModelError> {
-    let has_config = entries
-        .iter()
-        .any(|p| p.file_name().map(|n| n == "config.json").unwrap_or(false));
+    let has_config =
+        entries.iter().any(|p| p.file_name().map(|n| n == "config.json").unwrap_or(false));
     if has_config {
         let config_str =
             std::fs::read_to_string(model_dir.join("config.json")).map_err(ModelError::Io)?;
@@ -325,16 +317,9 @@ fn build_processor(seed: u64, params: &SamplingParams) -> LogitsProcessor {
             },
         )
     } else {
-        let temperature = if params.temperature < 1e-7 {
-            None
-        } else {
-            Some(params.temperature as f64)
-        };
-        let top_p = if params.top_p >= 1.0 {
-            None
-        } else {
-            Some(params.top_p as f64)
-        };
+        let temperature =
+            if params.temperature < 1e-7 { None } else { Some(params.temperature as f64) };
+        let top_p = if params.top_p >= 1.0 { None } else { Some(params.top_p as f64) };
         LogitsProcessor::new(seed, temperature, top_p)
     }
 }
@@ -349,9 +334,7 @@ impl Model for RealModel {
         state.reset_cache(&self.config, &self.device)?;
         let logits = state.forward(context, 0, &self.device)?;
         // `to_vec1` returns the last position's logits (shape [vocab]).
-        let vec = logits
-            .to_vec1::<f32>()
-            .map_err(|e| ModelError::Generation(e.to_string()))?;
+        let vec = logits.to_vec1::<f32>().map_err(|e| ModelError::Generation(e.to_string()))?;
         Ok(vec)
     }
 
@@ -377,9 +360,7 @@ impl Model for RealModel {
         // + number of tokens already decoded) — it is NOT a redundant copy of the
         // `step` loop counter, so the explicit counter is intentional.
         let logits = state.forward(prompt, 0, &self.device)?;
-        let mut token = lp
-            .sample(&logits)
-            .map_err(|e| ModelError::Generation(e.to_string()))?;
+        let mut token = lp.sample(&logits).map_err(|e| ModelError::Generation(e.to_string()))?;
         let mut index_pos = prompt.len();
 
         for step in 0..params.max_tokens {
@@ -388,17 +369,8 @@ impl Model for RealModel {
                 .decode(&[token])
                 .map_err(|e| ModelError::Generation(e.to_string()))?;
             let is_stop = params.stop_tokens.contains(&token);
-            let finish = if is_stop {
-                Some(FinishReason::Stop)
-            } else {
-                None
-            };
-            let produced = GeneratedToken {
-                id: token,
-                text,
-                logprob: 0.0,
-                finish_reason: finish,
-            };
+            let finish = if is_stop { Some(FinishReason::Stop) } else { None };
+            let produced = GeneratedToken { id: token, text, logprob: 0.0, finish_reason: finish };
             if !sink(produced) {
                 return Ok(FinishReason::Cancelled);
             }
@@ -411,9 +383,7 @@ impl Model for RealModel {
             }
             // Decode the next token, extending the KV cache.
             let next_logits = state.forward(&[token], index_pos, &self.device)?;
-            token = lp
-                .sample(&next_logits)
-                .map_err(|e| ModelError::Generation(e.to_string()))?;
+            token = lp.sample(&next_logits).map_err(|e| ModelError::Generation(e.to_string()))?;
             index_pos += 1;
         }
         Ok(FinishReason::Length)

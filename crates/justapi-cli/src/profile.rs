@@ -71,10 +71,7 @@ async fn send_request(addr: &str) -> Option<RequestResult> {
     let start = Instant::now();
     let mut stream = TcpStream::connect(addr).await.ok()?;
 
-    let request = format!(
-        "GET / HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
-        addr
-    );
+    let request = format!("GET / HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n", addr);
     stream.write_all(request.as_bytes()).await.ok()?;
 
     let mut buf = vec![0u8; 4096];
@@ -195,10 +192,7 @@ pub fn format_report(report: &ProfileReport) -> String {
         0.0
     };
 
-    out.push_str(&format!(
-        "  Duration:        {:.1}s\n",
-        report.duration.as_secs_f64()
-    ));
+    out.push_str(&format!("  Duration:        {:.1}s\n", report.duration.as_secs_f64()));
     out.push_str(&format!("  Total requests:  {}\n", report.total_requests));
     out.push_str(&format!("  Requests/sec:    {rps:.1}\n\n"));
 
@@ -213,10 +207,7 @@ pub fn format_report(report: &ProfileReport) -> String {
         out.push_str("  Latency percentiles:\n");
         out.push_str(&format!("    p50:  {:.3}ms\n", p50.as_secs_f64() * 1000.0));
         out.push_str(&format!("    p95:  {:.3}ms\n", p95.as_secs_f64() * 1000.0));
-        out.push_str(&format!(
-            "    p99:  {:.3}ms\n\n",
-            p99.as_secs_f64() * 1000.0
-        ));
+        out.push_str(&format!("    p99:  {:.3}ms\n\n", p99.as_secs_f64() * 1000.0));
 
         out.push_str("  Latency histogram:\n");
         out.push_str(&render_histogram(&sorted, 10, 30));

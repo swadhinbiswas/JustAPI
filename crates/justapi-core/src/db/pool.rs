@@ -54,11 +54,7 @@ pub struct DatabaseConfig {
 
 impl Default for DatabaseConfig {
     fn default() -> Self {
-        Self {
-            url: String::new(),
-            max_connections: 10,
-            kind: None,
-        }
+        Self { url: String::new(), max_connections: 10, kind: None }
     }
 }
 
@@ -172,9 +168,7 @@ pub struct PoolManager {
 
 impl PoolManager {
     pub fn new() -> Self {
-        Self {
-            pools: Arc::new(RwLock::new(HashMap::new())),
-        }
+        Self { pools: Arc::new(RwLock::new(HashMap::new())) }
     }
 
     pub async fn init(
@@ -243,14 +237,8 @@ mod tests {
 
     #[test]
     fn test_db_kind_from_url() {
-        assert_eq!(
-            DbKind::from_url("postgres://localhost/db"),
-            DbKind::Postgres
-        );
-        assert_eq!(
-            DbKind::from_url("postgresql://localhost/db"),
-            DbKind::Postgres
-        );
+        assert_eq!(DbKind::from_url("postgres://localhost/db"), DbKind::Postgres);
+        assert_eq!(DbKind::from_url("postgresql://localhost/db"), DbKind::Postgres);
         assert_eq!(DbKind::from_url("sqlite://./test.db"), DbKind::Sqlite);
         assert_eq!(DbKind::from_url("mysql://localhost/db"), DbKind::MySql);
     }

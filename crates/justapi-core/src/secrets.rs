@@ -21,10 +21,7 @@ pub struct Secret {
 
 impl Secret {
     pub fn env(var_name: &str) -> Self {
-        Self {
-            source: SecretSource::Env(var_name.to_string()),
-            name: var_name.to_string(),
-        }
+        Self { source: SecretSource::Env(var_name.to_string()), name: var_name.to_string() }
     }
 
     pub fn file(path: impl Into<std::path::PathBuf>) -> Self {
@@ -33,17 +30,11 @@ impl Secret {
             .file_name()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| path.to_string_lossy().to_string());
-        Self {
-            source: SecretSource::File(path),
-            name,
-        }
+        Self { source: SecretSource::File(path), name }
     }
 
     pub fn inline(value: &str, label: &str) -> Self {
-        Self {
-            source: SecretSource::Inline(value.to_string()),
-            name: label.to_string(),
-        }
+        Self { source: SecretSource::Inline(value.to_string()), name: label.to_string() }
     }
 
     /// Resolve the secret to its string value.
@@ -94,9 +85,7 @@ impl SecretsRegistry {
     /// Resolve all secrets eagerly. Useful for startup validation.
     pub fn resolve_all(&self) -> Vec<(String, Result<String, anyhow::Error>)> {
         let map = self.secrets.read().unwrap();
-        map.iter()
-            .map(|(name, secret)| (name.clone(), secret.resolve()))
-            .collect()
+        map.iter().map(|(name, secret)| (name.clone(), secret.resolve())).collect()
     }
 }
 

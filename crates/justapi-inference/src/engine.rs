@@ -77,8 +77,7 @@ pub struct ModelRegistry {
 impl ModelRegistry {
     /// Register a model under `name`, replacing any existing entry.
     pub fn register(&mut self, name: &str, model: Arc<dyn Model>, source: ModelSource) {
-        self.models
-            .insert(name.to_string(), RegistryEntry { model, source });
+        self.models.insert(name.to_string(), RegistryEntry { model, source });
     }
 
     /// Fetch a shared handle to a registered model.
@@ -112,13 +111,8 @@ pub struct Engine {
 impl Engine {
     /// Create an engine bound to `device`.
     pub fn new(device: EngineDevice) -> Result<Self, ModelError> {
-        let device = device
-            .to_candle()
-            .map_err(|e| ModelError::Generation(e.to_string()))?;
-        Ok(Self {
-            device,
-            registry: Arc::new(Mutex::new(ModelRegistry::default())),
-        })
+        let device = device.to_candle().map_err(|e| ModelError::Generation(e.to_string()))?;
+        Ok(Self { device, registry: Arc::new(Mutex::new(ModelRegistry::default())) })
     }
 
     /// The Candle device this engine runs models on.
@@ -128,10 +122,7 @@ impl Engine {
 
     /// Register an arbitrary model implementation.
     pub fn register(&self, name: &str, model: Arc<dyn Model>) {
-        self.registry
-            .lock()
-            .unwrap()
-            .register(name, model, ModelSource::Mock);
+        self.registry.lock().unwrap().register(name, model, ModelSource::Mock);
     }
 
     /// Fetch a shared handle to a registered model by name.
@@ -142,10 +133,7 @@ impl Engine {
     /// Register a [`MockModel`] and return a handle to it.
     pub fn register_mock(&self, name: &str) -> Arc<MockModel> {
         let model = Arc::new(MockModel::new(crate::DEFAULT_MOCK_VOCAB));
-        self.registry
-            .lock()
-            .unwrap()
-            .register(name, model.clone(), ModelSource::Mock);
+        self.registry.lock().unwrap().register(name, model.clone(), ModelSource::Mock);
         model
     }
 
@@ -162,10 +150,7 @@ impl Engine {
         seed: u64,
     ) {
         let spec = SpeculativeModel::new(target, SpeculativeConfig::new(gamma, draft, seed));
-        self.registry
-            .lock()
-            .unwrap()
-            .register(name, Arc::new(spec), ModelSource::Mock);
+        self.registry.lock().unwrap().register(name, Arc::new(spec), ModelSource::Mock);
     }
 
     /// Register a tree-based speculative-decode model (Medusa/EAGLE-style): a
@@ -184,10 +169,7 @@ impl Engine {
         seed: u64,
     ) {
         let spec = TreeSpeculativeModel::new(target, draft, gamma, branch, seed);
-        self.registry
-            .lock()
-            .unwrap()
-            .register(name, Arc::new(spec), ModelSource::Mock);
+        self.registry.lock().unwrap().register(name, Arc::new(spec), ModelSource::Mock);
     }
 
     /// Load a real model from `model_dir`.
@@ -228,8 +210,7 @@ impl Engine {
     ) -> Result<mpsc::UnboundedReceiver<GeneratedToken>, ModelError> {
         let model = {
             let reg = self.registry.lock().unwrap();
-            reg.get(name)
-                .ok_or_else(|| ModelError::NotFound(name.to_string()))?
+            reg.get(name).ok_or_else(|| ModelError::NotFound(name.to_string()))?
         };
 
         let (tx, rx) = mpsc::unbounded_channel();
@@ -247,11 +228,6 @@ impl Engine {
 
     /// Return the [`ModelSource`] a registered model was loaded from, if known.
     pub fn model_source(&self, name: &str) -> Option<ModelSource> {
-        self.registry
-            .lock()
-            .unwrap()
-            .models
-            .get(name)
-            .map(|e| e.source.clone())
+        self.registry.lock().unwrap().models.get(name).map(|e| e.source.clone())
     }
 }

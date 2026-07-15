@@ -99,13 +99,7 @@ pub struct Diagnostic {
 impl Diagnostic {
     /// Create a new diagnostic at the given level.
     pub fn new(level: DiagLevel, message: impl Into<String>) -> Self {
-        Self {
-            level,
-            code: None,
-            message: message.into(),
-            suggestions: Vec::new(),
-            context: None,
-        }
+        Self { level, code: None, message: message.into(), suggestions: Vec::new(), context: None }
     }
 
     /// Attach an error code (e.g. `"E001"`).

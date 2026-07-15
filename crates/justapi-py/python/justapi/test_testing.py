@@ -104,7 +104,7 @@ async def test_async_404(client):
 @pytest.mark.asyncio
 async def test_async_wrong_method(client):
     resp = await client.get("/echo")
-    assert resp["status"] == 404
+    assert resp["status"] == 405
 
 
 # ---------------------------------------------------------------------------

@@ -4,6 +4,7 @@ use http_body_util::BodyExt;
 use http_body_util::Full;
 use hyper::body::Bytes;
 use hyper::{Response, StatusCode};
+use jsonschema::Validator;
 use serde::de::DeserializeOwned;
 
 use crate::ResponseBody;
@@ -20,12 +21,7 @@ pub struct ValidationError {
 
 impl ValidationError {
     pub fn new(field: impl Into<String>, message: impl Into<String>) -> Self {
-        Self {
-            errors: vec![FieldError {
-                field: field.into(),
-                message: message.into(),
-            }],
-        }
+        Self { errors: vec![FieldError { field: field.into(), message: message.into() }] }
     }
 
     pub fn multiple(errors: Vec<FieldError>) -> Self {
@@ -33,10 +29,7 @@ impl ValidationError {
     }
 
     pub fn add(&mut self, field: impl Into<String>, message: impl Into<String>) {
-        self.errors.push(FieldError {
-            field: field.into(),
-            message: message.into(),
-        });
+        self.errors.push(FieldError { field: field.into(), message: message.into() });
     }
 
     pub fn is_empty(&self) -> bool {
@@ -205,6 +198,52 @@ pub fn validate_json_schema(body: &[u8], schema_json: &str) -> Result<(), Valida
 }
 
 // ---------------------------------------------------------------------------
+// Precompiled schema validator (cacheable per route)
+// ---------------------------------------------------------------------------
+
+/// A JSON Schema compiled once and reused across requests.
+///
+/// `jsonschema::Validator` is `Send + Sync + Clone`, so a `CompiledValidator`
+/// is safe to store in an `Arc<Vec<Option<CompiledValidator>>>` shared across
+/// all handler threads — this avoids re-parsing *and* re-compiling the schema
+/// on every request (the dominant per-request cost of [`validate_json_schema`]).
+#[derive(Clone)]
+pub struct CompiledValidator(pub Validator);
+
+impl CompiledValidator {
+    /// Validate a JSON body against the precompiled schema.
+    pub fn validate(&self, body: &[u8]) -> Result<(), ValidationError> {
+        let body_value: serde_json::Value = serde_json::from_slice(body)
+            .map_err(|e| ValidationError::new("body", format!("Invalid JSON: {}", e)))?;
+        let mut verr = ValidationError { errors: Vec::new() };
+        for error in self.0.iter_errors(&body_value) {
+            let path = error.instance_path().to_string();
+            let field = if path.is_empty() || path == "/" || path == "#" {
+                "body".to_string()
+            } else {
+                path.trim_start_matches('/').to_string()
+            };
+            verr.add(field, error.to_string());
+        }
+        if verr.is_empty() {
+            Ok(())
+        } else {
+            Err(verr)
+        }
+    }
+}
+
+/// Compile a JSON Schema string once into a reusable [`CompiledValidator`].
+pub fn compile_schema(schema_json: &str) -> Result<CompiledValidator, ValidationError> {
+    let schema_value: serde_json::Value = serde_json::from_str(schema_json)
+        .map_err(|e| ValidationError::new("schema", format!("Invalid schema JSON: {}", e)))?;
+    let validator = jsonschema::options()
+        .build(&schema_value)
+        .map_err(|e| ValidationError::new("schema", format!("Schema compilation error: {}", e)))?;
+    Ok(CompiledValidator(validator))
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -266,14 +305,8 @@ mod tests {
     #[test]
     fn test_validation_error_display() {
         let err = ValidationError::multiple(vec![
-            FieldError {
-                field: "name".into(),
-                message: "required".into(),
-            },
-            FieldError {
-                field: "age".into(),
-                message: "must be positive".into(),
-            },
+            FieldError { field: "name".into(), message: "required".into() },
+            FieldError { field: "age".into(), message: "must be positive".into() },
         ]);
         let msg = err.to_string();
         assert!(msg.contains("name: required"));
@@ -362,5 +395,16 @@ mod tests {
         let result = validate_json_schema(body, schema);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Invalid JSON"));
+    }
+
+    #[test]
+    fn test_compiled_validator_reuse() {
+        let schema = r#"{"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}"#;
+        let compiled = compile_schema(schema).unwrap();
+        // Reused across many requests without recompiling.
+        for _ in 0..1000 {
+            assert!(compiled.validate(br#"{"name": "Alice"}"#).is_ok());
+            assert!(compiled.validate(br#"{"wrong": 1}"#).is_err());
+        }
     }
 }

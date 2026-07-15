@@ -26,9 +26,8 @@ async fn send_request_with_headers(
     extra_headers: &HashMap<&str, &str>,
 ) -> (StatusCode, Vec<u8>, hyper::HeaderMap) {
     let stream = TcpStream::connect(addr).await.unwrap();
-    let (mut sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
-        .await
-        .unwrap();
+    let (mut sender, conn) =
+        hyper::client::conn::http1::handshake(TokioIo::new(stream)).await.unwrap();
     tokio::spawn(conn);
 
     let mut builder = hyper::Request::builder().method(method).uri(path);
@@ -39,9 +38,7 @@ async fn send_request_with_headers(
         builder = builder.header(*k, *v);
     }
     let req = builder
-        .body(http_body_util::Full::new(hyper::body::Bytes::from(
-            body.unwrap_or(b""),
-        )))
+        .body(http_body_util::Full::new(hyper::body::Bytes::from(body.unwrap_or(b""))))
         .unwrap();
     let resp = sender.send_request(req).await.unwrap();
     let status = resp.status();
@@ -52,9 +49,7 @@ async fn send_request_with_headers(
 
 /// Helper to start a server and return the address
 async fn start_server() -> SocketAddr {
-    let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
-        .await
-        .unwrap();
+    let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
         serve(listener).await.unwrap();
@@ -182,9 +177,7 @@ async fn test_loopback_websocket() {
     use futures::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::Message;
 
-    let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
-        .await
-        .unwrap();
+    let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).await.unwrap();
     let addr = listener.local_addr().unwrap();
 
     tokio::spawn(async move {
@@ -194,9 +187,8 @@ async fn test_loopback_websocket() {
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
     let url = format!("ws://{}/ws", addr);
-    let (mut ws, _) = tokio_tungstenite::connect_async(&url)
-        .await
-        .expect("WebSocket connection should succeed");
+    let (mut ws, _) =
+        tokio_tungstenite::connect_async(&url).await.expect("WebSocket connection should succeed");
 
     ws.send(Message::Text("hello".into())).await.unwrap();
     let msg = ws.next().await.unwrap().unwrap();

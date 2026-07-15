@@ -72,10 +72,10 @@ def test_native_api():
 
         try:
             urllib.request.urlopen(f"http://{addr}/echo")
-            assert False, "Expected 404 (wrong method)"
+            assert False, "Expected 405 (wrong method)"
         except urllib.error.HTTPError as e:
-            assert e.code == 404, f"Expected 404, got {e.code}"
-            print("PASS: GET /echo -> 404 (wrong method)")
+            assert e.code == 405, f"Expected 405, got {e.code}"
+            print("PASS: GET /echo -> 405 (wrong method)")
 
         print()
         print("=== All tests PASSED ===")

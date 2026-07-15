@@ -10,7 +10,33 @@ Do not begin a phase in `PLAN.md` until the previous phase's exit criteria
 are checked off there. If you're unsure whether a gate passed, check
 `BENCHMARKS.md` and CI history — don't assume.
 
-## 2. Roles
+## 2. Rust-first implementation mandate
+
+If a feature **can** be implemented in Rust, it **must** be implemented in Rust — not in the
+Python package. Python is reserved for application-facing glue and user callbacks only.
+
+This is the runtime's core performance thesis (see `DECISIONS.md` ADR-008: "Rust owns I/O and
+scheduling, Python owns application logic"). Concretely, the following belong in Rust and must
+**not** be re-implemented under `crates/justapi-py/python/justapi/`:
+
+- Networking, sockets, TLS, connection management.
+- HTTP/protocol parsing and response writing.
+- Routing, middleware chaining, rate-limiting, auth/JWT/OAuth2 validation.
+- Scheduling, worker/thread pools, background-task execution, concurrency primitives.
+- (De)serialization of framework data (encoding bodies/responses for the framework, not user
+  callbacks).
+- Hot paths: parsing, validation, buffering, compression.
+
+Python in the framework package is acceptable only for:
+
+- Thin PyO3 re-exports / binding glue (`from ._justapi import X`).
+- Translating between Rust values and Python callables (e.g. invoking a user route/handler).
+- User-facing helpers that are not on a hot path and have no Rust equivalent.
+
+Before adding Python logic to the framework, ask: *"Could this live in `justapi-core` /
+`justapi-py` Rust instead?"* If yes, put it in Rust.
+
+## 3. Roles
 
 Even in single-agent execution, work through these lenses in sequence for
 any non-trivial change — they catch different classes of mistakes:
@@ -34,7 +60,7 @@ any non-trivial change — they catch different classes of mistakes:
 - **Observability** — distributed tracing (OTel), structured logging, metric
   dashboards, health checks, alerting integration.
 
-## 3. Conventions
+## 4. Conventions
 
 - **Commits:** `<phase>: <what changed>` e.g. `p3: add per-request arena
   allocator`. One logical change per commit.
@@ -49,8 +75,10 @@ any non-trivial change — they catch different classes of mistakes:
   use typed errors (`thiserror`) in library crates (`justapi-core`,
   `justapi-py`) for errors that cross crate boundaries.
 
-## 4. Before opening a PR / calling a phase done
+## 5. Before opening a PR / calling a phase done
 
+- [ ] No feature that could be Rust was added in Python (see §2); new framework
+      Python is glue only
 - [ ] Tests pass (`cargo test --workspace`)
 - [ ] `cargo clippy --workspace --tests -- -D warnings` clean (includes test code)
 - [ ] `cargo fmt --check` clean
@@ -60,7 +88,7 @@ any non-trivial change — they catch different classes of mistakes:
 - [ ] `PLAN.md` updated: phase status, next steps
 - [ ] New recurring pattern or gotcha? Add/update a `skills/*/SKILL.md`
 
-## 5. Resuming work after a context reset
+## 6. Resuming work after a context reset
 
 1. Read `PLAN.md` — find the current phase and its status.
 2. Read the most recent `DECISIONS.md` entries for context on why things are
@@ -70,7 +98,7 @@ any non-trivial change — they catch different classes of mistakes:
 5. Continue from where `PLAN.md` says to continue — don't restart planning
    from scratch.
 
-## 6. When something in the master prompt seems wrong
+## 7. When something in the master prompt seems wrong
 
 It might be. If a requirement conflicts with something you've learned during
 implementation (e.g., a benchmark shows a "required" custom scheduler isn't
@@ -79,7 +107,7 @@ conflict and your recommendation into `DECISIONS.md` and proceed with the
 better-informed choice. Don't silently deviate, and don't blindly follow a
 now-wrong instruction either.
 
-## 7. Architecture quick reference
+## 8. Architecture quick reference
 
 ```
 justapi/
@@ -120,7 +148,7 @@ justapi-py  → justapi-core
 justapi-bench → justapi-core
 ```
 
-## 8. Key skills to consult
+## 9. Key skills to consult
 
 | Area | Skill file |
 |---|---|

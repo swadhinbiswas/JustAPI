@@ -106,13 +106,8 @@ impl InferenceGateway {
     ) {
         // Readiness is folded into `healthy` so the router's candidate filter
         // enforces it; a not-Ready pod is not a routing candidate.
-        let healthy = if self.config.require_ready {
-            ready
-        } else {
-            true
-        };
-        self.router
-            .update_load(id, active_sequences, kv_pressure_pct, healthy);
+        let healthy = if self.config.require_ready { ready } else { true };
+        self.router.update_load(id, active_sequences, kv_pressure_pct, healthy);
     }
 
     /// K8s readiness-probe callback: mark a pod Ready/NotReady for traffic.
@@ -136,11 +131,7 @@ impl InferenceGateway {
     pub fn route(&self, request: &RouteRequest) -> Option<GatewayDecision> {
         let decision: RouteDecision = self.router.route(&self.cp, request)?;
         let endpoint = self.endpoint_for(&decision.replica, &decision.resolved);
-        Some(GatewayDecision {
-            replica: decision.replica,
-            resolved: decision.resolved,
-            endpoint,
-        })
+        Some(GatewayDecision { replica: decision.replica, resolved: decision.resolved, endpoint })
     }
 
     /// Resolve a replica id + resolved model into a Kubernetes service endpoint.
@@ -201,11 +192,7 @@ mod tests {
         let g = gateway();
         g.register_replica(replica("llama-7b-v1-0", 0, 10.0, &[]));
         let d = g
-            .route(&RouteRequest {
-                model: "llama-7b".into(),
-                version: None,
-                routing_key: None,
-            })
+            .route(&RouteRequest { model: "llama-7b".into(), version: None, routing_key: None })
             .unwrap();
         assert_eq!(d.replica, "llama-7b-v1-0");
         assert_eq!(d.endpoint, "llama-7b-v1-0.llm-prod.svc.cluster.local");
@@ -224,12 +211,7 @@ mod tests {
             ModelVersion::new("v1", WeightLocation::Local(PathBuf::from("/m"))),
         );
         g.register_replica(replica("llama-7b-v1-0", 0, 10.0, &[]));
-        let d = g
-            .route(&RouteRequest {
-                model: "llama-7b".into(),
-                ..Default::default()
-            })
-            .unwrap();
+        let d = g.route(&RouteRequest { model: "llama-7b".into(), ..Default::default() }).unwrap();
         assert!(d.endpoint.contains("team-a"));
         assert!(d.endpoint.starts_with("justapi-llama-7b-v1-0"));
     }
@@ -241,21 +223,13 @@ mod tests {
         g.register_replica(replica("cool", 0, 10.0, &[]));
         // Drain "hot" (not Ready) → traffic must go to "cool".
         g.set_ready("hot", false);
-        let d = g
-            .route(&RouteRequest {
-                model: "llama-7b".into(),
-                ..Default::default()
-            })
-            .unwrap();
+        let d = g.route(&RouteRequest { model: "llama-7b".into(), ..Default::default() }).unwrap();
         assert_eq!(d.replica, "cool");
 
         // Drain both → no capacity.
         g.set_ready("cool", false);
         assert!(g
-            .route(&RouteRequest {
-                model: "llama-7b".into(),
-                ..Default::default()
-            })
+            .route(&RouteRequest { model: "llama-7b".into(), ..Default::default() })
             .is_none());
     }
 
@@ -265,12 +239,7 @@ mod tests {
         let g = gateway();
         g.register_replica(replica("hot", 1, 90.0, &[]));
         g.register_replica(replica("cool", 1, 20.0, &[]));
-        let d = g
-            .route(&RouteRequest {
-                model: "llama-7b".into(),
-                ..Default::default()
-            })
-            .unwrap();
+        let d = g.route(&RouteRequest { model: "llama-7b".into(), ..Default::default() }).unwrap();
         assert_eq!(d.replica, "cool");
     }
 

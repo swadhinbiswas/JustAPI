@@ -20,3 +20,6 @@ jobs:
 
       - name: Run HTTP Parser Fuzzer
         run: cargo +nightly fuzz run fuzz_http_parser -- -max_total_time=300
+
+      - name: Run Multipart Upload Fuzzer
+        run: cargo +nightly fuzz run fuzz_multipart -- -max_total_time=300

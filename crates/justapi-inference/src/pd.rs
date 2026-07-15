@@ -143,9 +143,8 @@ impl PdScheduler {
         let transferred = self.prefill.take_completed_prefill();
         let count = transferred.len();
         for t in &transferred {
-            self.total_transferred_tokens = self
-                .total_transferred_tokens
-                .saturating_add(t.num_prefilled);
+            self.total_transferred_tokens =
+                self.total_transferred_tokens.saturating_add(t.num_prefilled);
         }
         for t in transferred {
             self.decode.admit_transferred(t);
@@ -211,10 +210,7 @@ mod tests {
         NewRequest {
             id,
             prompt: (0..8).collect(),
-            sampling_params: SamplingParams {
-                max_tokens: 16,
-                ..Default::default()
-            },
+            sampling_params: SamplingParams { max_tokens: 16, ..Default::default() },
             prefix_cached_tokens: 0,
             cached_blocks: Vec::new(),
         }
@@ -291,10 +287,7 @@ mod tests {
         pd.add_request(NewRequest {
             id: 1,
             prompt: (0..16).collect(),
-            sampling_params: SamplingParams {
-                max_tokens: 8,
-                ..Default::default()
-            },
+            sampling_params: SamplingParams { max_tokens: 8, ..Default::default() },
             prefix_cached_tokens: 0,
             cached_blocks: Vec::new(),
         });
@@ -307,10 +300,7 @@ mod tests {
         pd.add_request(NewRequest {
             id: 2,
             prompt: (0..8).collect(),
-            sampling_params: SamplingParams {
-                max_tokens: 8,
-                ..Default::default()
-            },
+            sampling_params: SamplingParams { max_tokens: 8, ..Default::default() },
             prefix_cached_tokens: 0,
             cached_blocks: Vec::new(),
         });

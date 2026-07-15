@@ -12,9 +12,8 @@ use hyper::{Response, StatusCode};
 use crate::ResponseBody;
 
 /// Prometheus-compatible latency bucket boundaries in milliseconds.
-const LATENCY_BUCKETS_MS: &[f64] = &[
-    1.0, 2.5, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0, 10000.0,
-];
+const LATENCY_BUCKETS_MS: &[f64] =
+    &[1.0, 2.5, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0, 10000.0];
 
 /// A snapshot of all metric values at a point in time (for testing & Prometheus).
 #[derive(Debug, Clone)]
@@ -64,21 +63,13 @@ struct LatencyHist {
 
 impl LatencyHist {
     fn new() -> Self {
-        let buckets = LATENCY_BUCKETS_MS
-            .iter()
-            .map(|_| AtomicU64::new(0))
-            .collect();
-        Self {
-            buckets,
-            count: AtomicU64::new(0),
-            sum_ms: AtomicU64::new(0),
-        }
+        let buckets = LATENCY_BUCKETS_MS.iter().map(|_| AtomicU64::new(0)).collect();
+        Self { buckets, count: AtomicU64::new(0), sum_ms: AtomicU64::new(0) }
     }
 
     fn record(&self, latency_ms: f64) {
         self.count.fetch_add(1, Ordering::Relaxed);
-        self.sum_ms
-            .fetch_add((latency_ms * 1000.0) as u64, Ordering::Relaxed);
+        self.sum_ms.fetch_add((latency_ms * 1000.0) as u64, Ordering::Relaxed);
         for (i, threshold) in LATENCY_BUCKETS_MS.iter().enumerate() {
             if latency_ms <= *threshold {
                 self.buckets[i].fetch_add(1, Ordering::Relaxed);
@@ -91,11 +82,7 @@ impl LatencyHist {
         let count = self.count.load(Ordering::Relaxed);
         let sum_us = self.sum_ms.load(Ordering::Relaxed);
         let sum_ms = sum_us as f64 / 1000.0;
-        let buckets: Vec<u64> = self
-            .buckets
-            .iter()
-            .map(|b| b.load(Ordering::Relaxed))
-            .collect();
+        let buckets: Vec<u64> = self.buckets.iter().map(|b| b.load(Ordering::Relaxed)).collect();
         (count, sum_ms, buckets)
     }
 }
@@ -171,15 +158,11 @@ impl Metrics {
     }
 
     pub fn connection_opened(&self) {
-        self.inner
-            .active_connections
-            .fetch_add(1, Ordering::Relaxed);
+        self.inner.active_connections.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn connection_closed(&self) {
-        self.inner
-            .active_connections
-            .fetch_sub(1, Ordering::Relaxed);
+        self.inner.active_connections.fetch_sub(1, Ordering::Relaxed);
     }
 
     /// Return an atomic snapshot of all metric values.
@@ -260,46 +243,25 @@ impl Metrics {
             "# HELP justapi_active_connections Current active connections.\n\
              # TYPE justapi_active_connections gauge\n",
         );
-        out.push_str(&format!(
-            "justapi_active_connections {}\n",
-            s.active_connections
-        ));
+        out.push_str(&format!("justapi_active_connections {}\n", s.active_connections));
 
         // Status code breakdown
         out.push_str(
             "# HELP justapi_requests_by_status Requests by HTTP status code class.\n\
              # TYPE justapi_requests_by_status counter\n",
         );
-        out.push_str(&format!(
-            "justapi_requests_by_status{{code=\"2xx\"}} {}\n",
-            s.status_2xx
-        ));
-        out.push_str(&format!(
-            "justapi_requests_by_status{{code=\"3xx\"}} {}\n",
-            s.status_3xx
-        ));
-        out.push_str(&format!(
-            "justapi_requests_by_status{{code=\"4xx\"}} {}\n",
-            s.status_4xx
-        ));
-        out.push_str(&format!(
-            "justapi_requests_by_status{{code=\"5xx\"}} {}\n",
-            s.status_5xx
-        ));
+        out.push_str(&format!("justapi_requests_by_status{{code=\"2xx\"}} {}\n", s.status_2xx));
+        out.push_str(&format!("justapi_requests_by_status{{code=\"3xx\"}} {}\n", s.status_3xx));
+        out.push_str(&format!("justapi_requests_by_status{{code=\"4xx\"}} {}\n", s.status_4xx));
+        out.push_str(&format!("justapi_requests_by_status{{code=\"5xx\"}} {}\n", s.status_5xx));
 
         // Latency histogram
         out.push_str(
             "# HELP justapi_request_duration_ms Request latency in milliseconds.\n\
              # TYPE justapi_request_duration_ms histogram\n",
         );
-        out.push_str(&format!(
-            "justapi_request_duration_ms_count {}\n",
-            s.latency_count
-        ));
-        out.push_str(&format!(
-            "justapi_request_duration_ms_sum {:.3}\n",
-            s.latency_sum_ms
-        ));
+        out.push_str(&format!("justapi_request_duration_ms_count {}\n", s.latency_count));
+        out.push_str(&format!("justapi_request_duration_ms_sum {:.3}\n", s.latency_sum_ms));
         for (i, bucket_count) in s.latency_buckets.iter().enumerate() {
             let le = LATENCY_BUCKETS_MS[i.min(LATENCY_BUCKETS_MS.len() - 1)];
             out.push_str(&format!(
@@ -397,9 +359,7 @@ pub struct RequestTimer {
 
 impl RequestTimer {
     pub fn start() -> Self {
-        Self {
-            start: Instant::now(),
-        }
+        Self { start: Instant::now() }
     }
 
     pub fn elapsed_ms(&self) -> f64 {

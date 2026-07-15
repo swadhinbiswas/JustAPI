@@ -81,11 +81,7 @@ impl Autoscaler {
     /// Create an autoscaler starting at `config.min_replicas`.
     pub fn new(config: AutoscalerConfig) -> Self {
         let current = config.min_replicas.max(1).min(config.max_replicas.max(1));
-        Self {
-            config,
-            current,
-            cooldown: 0,
-        }
+        Self { config, current, cooldown: 0 }
     }
 
     /// Current desired replica count.
@@ -162,12 +158,7 @@ mod tests {
     }
 
     fn metrics(kv: f32, ttft: f32, q: usize) -> LlmMetrics {
-        LlmMetrics {
-            tokens_per_sec: 50.0,
-            ttft_ms: ttft,
-            queue_depth: q,
-            kv_pressure_pct: kv,
-        }
+        LlmMetrics { tokens_per_sec: 50.0, ttft_ms: ttft, queue_depth: q, kv_pressure_pct: kv }
     }
 
     #[test]
@@ -239,10 +230,7 @@ mod tests {
     #[test]
     fn cooldown_prevents_flapping() {
         let mut a = Autoscaler::new(cfg());
-        assert_eq!(
-            a.decide(&metrics(95.0, 100.0, 0)),
-            ScaleDecision::ScaleUp(2)
-        );
+        assert_eq!(a.decide(&metrics(95.0, 100.0, 0)), ScaleDecision::ScaleUp(2));
         // Immediately after scaling up we are in cooldown; metrics flipping to
         // healthy must NOT trigger an instant scale-down.
         assert_eq!(a.decide(&metrics(5.0, 50.0, 0)), ScaleDecision::Hold(2));

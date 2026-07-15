@@ -114,9 +114,7 @@ pub fn init_logging(config: &LoggingConfig) -> Result<()> {
                 let provider = opentelemetry_otlp::new_pipeline()
                     .tracing()
                     .with_exporter(
-                        opentelemetry_otlp::new_exporter()
-                            .tonic()
-                            .with_endpoint(endpoint),
+                        opentelemetry_otlp::new_exporter().tonic().with_endpoint(endpoint),
                     )
                     .install_batch(opentelemetry_sdk::runtime::Tokio)
                     .map_err(|e| anyhow::anyhow!("Failed to build OTLP tracing: {}", e))?;
@@ -132,9 +130,8 @@ pub fn init_logging(config: &LoggingConfig) -> Result<()> {
     if let Some(ref path) = config.file_path {
         let parent = Path::new(path).parent().unwrap_or(Path::new("."));
         std::fs::create_dir_all(parent)?;
-        let file_name = Path::new(path)
-            .file_name()
-            .unwrap_or_else(|| std::ffi::OsStr::new("justapi.log"));
+        let file_name =
+            Path::new(path).file_name().unwrap_or_else(|| std::ffi::OsStr::new("justapi.log"));
 
         let file_appender = match config.file_rotation {
             FileRotation::Daily => tracing_appender::rolling::daily(parent, file_name),
@@ -145,20 +142,15 @@ pub fn init_logging(config: &LoggingConfig) -> Result<()> {
         let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
         set_guard(guard);
 
-        let file_layer = tracing_subscriber::fmt::layer()
-            .with_writer(non_blocking)
-            .with_ansi(false)
-            .boxed();
+        let file_layer =
+            tracing_subscriber::fmt::layer().with_writer(non_blocking).with_ansi(false).boxed();
 
         layers.push(file_layer);
     } else {
         layers.push(fmt_layer);
     }
 
-    tracing_subscriber::registry()
-        .with(env_filter)
-        .with(layers)
-        .init();
+    tracing_subscriber::registry().with(env_filter).with(layers).init();
 
     Ok(())
 }
@@ -181,10 +173,7 @@ pub fn init_tracing() -> Result<()> {
 
 /// Initialize JSON-formatted tracing with env-filter.
 pub fn init_json_logging() -> Result<()> {
-    init_logging(&LoggingConfig {
-        format: LogFormat::Json,
-        ..Default::default()
-    })
+    init_logging(&LoggingConfig { format: LogFormat::Json, ..Default::default() })
 }
 
 /// Initialize JSON logging to a rolling file.

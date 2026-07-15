@@ -76,6 +76,45 @@ Kernel (epoll/io_uring)
 
 Python only executes **your** business logic. Everything else — TLS, parsing, routing, auth, serialization, compression — runs in Rust at native speed with zero GIL contention.
 
+## What makes JustAPI different
+
+Two things, stated plainly:
+
+1. **Throughput.** A Rust networking core (hyper + tokio + rustls) moves TLS,
+   routing, serialization, and middleware out of Python. The number above
+   (701k req/s hello-world) is the payoff — ~20× FastAPI+Uvicorn on that
+   workload.
+2. **Agent-native serving.** Beyond REST, JustAPI has a first-class
+   introspection + tool-serving layer for AI agents: every app can expose its
+   routes as MCP tools (`python -m justapi.mcp_server`), stream *validated*
+   structured output as tokens arrive, and carry multi-turn session state —
+   without bolting a third-party SDK onto generic HTTP routes. This is the part
+   we invest in most; see [`ROADMAP.md`](ROADMAP.md) for how far it goes.
+
+## Competitors, named honestly
+
+We are not the first Rust-backed Python framework, and we don't claim to be:
+
+- **Robyn** — Rust runtime, decorator API, commonly cited ~40–60% faster than
+  FastAPI on simple endpoints. Real project; we benchmark against it.
+- **Granian** — Rust *ASGI server* that drops under existing ASGI apps. Different
+  bet: it replaces the server, not the framework.
+- **Litestar** / **BlackSheep** — Python frameworks with first-class ASGI and
+  rich feature sets; we borrow ergonomics from them.
+- **FastAPI** — the compatibility target. JustAPI mirrors its decorator API and
+  Pydantic models so migration is low-friction.
+
+Where we deliberately differ from Robyn: JustAPI keeps an **ASGI shim** (so it
+runs under Uvicorn/Granian and reuses Starlette-ecosystem middleware) and treats
+agent/MCP serving as a built-in primitive rather than an afterthought.
+
+## Non-goals & not-yet-built
+
+JustAPI is **not** trying to be everything in v1. We do not ship a custom
+edge/WASM runtime, a from-scratch ORM/migrations system, a multi-tenant auth
+platform, or a new validator (we wrap Pydantic v2 core / JSON Schema). See
+[`ROADMAP.md`](ROADMAP.md) for the full, explicitly-labeled future list.
+
 ## Requirements
 
 * **Python 3.11+**
@@ -474,6 +513,7 @@ Step-by-step deployment guides are available for:
 | [**Security**](docs/security/) | OWASP checklist, pentest guide, disclosure policy |
 | [**BENCHMARKS.md**](BENCHMARKS.md) | Performance results (append-only ledger) |
 | [**PLAN.md**](PLAN.md) | Living roadmap and current phase |
+| [**ROADMAP.md**](ROADMAP.md) | Aspirational future work — explicitly *not yet built* |
 | [**DECISIONS.md**](DECISIONS.md) | Architecture decision records |
 | [**AGENTS.md**](AGENTS.md) | Development rules and conventions |
 

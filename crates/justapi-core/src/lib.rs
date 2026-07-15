@@ -82,9 +82,7 @@ pub fn streaming_response(
     Response::builder()
         .status(status)
         .header("content-type", content_type)
-        .body(UnsyncBoxBody::new(http_body_util::StreamBody::new(
-            frame_stream,
-        )))
+        .body(UnsyncBoxBody::new(http_body_util::StreamBody::new(frame_stream)))
         .unwrap()
 }
 pub mod dummy_extract;

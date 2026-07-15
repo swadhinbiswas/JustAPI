@@ -50,13 +50,7 @@ fn hash_tokens(tokens: &[u32]) -> u64 {
 impl RadixNode {
     fn new(tokens: Vec<u32>, blocks: Vec<BlockId>, now: u64) -> Self {
         let token_hash = hash_tokens(&tokens);
-        Self {
-            tokens,
-            blocks,
-            children: HashMap::new(),
-            last_access: now,
-            token_hash,
-        }
+        Self { tokens, blocks, children: HashMap::new(), last_access: now, token_hash }
     }
 
     fn is_leaf(&self) -> bool {
@@ -125,11 +119,7 @@ impl RadixPrefixCache {
     /// any common prefix with existing sequences. `tokens.len()` must equal
     /// `blocks.len() * BLOCK_SIZE`.
     pub fn insert(&mut self, tokens: &[u32], blocks: &[BlockId]) {
-        assert_eq!(
-            tokens.len(),
-            blocks.len() * BLOCK_SIZE,
-            "block misalignment"
-        );
+        assert_eq!(tokens.len(), blocks.len() * BLOCK_SIZE, "block misalignment");
         let now = self.tick();
         insert_node(&mut self.root, tokens, blocks, now);
     }
@@ -155,8 +145,7 @@ impl RadixPrefixCache {
             None
         } else if out.0 > 0 {
             self.hits.set(self.hits.get() + 1);
-            self.tokens_saved
-                .set(self.tokens_saved.get() + out.0 as u64);
+            self.tokens_saved.set(self.tokens_saved.get() + out.0 as u64);
             Some((out.0, out.1))
         } else {
             self.misses.set(self.misses.get() + 1);
@@ -306,8 +295,7 @@ fn insert_node(node: &mut RadixNode, tokens: &[u32], blocks: &[BlockId], now: u6
         }
     } else {
         // No matching child — create a leaf for the remaining path.
-        node.children
-            .insert(first, RadixNode::new(tokens.to_vec(), blocks.to_vec(), now));
+        node.children.insert(first, RadixNode::new(tokens.to_vec(), blocks.to_vec(), now));
     }
 }
 
@@ -465,10 +453,7 @@ mod tests {
     #[test]
     fn lookup_miss() {
         let mut cache = RadixPrefixCache::new();
-        cache.insert(
-            &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
-            &[1],
-        );
+        cache.insert(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], &[1]);
         assert!(cache.lookup(&[99, 100]).is_none());
         assert_eq!(cache.stats().misses, 1);
     }
@@ -735,10 +720,7 @@ mod tests {
             flat.insert(&toks, &block_ids);
         }
 
-        (
-            radix.cached_tokens() / block_size,
-            flat.total_stored_blocks(),
-        )
+        (radix.cached_tokens() / block_size, flat.total_stored_blocks())
     }
 
     #[test]

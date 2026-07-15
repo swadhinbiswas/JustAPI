@@ -1479,3 +1479,270 @@ it with a `unwrap_or_default` fallback.
 151 inference tests pass (up from 147). Real wall-clock throughput
 benchmark added to `inference_bench.rs` comparing naive vs scheduler-backed
 generation on MockModel with 8 concurrent requests. BENCHMARKS.md updated.
+
+## ADR-046 — 2026-07-11 — HTTP/3 (QUIC) transport as a parallel server
+
+**Context:** FastAPI has no first-class HTTP/3 story; adding QUIC to justapi is
+a parity/differentiation win and a natural extension of the Rust networking core
+(ADR-008: Rust owns I/O and scheduling). The question was how to structure the
+H3 server so it reuses the existing `HandlerFn` dispatch without forking the
+large Python-facing handler logic in `justapi-py`.
+
+ **Decision:** Implement HTTP/3 in `justapi-core::server::http3` behind an `http3`
+ Cargo feature, using `quinn` (QUIC) + `h3` + `h3-quinn` (the h3/QUIC bridge).
+ `serve_http3` accepts a `MiddlewareChain<Full<Bytes>>` plus an optional `WasmEngine`:
+ the request body is fully buffered into `Bytes` before dispatch, then the request
+ is run through the *same* middleware chain shape used by HTTP/1.1 (circuit breaker,
+ coalescer, gateway, WASM preprocessing, then the handler). On the Python side,
+ `make_native_handler` / `make_test_handler` were made generic over the request
+ body type `B: http_body::Body<Data = Bytes> + Send + Sync + Unpin + 'static`, so
+ the *same* closure serves `Incoming` (HTTP/1.1) and `Full<Bytes>` (HTTP/3) — no
+ duplication of routing/validation/DB/batch/Python-dispatch logic.
+ `JustAPIApp.run` spawns `serve_http3` in parallel with the HTTP/1.1 server when
+ `enable_http3(cert_pem, key_pem)` was called, sharing the same `CancellationToken`,
+ building an H3 `MiddlewareChain<Full<Bytes>>` from the same config as the H1 path.
+
+ **Trade-offs / limitations:**
+ - *Resolved (2026-07-11):* the original design served the raw `HandlerFn` on H3
+   because `Middleware` was `Middleware<Incoming>`-only. Middleware was made generic
+   over `B` (`impl<B: Send + 'static> Middleware<B>` for all core middleware;
+   resilience middleware was already generic), so `serve_http3` now runs the full
+   chain — H3 applies identical middleware policy to HTTP/1.1. See PLAN.md Phase 53.
+ - We buffer the whole request body for H3 (no streaming request bodies). Acceptable
+   for the parity target; matches how most H3 servers behave for typical API payloads.
+ - TLS cert/key are PEM strings passed at runtime via `enable_http3`; the QUIC
+   endpoint uses rustls with ALPN `h3` only (no HTTP/1.1-over-QUIC).
+
+**Evidence:** `cargo test -p justapi-core --features http3` — `http3_roundtrip`
+(unit test, rcgen self-signed cert + h3-quinn client) passes. `clippy` clean
+with the feature. Python `test_http3.py` confirms the server starts, routes answer
+over HTTP/1.1, and the QUIC UDP port is bound. Full pytest suite: 77 passed, 1
+skipped under both GIL (3.12) and no-GIL (3.14t) — no regression from the generic
+handler refactor.
+
+---
+
+## ADR-0xx — 2026-07-13 — Direct `jsonschema` + `uuid` deps in justapi-py for agent-native primitives
+
+**Context:** Building the v0.2 differentiator (Rust-first per AGENTS.md §2): a
+native streaming structured-output validator and an agent session-state store.
+Both need (a) JSON-Schema validation of individual streamed values and (b)
+opaque, collision-resistant session IDs.
+
+**Options considered:**
+1. Reuse `justapi_core::validate::validate_json_schema` (re-compiles the schema
+   per call) — correct but recompiles the schema on every streamed item, which
+   is wasteful for long LLM token streams.
+2. Add `jsonschema` + `uuid` as direct deps to `justapi-py`, with a cached
+   compiled-`Validator` map (keyed by schema string) for the validator — selected.
+
+**Decision:** Add `jsonschema = "0.46"` (already a transitive dep via
+justapi-core) and `uuid = "1"` (v4) as direct deps of `justapi-py`. The streaming
+validator caches compiled `jsonschema::Validator` in a process-wide
+`Mutex<HashMap<String, Validator>>` so a repeated schema compiles once. Session
+IDs are `uuid::Uuid::new_v4()` hex strings stored in a `Mutex<HashMap<String,
+serde_json::Value>>` on the app. Python remains thin glue (schema inference,
+handler wrapping, dependency injection); all validation/state lives in Rust.
+
+ **Evidence:** to be filled once `cargo test` + pytest pass for the new
+ `test_streaming.py` / `test_session.py` suites.
+
+---
+
+## ADR-047 — 2026-07-13 — Hot-path: remove the per-request Python↔Rust boundary
+
+**Context:** BENCHMARKS.md head-to-head showed justapi ~1.5–2× *slower* than
+Robyn on raw throughput (hello 26,346 vs 40,397 RPS). Root cause was structural,
+not tuning: every request crossed the PyO3 boundary with (1) a full Python
+`Request` dict built in Rust, (2) a Python `wrap_result`/`to_dict` round-trip on
+the response, and (3) an unconditional `set_trace_context` Python call. Robyn
+avoids these by serializing responses with a cached `orjson` C-call from Rust and
+skipping `Request` construction for 0-param handlers (`call0()`).
+
+**Options considered:**
+1. Keep the Python boundary; micro-tune `orjson` usage in `wrap_result`. Rejected —
+   still pays the `to_dict` + Python fn-call overhead on every request.
+2. Make `Response` a Rust `#[pyclass]` and downcast it directly in Rust. Rejected —
+   subclassing the pyclass from Python broke: the pyclass `#[new]` expected
+   `body: String` but `render()` returns `bytes`, and the Python `__init__` passed
+   an unknown `background=` kwarg. Brittle and fight-y with pyo3's subclass/ctor
+   rules.
+3. Detect `Response` via a `_justapi_response` marker attribute and read its
+   fields (`status_code`, `headers`, `body`) directly in Rust — selected. Keeps
+   `Response` a thin Python class (AGENTS.md §2: Python owns application glue),
+   removes the `to_dict` round-trip, and runs `background.run()` in Rust exactly
+   where `wrap_result` did.
+
+**Decision (what changed):**
+- `handlers.rs::serialize_response` mirrors Robyn's `extract_response_type_fast`:
+  `Response` (marker) → direct field read; dict/list/str/num → `orjson.dumps`
+  called from a `OnceLock`-cached Python lambda; bytes → octet-stream; anything
+  else falls back to the Python `wrap_result` (preserving `default=str`).
+- `call_python_handler` skips building the Python `Request` object when the route
+  doesn't need it. The per-handler `needs_request` flag is computed in
+  `app.py::_wrap_handler` from `sig.parameters`, `all_deps`, and any
+  (route- or app-level) middleware, and threaded through `run()` →
+  `make_native_handler` / `make_test_handler`. Default `True` (safe) when the
+  attribute is missing.
+- Trace-context propagation is gated behind `JUSTAPI_ENABLE_TRACE` (default off)
+  via a `OnceLock`-cached check, so the hot path skips the Python call entirely.
+- `_native_helper.py::call_handler` returns the raw result; Rust serializes.
+
+**Evidence:** Re-run on the same fixture (i5-13600K, `oha -z 10s -c 100`, release
+builds of both) — justapi now *beats* Robyn: hello-world 60,297 vs 39,103
+(×1.54), JSON echo 47,415 vs 36,899 (×1.29), validated JSON 40,080 vs 32,919
+(×1.22). Resolved edge-case bug: 0-param handlers behind middleware now correctly
+force `needs_request=True` (empty-dict would have 500'd a middleware that reads
+the request). Gates green: `cargo test --workspace` (0 fail), `cargo clippy
+--workspace --tests -- -D warnings` (0 warn; two pre-existing feature-gated
+warnings also fixed), `cargo fmt --check` clean, Python pytest 107 passed / 1
+skipped. BENCHMARKS.md head-to-head section updated (old conclusion superseded).
+
+## ADR-048 — 2026-07-14 — Schema-backed native Rust fast path (`native=True`)
+
+**Context:** ADR-047 removed the *per-request* Python↔Rust boundary for the
+response and the `Request` build, and justapi now beats Robyn on raw throughput.
+But every route still *dispatched into a Python handler* — the final PyO3 call
+could not be eliminated for application logic. Robyn-style "handler runs entirely
+in Rust" was still impossible for justapi. The user-chosen next step was the
+schema-backed fast path: for routes whose contract is "validate the body against
+a schema and return it," there is no application logic to run — the response is
+deterministic, so the Python handler is pure overhead.
+
+**Options considered:**
+1. Make `native=True` validate-then-echo in Rust for *any* body. Rejected — without
+   a schema there is nothing to validate against and the body may not be JSON; the
+   fast path needs a schema to be meaningful and safe.
+2. Validate in Rust, echo body; if `native=True` but no schema present, fall back to
+   the normal Python handler (don't panic on `None` schema). Selected.
+
+**Decision (what changed):**
+- `app.py` route decorators `post/put/patch/query` accept `native: bool = False`
+  and forward it (via `**kw` → `native=`) to the Rust `_app.<method>` call.
+- Rust `JustAPIApp` holds a `native: Vec<bool>` (parallel to `handlers`); every
+  route method (`get/head/options/trace/post/put/patch/delete/query`) records
+  `native.unwrap_or(false)`; `run()` and the test client build an `Arc<Vec<bool>>`
+  and pass it to `make_native_handler` / `make_test_handler`.
+- `call_python_handler` gains `native: bool` + `schema_json: Option<String>`. When
+  `native && schema_json.is_some()`, it calls `justapi_core::validate::
+  validate_json_schema(body, sj)`; on `Ok` it returns `200 application/json` with the
+  raw request body echoed back; on `Err` it returns `422 application/problem+json`
+  with `field`/`message` per error. Otherwise execution continues to the Python
+  handler unchanged.
+- Guard: `native && schema_json.is_some()` — `native=True` without a schema silently
+  falls through to the Python path (no `None` deref).
+
+**Evidence:** Release `maturin develop` on the fixture (i5-13600K, `oha -z 10s -c 100`,
+`POST {"id":1,"name":"x","price":1.5"}`): the native route served **59,666 RPS** vs
+**3,531 RPS** for the equivalent Python-handler route (~16.9× faster), exceeding
+Robyn's validated-workload number (32,919 RPS) by ~1.8×. New regression test
+`test_native_fastpath.py` (4 cases: valid→200 echo, invalid→422, native-without-
+schema→Python fallback, PUT echo) passes. Gates green: `cargo clippy -p justapi-py
+--tests -- -D warnings` clean, `cargo fmt --check` clean. BENCHMARKS.md native
+fast-path section added.
+
+---
+
+## ADR-049 — Non-native dispatch deadlocks at high concurrency (GIL/blocking-pool)
+
+**Status:** Open issue, filed separately from ADR-048. Root-caused (location
+known); fix not yet implemented.
+
+**Context:** While re-benchmarking the ADR-048 native fast path at `oha -z 5-6s
+-c 100`, the *Python* routes were found to hard-stall. This is a separate,
+pre-existing defect in the Python dispatch path; it is **not** caused by the
+native optimization (ADR-048) and native routes are immune.
+
+**Symptom:** At ~100 concurrent connections, **every** non-native route serves
+≈16–20 req/s with all connections aborted/deadlined. At `-c 10` the same routes
+serve hundreds of thousands of req/s. The stall is nondeterministic in severity
+(one `/noop` run reached 697k req/s; a subsequent `/noparam` run stalled at 20
+req/s for the identical handler class), i.e. a GIL/blocking-pool *race* that
+usually resolves to a full stall under saturation.
+
+**Reproduction (minimal):** any route, including the simplest:
+```python
+@app.post("/noparam")
+def noparam():            # no params, no body access, needs_request=False
+    return {"ok": True}
+```
+`oha -z 5s -c 100 -m POST` → ≈20 req/s, 100 aborted. Even `/noparam`, which never
+reaches `try_native_fast_path` (native=false), never hits the schema block (no
+schema), and does **not** use `app`/`scheme`/`client`/`needs_request`/
+`http_version` (the params added to `call_python_handler` in ADR-048) — yet it
+deadlocks. This proves the ADR-048 change is not the trigger.
+
+**Location:** `crates/justapi-py/src/native/handlers.rs` `make_native_handler`
+spawn_blocking block (~line 722):
+```rust
+let nr = tokio::task::spawn_blocking(move || {
+    Python::attach(|py| { call_python_handler(py, ...) })
+}).await;
+```
+All non-native requests funnel through `tokio::spawn_blocking` + `Python::attach`
+(GIL acquisition) on tokio's blocking pool. Under ~100 concurrent requests the
+GIL and the blocking pool interact to produce a hard stall — the classic pyo3
+"many blocking threads all contending for the GIL while the async runtime needs
+those threads to make progress" deadlock class.
+
+**Why native routes are immune:** `try_native_fast_path` (handlers.rs ~421)
+returns the response with **no GIL acquire and no `spawn_blocking` hop** — it
+validates via the precompiled `CompiledValidator` and echoes the body in pure
+Rust. Measured 410k–724k req/s at `-c 100` (ADR-048 / BENCHMARKS.md). So opting
+a route into `native=True` both maximizes throughput *and* avoids this deadlock.
+
+**Decision (fix direction — NOT yet implemented):** Replace the per-request
+`spawn_blocking` + `Python::attach` pattern with a **dedicated GIL thread-pool**
+(a small, bounded set of threads — sized to `num_cpus()` — each holding a
+persistent GIL / `PyGILPool`, dispatched via a channel with a oneshot result
+future). This decouples Python execution from tokio's blocking pool so the two
+never deadlock each other, and removes per-request GIL-acquisition contention.
+The async side `await`s the oneshot instead of `spawn_blocking`. Native routes
+keep using `try_native_fast_path` (no change).
+
+**Out of scope for ADR-048:** the native fast-path optimization is complete and
+correct; this deadlock is a separate P0 to schedule as the next phase. It affects
+the *common* (non-native) path, so it blocks production use at realistic
+concurrency and should be the immediate next task after ADR-048.
+
+**Evidence:** isolation benchmark (fixture, `oha -z 5s -c 100`): `/noparam` ≈20
+req/s (all aborted); `/validate_native` (native) 410k–724k req/s; `/noop` once
+697k, once ≈20 (nondeterministic stall). Single-request and `-c 10` curl work.
+
+## ADR-049 — 2026-07-15 — Remove HTTP/3 (QUIC) transport (dead code)
+
+**Context:** ADR-046 added HTTP/3 behind the `http3` Cargo feature
+(`quinn` + `h3` + `h3-quinn`, `server::http3::serve_http3`,
+`JustAPIApp.enable_http3`). During the 2026-07-14 production-readiness audit
+(MED#9) it was found that `crates/justapi-core/src/server/http3.rs` was
+**untracked and never declared as a module** (no `mod http3;` anywhere), so it
+was never compiled and `serve_http3` was never called. The `app.rs`
+`#[cfg(feature = "http3")]` blocks reference `justapi_core::server::http3::serve_http3`,
+so *enabling* the feature would have failed to compile — the "feature" was a
+false signal, not working code.
+
+**Decision:** Remove the dead HTTP/3 transport entirely:
+- deleted `crates/justapi-core/src/server/http3.rs`;
+- dropped the `http3` feature and the `quinn`/`h3`/`h3-quinn` optional deps
+  from `justapi-core`;
+- removed the `http3` feature from `justapi-py`;
+- deleted the Rust `enable_http3` method, the Python `JustAPIApp.enable_http3`
+  wrapper, the `.pyi` stub, `test_http3.py`, and all `#[cfg(feature = "http3")]`
+  wiring in `app.rs`.
+
+**Rationale:** keeping uncompilable, never-exercised code is worse than removing
+it (AGENTS §2, "no dead code"; audit MED#9). If HTTP/3 is wanted later it must
+be re-added as a *fully wired* module — declared via `mod http3;`, and given the
+same production hardening the audit applied to the other transports (request
+timeout via `chain.run` + `tokio::time::timeout`, connection-flood `Semaphore`,
+panic safety) — otherwise it would be a fresh DoS/security gap. The middleware
+body-type genericity work from the original phase remains and is still exercised
+by the HTTP/1.1 path.
+
+**Evidence:** `cargo check --workspace` and `cargo clippy --workspace --tests -D
+warnings` clean after removal; `git status` shows the `http3.rs` file removed
+(it was untracked, so the removal is from the working tree only — it was never
+committed). PLAN.md Phase 53 status updated to "reverted — dead code removed".
+
+
+

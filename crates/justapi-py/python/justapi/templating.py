@@ -39,6 +39,11 @@ class Jinja2Templates:
         Render a template and return a dictionary that JustAPI can automatically convert to a response.
         """
         template = self.get_template(name)
+        # Mirror Starlette/FastAPI: expose `url_for` inside templates when a
+        # `request` with a `url_for` method is present (e.g. a named route built
+        # via `app.get(..., name="...")`).
+        if "request" in context and hasattr(context["request"], "url_for"):
+            context.setdefault("url_for", context["request"].url_for)
         body = template.render(context)
         
         resp_headers = [(b"content-type", b"text/html; charset=utf-8")]

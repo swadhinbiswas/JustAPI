@@ -14,7 +14,7 @@ use crate::middleware::{Middleware, Next};
 use crate::ResponseBody;
 use async_trait::async_trait;
 use http_body_util::BodyExt;
-use hyper::{body::Incoming, Request, Response};
+use hyper::{Request, Response};
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct GatewayRoute {
@@ -46,12 +46,7 @@ impl GatewayState {
         let path = path.as_ref().to_path_buf();
         let (config, router) = Self::load_config(&path).unwrap_or_else(|e| {
             warn!("Failed to load gateway config from {:?}: {}", path, e);
-            (
-                GatewayConfigData::default(),
-                GatewayRouter {
-                    inner: Router::new(),
-                },
-            )
+            (GatewayConfigData::default(), GatewayRouter { inner: Router::new() })
         });
 
         Arc::new(Self {
@@ -148,11 +143,11 @@ impl GatewayMiddleware {
 }
 
 #[async_trait]
-impl Middleware<Incoming> for GatewayMiddleware {
+impl<B: Send + 'static> Middleware<B> for GatewayMiddleware {
     async fn handle(
         &self,
-        req: Request<Incoming>,
-        next: Next<'_, Incoming>,
+        req: Request<B>,
+        next: Next<'_, B>,
     ) -> anyhow::Result<Response<ResponseBody>> {
         let path = req.uri().path().to_string();
         let method = req.method().clone();

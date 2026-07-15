@@ -9,10 +9,7 @@ pub struct RateLimitResult {
 
 #[derive(Clone)]
 pub enum RateLimiter {
-    Redis {
-        client: ConnectionManager,
-        script: redis::Script,
-    },
+    Redis { client: ConnectionManager, script: redis::Script },
     // We can add a local governor fallback later if needed
     // Local(Arc<governor::DefaultDirectRateLimiter>),
 }
@@ -56,10 +53,7 @@ impl RateLimiter {
             end
         "#;
 
-        Ok(RateLimiter::Redis {
-            client: manager,
-            script: redis::Script::new(lua_script),
-        })
+        Ok(RateLimiter::Redis { client: manager, script: redis::Script::new(lua_script) })
     }
 
     /// Check if a request is allowed.
@@ -81,10 +75,7 @@ impl RateLimiter {
                 // Burst capacity in microseconds
                 let tau = t * capacity;
 
-                let now = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_micros() as u64;
+                let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_micros() as u64;
 
                 let result: Vec<u64> = script
                     .key(key)
@@ -98,10 +89,7 @@ impl RateLimiter {
                 if result.len() >= 2 {
                     let allowed = result[0] == 1;
                     let retry_after_ms = result[1];
-                    Ok(RateLimitResult {
-                        allowed,
-                        retry_after_ms,
-                    })
+                    Ok(RateLimitResult { allowed, retry_after_ms })
                 } else {
                     Err(anyhow::anyhow!("Invalid response from Redis GCRA script"))
                 }

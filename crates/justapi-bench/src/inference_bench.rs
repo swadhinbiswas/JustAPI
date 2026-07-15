@@ -76,10 +76,7 @@ fn make_request(id: u64, prompt_len: usize, max_tokens: usize) -> NewRequest {
     NewRequest {
         id,
         prompt: (0..prompt_len as u32).collect(),
-        sampling_params: SamplingParams {
-            max_tokens,
-            ..Default::default()
-        },
+        sampling_params: SamplingParams { max_tokens, ..Default::default() },
         prefix_cached_tokens: 0,
         cached_blocks: Vec::new(),
     }
@@ -143,11 +140,7 @@ fn run_disaggregated(p: &BenchParams) -> Metrics {
 
         // ---- decode pool (runs in parallel on its own GPU) ----
         let sched = pd.schedule_decode();
-        let d_cost: f64 = if sched.decode.is_empty() {
-            0.0
-        } else {
-            p.decode_us_per_token as f64
-        };
+        let d_cost: f64 = if sched.decode.is_empty() { 0.0 } else { p.decode_us_per_token as f64 };
         decode_clock += d_cost;
         if !sched.decode.is_empty() {
             // Global virtual time = the later of the two pool timelines.
@@ -237,26 +230,14 @@ fn report(name: &str, m: &Metrics, p: &BenchParams) {
     let mut itls = m.itls.clone();
     itls.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
-    let tput = if m.wall_ms > 0.0 {
-        m.total_tokens as f64 / (m.wall_ms / 1000.0)
-    } else {
-        0.0
-    };
+    let tput = if m.wall_ms > 0.0 { m.total_tokens as f64 / (m.wall_ms / 1000.0) } else { 0.0 };
 
     println!("### {name}");
     println!();
     println!("| Metric | p50 | p99 |");
     println!("|---|---|---|");
-    println!(
-        "| TTFT (ms) | {:.2} | {:.2} |",
-        percentile(&ttfts, 0.5),
-        percentile(&ttfts, 0.99)
-    );
-    println!(
-        "| ITL (ms) | {:.2} | {:.2} |",
-        percentile(&itls, 0.5),
-        percentile(&itls, 0.99)
-    );
+    println!("| TTFT (ms) | {:.2} | {:.2} |", percentile(&ttfts, 0.5), percentile(&ttfts, 0.99));
+    println!("| ITL (ms) | {:.2} | {:.2} |", percentile(&itls, 0.5), percentile(&itls, 0.99));
     println!("| Throughput (tok/s) | {:.0} | |", tput);
     println!("| Total tokens | {} | |", m.total_tokens);
     println!("| Wall time (ms) | {:.2} | |", m.wall_ms);
@@ -295,23 +276,16 @@ const REAL_MODEL: &str = "mock";
 fn bench_naive(n: usize, prompt_len: usize, max_tokens: usize) -> (u64, f64) {
     let engine = Arc::new(Engine::new(EngineDevice::Cpu).unwrap());
     engine.register_mock(REAL_MODEL);
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .build()
-        .unwrap();
+    let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
 
     let prompt: Vec<u32> = (0..prompt_len as u32).collect();
-    let params = SamplingParams {
-        max_tokens,
-        ..Default::default()
-    };
+    let params = SamplingParams { max_tokens, ..Default::default() };
 
     let start = Instant::now();
     let total: u64 = rt.block_on(async {
         let mut total = 0u64;
         for _ in 0..n {
-            let mut rx = engine
-                .generate(REAL_MODEL, &prompt, params.clone())
-                .unwrap();
+            let mut rx = engine.generate(REAL_MODEL, &prompt, params.clone()).unwrap();
             while let Some(tok) = rx.recv().await {
                 if tok.finish_reason.is_some() {
                     break;
@@ -331,22 +305,14 @@ fn bench_scheduled(n: usize, prompt_len: usize, max_tokens: usize) -> (u64, f64)
     let engine = Arc::new(Engine::new(EngineDevice::Cpu).unwrap());
     engine.register_mock(REAL_MODEL);
     let pool = KvBlockPool::new(4096);
-    let config = SchedulerConfig {
-        max_num_seqs: n.max(1),
-        ..Default::default()
-    };
+    let config = SchedulerConfig { max_num_seqs: n.max(1), ..Default::default() };
     let scheduler = Arc::new(Mutex::new(Scheduler::new(config, pool)));
     let se = Arc::new(SchedulerEngine::new(engine.clone(), scheduler));
 
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .build()
-        .unwrap();
+    let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
 
     let prompt: Vec<u32> = (0..prompt_len as u32).collect();
-    let params = SamplingParams {
-        max_tokens,
-        ..Default::default()
-    };
+    let params = SamplingParams { max_tokens, ..Default::default() };
 
     let start = Instant::now();
     let total: u64 = rt.block_on(async {
@@ -393,16 +359,8 @@ fn main() {
     let coll = run_collocated(&params);
     let disagg = run_disaggregated(&params);
 
-    report(
-        "Collocated (single pool, prefill+decode serialised)",
-        &coll,
-        &params,
-    );
-    report(
-        "Disaggregated (independent prefill/decode pools)",
-        &disagg,
-        &params,
-    );
+    report("Collocated (single pool, prefill+decode serialised)", &coll, &params);
+    report("Disaggregated (independent prefill/decode pools)", &disagg, &params);
 
     let mut coll_itl = coll.itls.clone();
     coll_itl.sort_by(|a, b| a.partial_cmp(b).unwrap());
@@ -411,16 +369,8 @@ fn main() {
 
     let coll_p99 = percentile(&coll_itl, 0.99);
     let disagg_p99 = percentile(&disagg_itl, 0.99);
-    let itl_improvement = if disagg_p99 > 0.0 {
-        coll_p99 / disagg_p99
-    } else {
-        1.0
-    };
-    let tput_improvement = if coll.wall_ms > 0.0 {
-        disagg.wall_ms / coll.wall_ms
-    } else {
-        1.0
-    };
+    let itl_improvement = if disagg_p99 > 0.0 { coll_p99 / disagg_p99 } else { 1.0 };
+    let tput_improvement = if coll.wall_ms > 0.0 { disagg.wall_ms / coll.wall_ms } else { 1.0 };
 
     println!("---");
     println!();
@@ -455,11 +405,7 @@ fn main() {
 
     let naive_tput = (naive_tokens as f64) / (naive_ms / 1000.0);
     let sched_tput = (sched_tokens as f64) / (sched_ms / 1000.0);
-    let overhead = if naive_tput > 0.0 {
-        sched_tput / naive_tput * 100.0
-    } else {
-        0.0
-    };
+    let overhead = if naive_tput > 0.0 { sched_tput / naive_tput * 100.0 } else { 0.0 };
 
     println!("| Path | Total tokens | Wall (ms) | Throughput (tok/s) | Overhead vs naive |");
     println!("|---|---|---|---|---|");

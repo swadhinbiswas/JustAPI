@@ -50,11 +50,7 @@ pub fn chat_completions_handler(engine: Arc<Engine>) -> HandlerFn {
             };
             if req.stream {
                 let stream = justapi_inference::openai::chat_completion_stream(engine, req);
-                Ok(streaming_response(
-                    StatusCode::OK,
-                    "text/event-stream",
-                    stream,
-                ))
+                Ok(streaming_response(StatusCode::OK, "text/event-stream", stream))
             } else {
                 match justapi_inference::openai::chat_completion(engine, req).await {
                     Ok(resp) => {
@@ -108,11 +104,7 @@ pub fn completions_handler(engine: Arc<Engine>) -> HandlerFn {
             };
             if req.stream {
                 let stream = justapi_inference::openai::completion_stream(engine, req);
-                Ok(streaming_response(
-                    StatusCode::OK,
-                    "text/event-stream",
-                    stream,
-                ))
+                Ok(streaming_response(StatusCode::OK, "text/event-stream", stream))
             } else {
                 match justapi_inference::openai::completion(engine, req).await {
                     Ok(resp) => {
@@ -233,11 +225,7 @@ pub fn scheduled_chat_completions_handler(engine: Arc<SchedulerEngine>) -> Handl
             if req.stream {
                 let stream =
                     justapi_inference::openai::scheduled_chat_completion_stream(engine, req);
-                Ok(streaming_response(
-                    StatusCode::OK,
-                    "text/event-stream",
-                    stream,
-                ))
+                Ok(streaming_response(StatusCode::OK, "text/event-stream", stream))
             } else {
                 match justapi_inference::openai::scheduled_chat_completion(engine, req).await {
                     Ok(resp) => {
@@ -291,11 +279,7 @@ pub fn scheduled_completions_handler(engine: Arc<SchedulerEngine>) -> HandlerFn 
             };
             if req.stream {
                 let stream = justapi_inference::openai::scheduled_completion_stream(engine, req);
-                Ok(streaming_response(
-                    StatusCode::OK,
-                    "text/event-stream",
-                    stream,
-                ))
+                Ok(streaming_response(StatusCode::OK, "text/event-stream", stream))
             } else {
                 match justapi_inference::openai::scheduled_completion(engine, req).await {
                     Ok(resp) => {
@@ -330,15 +314,8 @@ fn routing_context(body: &[u8]) -> Option<RouteRequest> {
     let v: serde_json::Value = serde_json::from_slice(body).ok()?;
     let model = v.get("model")?.as_str()?.to_string();
     let version = v.get("version").and_then(|x| x.as_str()).map(String::from);
-    let routing_key = v
-        .get("routing_key")
-        .and_then(|x| x.as_str())
-        .map(String::from);
-    Some(RouteRequest {
-        model,
-        version,
-        routing_key,
-    })
+    let routing_key = v.get("routing_key").and_then(|x| x.as_str()).map(String::from);
+    Some(RouteRequest { model, version, routing_key })
 }
 
 /// Outcome of routing admission: either serve via the resolved decision, or
@@ -417,11 +394,7 @@ pub fn routed_chat_completions_handler(
             req.model = decision.resolved.model_name.clone();
             if req.stream {
                 let stream = justapi_inference::openai::chat_completion_stream(engine, req);
-                Ok(streaming_response(
-                    StatusCode::OK,
-                    "text/event-stream",
-                    stream,
-                ))
+                Ok(streaming_response(StatusCode::OK, "text/event-stream", stream))
             } else {
                 match justapi_inference::openai::chat_completion(engine, req).await {
                     Ok(resp) => {
@@ -484,11 +457,7 @@ pub fn routed_completions_handler(
             req.model = decision.resolved.model_name.clone();
             if req.stream {
                 let stream = justapi_inference::openai::completion_stream(engine, req);
-                Ok(streaming_response(
-                    StatusCode::OK,
-                    "text/event-stream",
-                    stream,
-                ))
+                Ok(streaming_response(StatusCode::OK, "text/event-stream", stream))
             } else {
                 match justapi_inference::openai::completion(engine, req).await {
                     Ok(resp) => {
@@ -595,17 +564,11 @@ mod tests {
             "stream": false
         })
         .to_string();
-        let resp = client
-            .post("/v1/chat/completions", body.into_bytes())
-            .await
-            .unwrap();
+        let resp = client.post("/v1/chat/completions", body.into_bytes()).await.unwrap();
         assert_eq!(resp.status, 200);
         let v: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
         assert_eq!(v["object"], "chat.completion");
-        assert!(!v["choices"][0]["message"]["content"]
-            .as_str()
-            .unwrap()
-            .is_empty());
+        assert!(!v["choices"][0]["message"]["content"].as_str().unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -619,10 +582,7 @@ mod tests {
             "stream": true
         })
         .to_string();
-        let resp = client
-            .post("/v1/chat/completions", body.into_bytes())
-            .await
-            .unwrap();
+        let resp = client.post("/v1/chat/completions", body.into_bytes()).await.unwrap();
         assert_eq!(resp.status, 200);
         let text = String::from_utf8(resp.body).unwrap();
         assert!(text.contains("data: "));
@@ -637,11 +597,7 @@ mod tests {
         assert_eq!(resp.status, 200);
         let v: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
         assert_eq!(v["object"], "list");
-        assert!(v["data"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|m| m["id"] == "mock"));
+        assert!(v["data"].as_array().unwrap().iter().any(|m| m["id"] == "mock"));
     }
 
     #[tokio::test]
@@ -653,10 +609,7 @@ mod tests {
             "input": ["hello", "world"]
         })
         .to_string();
-        let resp = client
-            .post("/v1/embeddings", body.into_bytes())
-            .await
-            .unwrap();
+        let resp = client.post("/v1/embeddings", body.into_bytes()).await.unwrap();
         assert_eq!(resp.status, 200);
         let v: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
         assert_eq!(v["object"], "list");
@@ -721,10 +674,7 @@ mod tests {
             "stream": false
         })
         .to_string();
-        let resp = client
-            .post("/v1/chat/completions", body.into_bytes())
-            .await
-            .unwrap();
+        let resp = client.post("/v1/chat/completions", body.into_bytes()).await.unwrap();
         assert_eq!(resp.status, 200);
         let v: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
         assert_eq!(v["object"], "chat.completion");
@@ -751,10 +701,7 @@ mod tests {
             "stream": false
         })
         .to_string();
-        let resp = client
-            .post("/v1/chat/completions", body.into_bytes())
-            .await
-            .unwrap();
+        let resp = client.post("/v1/chat/completions", body.into_bytes()).await.unwrap();
         assert_eq!(resp.status, 503);
         let v: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
         assert_eq!(v["error"]["type"], "server_error");
@@ -769,10 +716,7 @@ mod tests {
         let engine = Arc::new(Engine::new(EngineDevice::Cpu).unwrap());
         engine.register_mock("mock");
         let pool = KvBlockPool::new(1024);
-        let config = SchedulerConfig {
-            max_num_seqs: 8,
-            ..Default::default()
-        };
+        let config = SchedulerConfig { max_num_seqs: 8, ..Default::default() };
         let scheduler = Arc::new(std::sync::Mutex::new(Scheduler::new(config, pool)));
         let se = Arc::new(SchedulerEngine::new(engine.clone(), scheduler));
         (engine, se)
@@ -790,17 +734,11 @@ mod tests {
             "stream": false
         })
         .to_string();
-        let resp = client
-            .post("/v1/chat/completions", body.into_bytes())
-            .await
-            .unwrap();
+        let resp = client.post("/v1/chat/completions", body.into_bytes()).await.unwrap();
         assert_eq!(resp.status, 200);
         let v: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
         assert_eq!(v["object"], "chat.completion");
-        assert!(!v["choices"][0]["message"]["content"]
-            .as_str()
-            .unwrap()
-            .is_empty());
+        assert!(!v["choices"][0]["message"]["content"].as_str().unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -815,10 +753,7 @@ mod tests {
             "stream": true
         })
         .to_string();
-        let resp = client
-            .post("/v1/chat/completions", body.into_bytes())
-            .await
-            .unwrap();
+        let resp = client.post("/v1/chat/completions", body.into_bytes()).await.unwrap();
         assert_eq!(resp.status, 200);
         let text = String::from_utf8(resp.body).unwrap();
         assert!(text.contains("data: "));
@@ -837,10 +772,7 @@ mod tests {
             "stream": false
         })
         .to_string();
-        let resp = client
-            .post("/v1/completions", body.into_bytes())
-            .await
-            .unwrap();
+        let resp = client.post("/v1/completions", body.into_bytes()).await.unwrap();
         assert_eq!(resp.status, 200);
         let v: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
         assert_eq!(v["object"], "text_completion");

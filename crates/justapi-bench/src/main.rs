@@ -23,15 +23,9 @@ struct Metadata {
 
 fn payload() -> NestedPayload {
     NestedPayload {
-        user: User {
-            name: "test".into(),
-            id: 42,
-        },
+        user: User { name: "test".into(), id: 42 },
         items: vec![1, 2, 3],
-        meta: Metadata {
-            version: "1.0".into(),
-            timestamp: 1700000000,
-        },
+        meta: Metadata { version: "1.0".into(), timestamp: 1700000000 },
     }
 }
 

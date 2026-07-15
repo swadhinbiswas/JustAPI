@@ -6,7 +6,7 @@ use flate2::write::{DeflateEncoder, GzEncoder};
 use flate2::Compression;
 use http_body_util::combinators::UnsyncBoxBody;
 use http_body_util::BodyExt;
-use hyper::body::{Bytes, Incoming};
+use hyper::body::Bytes;
 use hyper::{Request, Response};
 
 use crate::ResponseBody;
@@ -137,18 +137,15 @@ impl Default for CompressionMiddleware {
 }
 
 #[async_trait]
-impl crate::middleware::Middleware<Incoming> for CompressionMiddleware {
+impl<B: Send + 'static> crate::middleware::Middleware<B> for CompressionMiddleware {
     async fn handle(
         &self,
-        req: Request<Incoming>,
-        next: crate::middleware::Next<'_, Incoming>,
+        req: Request<B>,
+        next: crate::middleware::Next<'_, B>,
     ) -> Result<Response<ResponseBody>> {
         // Determine client's accepted encoding
-        let accept_encoding = req
-            .headers()
-            .get("accept-encoding")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
+        let accept_encoding =
+            req.headers().get("accept-encoding").and_then(|v| v.to_str().ok()).unwrap_or("");
 
         let encoding = Encoding::from_accept_encoding(accept_encoding);
 
@@ -160,11 +157,8 @@ impl crate::middleware::Middleware<Incoming> for CompressionMiddleware {
         let resp = next.run(req).await?;
 
         // Check if the response is worth compressing
-        let content_type = resp
-            .headers()
-            .get("content-type")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
+        let content_type =
+            resp.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("");
 
         if !is_compressible_content_type(content_type) {
             return Ok(resp);
@@ -203,18 +197,10 @@ impl crate::middleware::Middleware<Incoming> for CompressionMiddleware {
         }
 
         let mut parts = parts;
-        parts.headers.insert(
-            "content-encoding",
-            encoding.as_header_value().parse().unwrap(),
-        );
-        parts.headers.insert(
-            "content-length",
-            compressed.len().to_string().parse().unwrap(),
-        );
+        parts.headers.insert("content-encoding", encoding.as_header_value().parse().unwrap());
+        parts.headers.insert("content-length", compressed.len().to_string().parse().unwrap());
         // Add Vary header so caches know the response varies by Accept-Encoding
-        parts
-            .headers
-            .insert("vary", "accept-encoding".parse().unwrap());
+        parts.headers.insert("vary", "accept-encoding".parse().unwrap());
 
         let new_body = UnsyncBoxBody::new(
             http_body_util::Full::new(Bytes::from(compressed))
@@ -251,10 +237,7 @@ mod tests {
 
     #[test]
     fn test_encoding_from_gzip() {
-        assert_eq!(
-            Encoding::from_accept_encoding("gzip, deflate"),
-            Encoding::Gzip
-        );
+        assert_eq!(Encoding::from_accept_encoding("gzip, deflate"), Encoding::Gzip);
     }
 
     #[test]
@@ -264,10 +247,7 @@ mod tests {
 
     #[test]
     fn test_encoding_from_identity() {
-        assert_eq!(
-            Encoding::from_accept_encoding("identity"),
-            Encoding::Identity
-        );
+        assert_eq!(Encoding::from_accept_encoding("identity"), Encoding::Identity);
     }
 
     #[test]
@@ -283,19 +263,13 @@ mod tests {
         // and "deflate, gzip" has deflate first, so deflate would be matched first.
         // Wait - the parser iterates parts and matches each. For "deflate, gzip":
         // part 0 = "deflate" -> matches Deflate, returns immediately.
-        assert_eq!(
-            Encoding::from_accept_encoding("deflate, gzip"),
-            Encoding::Deflate
-        );
+        assert_eq!(Encoding::from_accept_encoding("deflate, gzip"), Encoding::Deflate);
     }
 
     #[test]
     fn test_encoding_gzip_preferred_over_deflate_in_header() {
         // When gzip appears before deflate, gzip wins
-        assert_eq!(
-            Encoding::from_accept_encoding("gzip, deflate"),
-            Encoding::Gzip
-        );
+        assert_eq!(Encoding::from_accept_encoding("gzip, deflate"), Encoding::Gzip);
     }
 
     #[test]

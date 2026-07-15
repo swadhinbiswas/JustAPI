@@ -31,10 +31,7 @@ use justapi_inference::{
 
 /// GPU benchmark arguments.
 #[derive(Parser, Debug)]
-#[command(
-    name = "justapi-gpu-bench",
-    about = "GPU throughput benchmark for JustAPI inference"
-)]
+#[command(name = "justapi-gpu-bench", about = "GPU throughput benchmark for JustAPI inference")]
 struct Args {
     /// Path to model directory (GGUF file or safetensors + config.json).
     #[arg(long, default_value = None)]
@@ -96,15 +93,9 @@ fn report(name: &str, timing: &Timing) {
     };
 
     let ttft_p50 = ttfts.get(ttfts.len() / 2).copied().unwrap_or(0.0);
-    let ttft_p99 = ttfts
-        .get((ttfts.len() as f64 * 0.99) as usize)
-        .copied()
-        .unwrap_or(0.0);
+    let ttft_p99 = ttfts.get((ttfts.len() as f64 * 0.99) as usize).copied().unwrap_or(0.0);
     let itl_p50 = itls.get(itls.len() / 2).copied().unwrap_or(0.0);
-    let itl_p99 = itls
-        .get((itls.len() as f64 * 0.99) as usize)
-        .copied()
-        .unwrap_or(0.0);
+    let itl_p99 = itls.get((itls.len() as f64 * 0.99) as usize).copied().unwrap_or(0.0);
 
     println!("### {name}");
     println!();
@@ -127,10 +118,8 @@ fn main() -> Result<()> {
     let device = match args.device.as_str() {
         "cpu" => EngineDevice::Cpu,
         s if s.starts_with("cuda") => {
-            let ordinal = s
-                .strip_prefix("cuda:")
-                .and_then(|n| n.parse::<usize>().ok())
-                .unwrap_or(0);
+            let ordinal =
+                s.strip_prefix("cuda:").and_then(|n| n.parse::<usize>().ok()).unwrap_or(0);
             EngineDevice::Cuda(ordinal)
         }
         s => anyhow::bail!("unsupported device: {s}"),
@@ -143,9 +132,7 @@ fn main() -> Result<()> {
         #[cfg(feature = "real")]
         {
             if model_path.is_dir() || model_path.extension().map_or(false, |e| e == "gguf") {
-                engine
-                    .load(&args.model_name, model_path)
-                    .context("failed to load model")?;
+                engine.load(&args.model_name, model_path).context("failed to load model")?;
                 println!("Loaded model from: {}", model_path.display());
             } else {
                 anyhow::bail!(
@@ -182,10 +169,7 @@ fn main() -> Result<()> {
 
     // --- Scheduler setup ---
     let pool = KvBlockPool::new(4096);
-    let config = SchedulerConfig {
-        max_num_seqs: args.num_requests.max(1),
-        ..Default::default()
-    };
+    let config = SchedulerConfig { max_num_seqs: args.num_requests.max(1), ..Default::default() };
     let scheduler = Arc::new(Mutex::new(Scheduler::new(config, pool)));
     let se = Arc::new(SchedulerEngine::new(engine.clone(), scheduler));
 
@@ -238,18 +222,14 @@ async fn bench_naive(
 
         while let Some(tok) = rx.recv().await {
             if req_first {
-                timing
-                    .ttfts
-                    .push(last_tok_time.elapsed().as_secs_f64() * 1000.0);
+                timing.ttfts.push(last_tok_time.elapsed().as_secs_f64() * 1000.0);
                 req_first = false;
                 last_tok_time = Instant::now();
             }
             if tok.finish_reason.is_some() {
                 break;
             }
-            timing
-                .itls
-                .push(last_tok_time.elapsed().as_secs_f64() * 1000.0);
+            timing.itls.push(last_tok_time.elapsed().as_secs_f64() * 1000.0);
             last_tok_time = Instant::now();
             timing.total_tokens += 1;
         }
@@ -283,18 +263,14 @@ async fn bench_scheduled(
 
         while let Some(tok) = rx.recv().await {
             if req_first {
-                timing
-                    .ttfts
-                    .push(last_tok_time.elapsed().as_secs_f64() * 1000.0);
+                timing.ttfts.push(last_tok_time.elapsed().as_secs_f64() * 1000.0);
                 req_first = false;
                 last_tok_time = Instant::now();
             }
             if tok.finish_reason.is_some() {
                 break;
             }
-            timing
-                .itls
-                .push(last_tok_time.elapsed().as_secs_f64() * 1000.0);
+            timing.itls.push(last_tok_time.elapsed().as_secs_f64() * 1000.0);
             last_tok_time = Instant::now();
             timing.total_tokens += 1;
         }

@@ -22,10 +22,7 @@ where
     /// Send a request to the batching queue and wait for the response.
     pub async fn execute(&self, payload: Req) -> Result<Res, &'static str> {
         let (tx, rx) = oneshot::channel();
-        let req = BatchRequest {
-            payload,
-            responder: tx,
-        };
+        let req = BatchRequest { payload, responder: tx };
 
         if self.sender.send(req).await.is_err() {
             return Err("Batcher is closed");

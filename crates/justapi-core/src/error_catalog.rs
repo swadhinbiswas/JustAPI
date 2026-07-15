@@ -24,7 +24,7 @@ impl CatalogEntry {
     ///
     /// The diagnostic is always at [`DiagLevel::Error`] and carries the
     /// catalogue's code, template message, and default suggestions.
-    pub fn into_diagnostic(&self) -> Diagnostic {
+    pub fn to_diagnostic(&self) -> Diagnostic {
         let mut d = Diagnostic::new(DiagLevel::Error, self.template).code(self.code);
         for s in self.suggestions {
             d = d.suggestion(*s);
@@ -34,7 +34,7 @@ impl CatalogEntry {
 
     /// Build a diagnostic and attach context (e.g. a file path or value).
     pub fn with_context(&self, ctx: impl Into<String>) -> Diagnostic {
-        self.into_diagnostic().context(ctx)
+        self.to_diagnostic().context(ctx)
     }
 }
 
@@ -157,7 +157,7 @@ mod tests {
 
     #[test]
     fn catalog_entry_produces_diagnostic() {
-        let d = E001_INVALID_ADDRESS.into_diagnostic();
+        let d = E001_INVALID_ADDRESS.to_diagnostic();
         let text = d.render_plain();
         assert!(text.contains("error[E001]"));
         assert!(text.contains("= help:"));
@@ -174,7 +174,7 @@ mod tests {
     #[test]
     fn all_entries_render_without_panic() {
         for entry in ALL_ENTRIES {
-            let d = entry.into_diagnostic();
+            let d = entry.to_diagnostic();
             let _plain = d.render_plain();
             let _colored = d.render_colored();
         }

@@ -42,12 +42,7 @@ impl LoraAdapter {
         Self {
             name: name.into(),
             base_model_hash: None,
-            config: LoraConfig {
-                rank,
-                alpha,
-                dropout: 0.0,
-                target_modules: Vec::new(),
-            },
+            config: LoraConfig { rank, alpha, dropout: 0.0, target_modules: Vec::new() },
             routing_key: None,
             active: true,
         }
@@ -145,13 +140,7 @@ impl LoraRegistry {
 
     /// List all adapter names (active + inactive).
     pub fn all_adapters(&self) -> Vec<String> {
-        self.inner
-            .read()
-            .unwrap()
-            .adapters
-            .keys()
-            .cloned()
-            .collect()
+        self.inner.read().unwrap().adapters.keys().cloned().collect()
     }
 
     /// Number of registered adapters.

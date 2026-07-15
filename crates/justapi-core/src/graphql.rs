@@ -23,9 +23,7 @@ impl QueryRoot {
 pub type AppSchema = Schema<QueryRoot, EmptyMutation, EmptySubscription>;
 
 pub fn create_schema() -> AppSchema {
-    Schema::build(QueryRoot, EmptyMutation, EmptySubscription)
-        .enable_federation()
-        .finish()
+    Schema::build(QueryRoot, EmptyMutation, EmptySubscription).enable_federation().finish()
 }
 
 pub async fn handle_graphql(

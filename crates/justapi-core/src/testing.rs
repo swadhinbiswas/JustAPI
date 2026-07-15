@@ -48,6 +48,17 @@ impl TestClient {
         self.request(Method::POST, path, body, &[]).await
     }
 
+    /// POST with extra request headers (e.g. a `Content-Type` carrying the
+    /// `multipart/form-data` boundary for file-upload tests).
+    pub async fn post_with(
+        &self,
+        path: &str,
+        body: Vec<u8>,
+        headers: &[(&str, &str)],
+    ) -> Result<TestResponse, anyhow::Error> {
+        self.request(Method::POST, path, body, headers).await
+    }
+
     pub async fn put(&self, path: &str, body: Vec<u8>) -> Result<TestResponse, anyhow::Error> {
         self.request(Method::PUT, path, body, &[]).await
     }
@@ -73,10 +84,7 @@ impl TestClient {
                 async move { handler(req).await }
             });
             let io = TokioIo::new(server);
-            match hyper::server::conn::http1::Builder::new()
-                .serve_connection(io, svc)
-                .await
-            {
+            match hyper::server::conn::http1::Builder::new().serve_connection(io, svc).await {
                 Ok(()) => {}
                 Err(e) => {
                     panic!("Test server connection error: {}", e);
@@ -87,11 +95,9 @@ impl TestClient {
         // Build and send the raw HTTP request with Connection: close
         let method_str = method.to_string();
         let body_len = body.len();
-        let mut request_bytes = format!(
-            "{} {} HTTP/1.1\r\nHost: test\r\nConnection: close\r\n",
-            method_str, path,
-        )
-        .into_bytes();
+        let mut request_bytes =
+            format!("{} {} HTTP/1.1\r\nHost: test\r\nConnection: close\r\n", method_str, path,)
+                .into_bytes();
         for (name, value) in headers {
             request_bytes.extend_from_slice(format!("{}: {}\r\n", name, value).as_bytes());
         }
@@ -127,12 +133,7 @@ fn parse_response(raw: &[u8]) -> Result<TestResponse, anyhow::Error> {
 
     // Parse status line: "HTTP/1.1 200 OK"
     let status_line = lines.next().unwrap_or("");
-    let status: u16 = status_line
-        .split_whitespace()
-        .nth(1)
-        .unwrap_or("500")
-        .parse()
-        .unwrap_or(500);
+    let status: u16 = status_line.split_whitespace().nth(1).unwrap_or("500").parse().unwrap_or(500);
 
     // Parse headers
     let headers: Vec<(String, String)> = lines
@@ -145,11 +146,52 @@ fn parse_response(raw: &[u8]) -> Result<TestResponse, anyhow::Error> {
         })
         .collect();
 
-    Ok(TestResponse {
-        status,
-        headers,
-        body: body.to_vec(),
-    })
+    let is_chunked = headers.iter().any(|(k, v)| {
+        k.eq_ignore_ascii_case("transfer-encoding") && v.eq_ignore_ascii_case("chunked")
+    });
+
+    let body = if is_chunked { decode_chunked(body)? } else { body.to_vec() };
+
+    Ok(TestResponse { status, headers, body })
+}
+
+/// Decode RFC 9112 chunked-transfer-encoding framing into the raw body bytes.
+fn decode_chunked(body: &[u8]) -> Result<Vec<u8>, anyhow::Error> {
+    let mut out = Vec::new();
+    let mut pos = 0;
+    while pos < body.len() {
+        // Find the end of the chunk-size line (terminated by \r\n or \n).
+        let line_end = body[pos..]
+            .iter()
+            .position(|&b| b == b'\n')
+            .map(|i| pos + i)
+            .ok_or_else(|| anyhow::anyhow!("Truncated chunked body"))?;
+        let size_line = &body[pos..line_end];
+        // Strip a trailing \r if present.
+        let size_line = if size_line.last() == Some(&b'\r') {
+            &size_line[..size_line.len() - 1]
+        } else {
+            size_line
+        };
+        let size_str = std::str::from_utf8(size_line)
+            .map_err(|e| anyhow::anyhow!("Invalid chunk size: {}", e))?;
+        // Allow optional chunk-ext after a ';'.
+        let size_hex = size_str.split(';').next().unwrap_or("").trim();
+        let size: usize = usize::from_str_radix(size_hex, 16)
+            .map_err(|e| anyhow::anyhow!("Invalid chunk size: {}", e))?;
+        if size == 0 {
+            break;
+        }
+        let data_start = line_end + 1;
+        let data_end = data_start + size;
+        if data_end > body.len() {
+            return Err(anyhow::anyhow!("Chunk claims more data than available"));
+        }
+        out.extend_from_slice(&body[data_start..data_end]);
+        // Skip the chunk-data trailing CRLF.
+        pos = data_end + if body[data_end..].starts_with(b"\r\n") { 2 } else { 1 };
+    }
+    Ok(out)
 }
 
 fn find_double_crlf(data: &[u8]) -> Option<usize> {
@@ -187,12 +229,9 @@ mod tests {
     #[tokio::test]
     async fn test_test_client_404() {
         let handler: HandlerFn = std::sync::Arc::new(|_req| {
-            Box::pin(async move {
-                Ok(json_response(
-                    StatusCode::NOT_FOUND,
-                    r#"{"error":"not found"}"#,
-                ))
-            })
+            Box::pin(
+                async move { Ok(json_response(StatusCode::NOT_FOUND, r#"{"error":"not found"}"#)) },
+            )
         });
         let client = TestClient::new(handler);
         let resp = client.get("/nonexistent").await.unwrap();

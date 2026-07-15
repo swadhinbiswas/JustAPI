@@ -26,11 +26,7 @@ pub struct Router<T> {
 
 impl<T: Clone> Router<T> {
     pub fn new() -> Self {
-        Self {
-            routes: HashMap::new(),
-            fallback: None,
-            route_list: Vec::new(),
-        }
+        Self { routes: HashMap::new(), fallback: None, route_list: Vec::new() }
     }
 
     pub fn insert(&mut self, method: Method, path: &str, handler: T) -> Result<(), InsertError> {
@@ -59,10 +55,7 @@ impl<T: Clone> Router<T> {
     ) -> Result<Match<'a, 'p, T>, RouterError> {
         if let Some(router) = self.routes.get(method) {
             if let Ok(matched) = router.at(path) {
-                return Ok(Match {
-                    handler: matched.value,
-                    params: matched.params,
-                });
+                return Ok(Match { handler: matched.value, params: matched.params });
             }
         }
 
@@ -97,9 +90,7 @@ mod tests {
     #[test]
     fn test_basic_route() {
         let mut router = Router::new();
-        router
-            .insert(Method::GET, "/hello", "hello_handler")
-            .unwrap();
+        router.insert(Method::GET, "/hello", "hello_handler").unwrap();
         let m = router.at(&Method::GET, "/hello").unwrap();
         assert_eq!(*m.handler, "hello_handler");
     }
@@ -107,18 +98,14 @@ mod tests {
     #[test]
     fn test_route_not_found() {
         let mut router = Router::new();
-        router
-            .insert(Method::GET, "/hello", "hello_handler")
-            .unwrap();
+        router.insert(Method::GET, "/hello", "hello_handler").unwrap();
         assert!(router.at(&Method::GET, "/unknown").is_err());
     }
 
     #[test]
     fn test_wrong_method() {
         let mut router = Router::new();
-        router
-            .insert(Method::GET, "/hello", "hello_handler")
-            .unwrap();
+        router.insert(Method::GET, "/hello", "hello_handler").unwrap();
         assert_eq!(
             router.at(&Method::POST, "/hello").err().unwrap(),
             RouterError::MethodNotAllowed
@@ -128,9 +115,7 @@ mod tests {
     #[test]
     fn test_path_param() {
         let mut router = Router::new();
-        router
-            .insert(Method::GET, "/users/{id}", "user_handler")
-            .unwrap();
+        router.insert(Method::GET, "/users/{id}", "user_handler").unwrap();
         let m = router.at(&Method::GET, "/users/42").unwrap();
         assert_eq!(*m.handler, "user_handler");
         assert_eq!(m.params.get("id"), Some("42"));
@@ -139,9 +124,7 @@ mod tests {
     #[test]
     fn test_catch_all() {
         let mut router = Router::new();
-        router
-            .insert(Method::GET, "/files/{*path}", "file_handler")
-            .unwrap();
+        router.insert(Method::GET, "/files/{*path}", "file_handler").unwrap();
         let m = router.at(&Method::GET, "/files/a/b/c").unwrap();
         assert_eq!(*m.handler, "file_handler");
         assert_eq!(m.params.get("path"), Some("a/b/c"));
@@ -150,9 +133,7 @@ mod tests {
     #[test]
     fn test_multiple_routes() {
         let mut router = Router::new();
-        router
-            .insert(Method::GET, "/users/{id}", "user_handler")
-            .unwrap();
+        router.insert(Method::GET, "/users/{id}", "user_handler").unwrap();
         router.insert(Method::GET, "/users", "users_list").unwrap();
         let m = router.at(&Method::GET, "/users/42").unwrap();
         assert_eq!(*m.handler, "user_handler");
@@ -163,9 +144,7 @@ mod tests {
     #[test]
     fn test_post_route() {
         let mut router = Router::new();
-        router
-            .insert(Method::POST, "/data", "data_handler")
-            .unwrap();
+        router.insert(Method::POST, "/data", "data_handler").unwrap();
         let m = router.at(&Method::POST, "/data").unwrap();
         assert_eq!(*m.handler, "data_handler");
     }
@@ -173,9 +152,7 @@ mod tests {
     #[test]
     fn test_query_method_route() {
         let mut router = Router::new();
-        router
-            .insert(crate::query_method(), "/search", "search_handler")
-            .unwrap();
+        router.insert(crate::query_method(), "/search", "search_handler").unwrap();
         let m = router.at(&crate::query_method(), "/search").unwrap();
         assert_eq!(*m.handler, "search_handler");
         // QUERY is distinct from POST on the same path.
@@ -224,9 +201,7 @@ mod tests {
                 .unwrap();
         }
         // Catch-all
-        router
-            .insert(Method::GET, "/static/{*path}", "static_handler".to_string())
-            .unwrap();
+        router.insert(Method::GET, "/static/{*path}", "static_handler".to_string()).unwrap();
 
         // Warmup
         for _ in 0..1000 {
@@ -254,18 +229,10 @@ mod tests {
 
         let total_lookups = iterations * test_paths.len() as u64;
         let avg_ns = total_ns / total_lookups;
-        println!(
-            "500-route table: {} lookups, avg {}ns",
-            total_lookups, avg_ns,
-        );
+        println!("500-route table: {} lookups, avg {}ns", total_lookups, avg_ns,);
 
         // Benchmark gate: average lookup should be under 100ns (release) / 1us (debug)
         let target = if cfg!(debug_assertions) { 1000 } else { 100 };
-        assert!(
-            avg_ns < target,
-            "Route lookup too slow: {}ns (target < {}ns)",
-            avg_ns,
-            target
-        );
+        assert!(avg_ns < target, "Route lookup too slow: {}ns (target < {}ns)", avg_ns, target);
     }
 }

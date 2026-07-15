@@ -1,17 +1,139 @@
 import inspect
 import functools
+import json
+import re
 import typing
-from ._justapi import _JustAPIApp, TokenStreamResponse
+from urllib.parse import quote
+from ._justapi import _JustAPIApp, TokenStreamResponse, ValidatedStreamResponse
+from .exceptions import WebSocketException
+from .websockets import WebSocket
+from .system import register_system_routes, build_help, build_openapi
+from .responses import PlainTextResponse
+
+_PY_TYPE_TO_JSON = {
+    str: "string",
+    int: "integer",
+    float: "number",
+    bool: "boolean",
+    list: "array",
+    dict: "object",
+    type(None): "null",
+}
+
+
+# Built-in health/observability handlers. Registered on every JustAPIApp so the
+# Python app exposes Kubernetes probe + metrics endpoints without relying on the
+# Rust server's default-route registry (which is bypassed for Python apps, where
+# routing happens in the Python handler). The Rust server emits richer Prometheus
+# metrics via `with_health_registry` when used standalone.
+def _builtin_health():
+    return {"status": "ok", "components": {}}
+
+
+def _builtin_live():
+    return {"status": "alive"}
+
+
+def _builtin_ready():
+    return {"status": "ready"}
+
+
+def _builtin_metrics():
+    body = (
+        "# HELP justapi_up 1 if the server process is up.\n"
+        "# TYPE justapi_up gauge\n"
+        "justapi_up 1\n"
+    )
+    return PlainTextResponse(body)
+
+
+def _model_json_schema(ann):
+    """Best-effort JSON schema from a Pydantic / dataclass / model annotation."""
+    try:
+        if hasattr(ann, "model_json_schema"):
+            return ann.model_json_schema()
+    except Exception:
+        pass
+    try:
+        if hasattr(ann, "__pydantic_model__"):
+            return ann.__pydantic_model__.schema()
+    except Exception:
+        pass
+    try:
+        import dataclasses
+
+        if dataclasses.is_dataclass(ann):
+            props, required = {}, []
+            for f in dataclasses.fields(ann):
+                props[f.name] = {"type": _PY_TYPE_TO_JSON.get(f.type, "string")}
+                if f.default is dataclasses.MISSING:
+                    required.append(f.name)
+            return {"type": "object", "properties": props, "required": required}
+    except Exception:
+        pass
+    return None
+
+
+def _infer_tool_schema(func):
+    """Infer a JSON Schema from a callable's signature / type hints."""
+    sig = inspect.signature(func)
+    hints = typing.get_type_hints(func)
+    props, required = {}, []
+    for pname, p in sig.parameters.items():
+        if pname == "self":
+            continue
+        ann = hints.get(pname, p.annotation)
+        if ann is inspect.Parameter.empty:
+            ann = str
+        schema = _model_json_schema(ann)
+        if schema is None:
+            schema = {"type": _PY_TYPE_TO_JSON.get(ann, "string")}
+        props[pname] = schema
+        if p.default is inspect.Parameter.empty:
+            required.append(pname)
+    return {
+        "type": "object",
+        "properties": props,
+        "required": required,
+    }
+
 
 class RequestValidationError(Exception):
     def __init__(self, errors):
         self.errors = errors
+        self.detail = errors
         super().__init__(str(errors))
 
 class Depends:
     def __init__(self, dependency: typing.Callable, use_cache: bool = True):
         self.dependency = dependency
         self.use_cache = use_cache
+
+
+class Session:
+    """Agent session state, backed by the Rust session store on the app.
+
+    Obtain one by declaring a ``session: Session`` parameter on a route handler
+    (the id is read from the ``justapi_session`` cookie or ``?session=`` query
+    param) or by calling ``app.create_session()`` directly.
+    """
+
+    def __init__(self, app: "JustAPIApp", session_id: str):
+        self._app = app
+        self.id = session_id
+
+    def get(self):
+        return self._app.get_session(self.id)
+
+    def set(self, data: dict):
+        return self._app.set_session(self.id, data)
+
+    def update(self, **fields):
+        return self._app.update_session(self.id, **fields)
+
+    def delete(self):
+        return self._app.delete_session(self.id)
+
 
 def adaptive_batch(max_size: int = 32, window_ms: int = 10):
     """
@@ -30,6 +152,47 @@ class JustAPIApp:
         self.dependencies = dependencies or []
         self.exception_handlers = {}
         self.middlewares = []
+        self._named_routes = {}
+        self.routes = []
+        self.title = "JustAPIApp"
+        self.version = "1.0.0"
+
+        # Built-in probe/metrics endpoints for the Python app.
+        self.get("/health", _builtin_health, include_in_schema=False, name="builtin_health")
+        self.get("/live", _builtin_live, include_in_schema=False, name="builtin_live")
+        self.get("/ready", _builtin_ready, include_in_schema=False, name="builtin_ready")
+        self.get("/metrics", _builtin_metrics, include_in_schema=False, name="builtin_metrics")
+
+    def _record(self, method, path, handler, *, body_schema=None, schema=None,
+                 experimental=False, **kw):
+        """Record a route's metadata on the Python side for introspection.
+
+        The Rust runtime owns actual dispatch; this list powers
+        ``build_help`` / ``build_openapi`` and the ``/_system`` endpoints.
+        """
+        name = kw.get("name")
+        if name is not None:
+            self._named_routes[name] = path
+        self.routes.append({
+            "method": method,
+            "path": path,
+            "handler": handler,
+            "body_schema": body_schema,
+            "schema": schema,
+            "experimental": experimental,
+            "dependencies": [],
+            "middlewares": [],
+            "tags": kw.get("tags") or [],
+            "summary": kw.get("summary"),
+            "description": kw.get("description"),
+            "deprecated": kw.get("deprecated"),
+            "status_code": kw.get("status_code"),
+            "responses": kw.get("responses"),
+            "operation_id": kw.get("operation_id"),
+            "openapi_extra": kw.get("openapi_extra"),
+            "include_in_schema": kw.get("include_in_schema", True),
+            "name": name,
+        })
 
     def middleware(self, middleware_type: str = "http"):
         def decorator(func):
@@ -96,15 +259,27 @@ class JustAPIApp:
                     request["_dep_cache"][param.default.dependency] = res
                 kwargs[name] = res
                 
-            elif name == "request" or (hasattr(param.annotation, "__name__") and param.annotation.__name__ == "Request"):
+            elif name in ("request", "req", "r", "_request") or (hasattr(param.annotation, "__name__") and param.annotation.__name__ == "Request"):
                 kwargs[name] = request
+            elif (hasattr(param.annotation, "__name__") and param.annotation.__name__ == "Session") or name == "session":
+                sid = (request.cookies).get(getattr(self, "_session_cookie", "justapi_session"))
+                if sid is None:
+                    sid = request.query_params.get("session")
+                if sid is None:
+                    if getattr(self, "_sessions_enabled", False):
+                        sid = self.create_session()
+                        request["_session_id"] = sid
+                elif getattr(self, "_sessions_enabled", False) and self.get_session(sid) is None:
+                    self.create_session(id=sid)
+                    request["_session_id"] = sid
+                kwargs[name] = Session(self, sid)
             else:
                 from .params import Param, Path, Query, Header, Cookie, Body, File, Form
-                
+
                 alias = name
                 param_type = None
                 default = inspect.Parameter.empty
-                
+
                 if isinstance(param.default, Param):
                     alias = param.default.alias or name
                     param_type = type(param.default)
@@ -115,25 +290,21 @@ class JustAPIApp:
                 val = None
                 found = False
                 
-                if param_type is Path or (param_type is None and alias in request.get("path_params", {})):
-                    val = request.get("path_params", {}).get(alias)
+                if param_type is Path or (param_type is None and alias in request.path_params):
+                    val = request.path_params.get(alias)
                     if val is not None: found = True
-                
-                if not found and (param_type is Query or (param_type is None and alias in request.get("query_params", {}))):
-                    val = request.get("query_params", {}).get(alias)
+
+                if not found and (param_type is Query or (param_type is None and alias in request.query_params)):
+                    val = request.query_params.get(alias)
                     if val is not None: found = True
-                    
+
                 if not found and param_type is Header:
-                    headers = request.get("headers", [])
-                    if isinstance(headers, list):
-                        for hk, hv in headers:
-                            if hk.decode("utf-8").lower() == alias.lower():
-                                val = hv.decode("utf-8")
-                                found = True
-                                break
-                    
+                    val = request.headers.get(alias)
+                    if val is not None:
+                        found = True
+
                 if not found and param_type is Cookie:
-                    val = request.get("cookies", {}).get(alias)
+                    val = request.cookies.get(alias)
                     if val is not None: found = True
                     
                 if not found and (param_type is File or param_type is Form or (hasattr(param.annotation, "__name__") and param.annotation.__name__ == "UploadFile")):
@@ -206,15 +377,27 @@ class JustAPIApp:
                     request["_dep_cache"][param.default.dependency] = res
                 kwargs[name] = res
                 
-            elif name == "request" or (hasattr(param.annotation, "__name__") and param.annotation.__name__ == "Request"):
+            elif name in ("request", "req", "r", "_request") or (hasattr(param.annotation, "__name__") and param.annotation.__name__ == "Request"):
                 kwargs[name] = request
+            elif (hasattr(param.annotation, "__name__") and param.annotation.__name__ == "Session") or name == "session":
+                sid = (request.cookies).get(getattr(self, "_session_cookie", "justapi_session"))
+                if sid is None:
+                    sid = request.query_params.get("session")
+                if sid is None:
+                    if getattr(self, "_sessions_enabled", False):
+                        sid = self.create_session()
+                        request["_session_id"] = sid
+                elif getattr(self, "_sessions_enabled", False) and self.get_session(sid) is None:
+                    self.create_session(id=sid)
+                    request["_session_id"] = sid
+                kwargs[name] = Session(self, sid)
             else:
                 from .params import Param, Path, Query, Header, Cookie, Body, File, Form
-                
+
                 alias = name
                 param_type = None
                 default = inspect.Parameter.empty
-                
+
                 if isinstance(param.default, Param):
                     alias = param.default.alias or name
                     param_type = type(param.default)
@@ -225,25 +408,21 @@ class JustAPIApp:
                 val = None
                 found = False
                 
-                if param_type is Path or (param_type is None and alias in request.get("path_params", {})):
-                    val = request.get("path_params", {}).get(alias)
+                if param_type is Path or (param_type is None and alias in request.path_params):
+                    val = request.path_params.get(alias)
                     if val is not None: found = True
-                
-                if not found and (param_type is Query or (param_type is None and alias in request.get("query_params", {}))):
-                    val = request.get("query_params", {}).get(alias)
+
+                if not found and (param_type is Query or (param_type is None and alias in request.query_params)):
+                    val = request.query_params.get(alias)
                     if val is not None: found = True
-                    
+
                 if not found and param_type is Header:
-                    headers = request.get("headers", [])
-                    if isinstance(headers, list):
-                        for hk, hv in headers:
-                            if hk.decode("utf-8").lower() == alias.lower():
-                                val = hv.decode("utf-8")
-                                found = True
-                                break
-                    
+                    val = request.headers.get(alias)
+                    if val is not None:
+                        found = True
+
                 if not found and param_type is Cookie:
-                    val = request.get("cookies", {}).get(alias)
+                    val = request.cookies.get(alias)
                     if val is not None: found = True
 
                 if not found and (param_type is File or param_type is Form or (hasattr(param.annotation, "__name__") and param.annotation.__name__ == "UploadFile")):
@@ -293,11 +472,31 @@ class JustAPIApp:
             chain = make_wrapper(mw, chain)
         return chain
 
-    def _wrap_handler(self, handler, route_dependencies=None, route_middlewares=None):
+    def _wrap_handler(self, handler, route_dependencies=None, route_middlewares=None, native=False):
+        # The native Rust fast path validates + echoes the request and returns
+        # without ever calling the Python handler, so it would silently SKIP any
+        # route- or app-level `dependencies` (e.g. auth) and `middlewares`. That
+        # is a security hole, so refuse the combination outright. (App-level
+        # middleware is also bypassed by the native fast path by design — it is a
+        # validate-and-echo shortcut — so do not rely on auth running there.)
+        if native and (
+            self.dependencies
+            or route_dependencies
+            or self.middlewares
+            or route_middlewares
+        ):
+            raise ValueError(
+                "native=True cannot be combined with dependencies or route "
+                "middlewares: the native fast path validates and echoes the "
+                "request without invoking the handler, so those would be "
+                "silently bypassed. Use a non-native route, or move the logic "
+                "into the native validation schema."
+            )
+
         sig = inspect.signature(handler)
         route_deps = route_dependencies or []
         all_deps = self.dependencies + route_deps
-        
+
         is_async = inspect.iscoroutinefunction(handler)
         for name, param in sig.parameters.items():
             if isinstance(param.default, Depends):
@@ -310,6 +509,18 @@ class JustAPIApp:
 
         has_bg = "background_tasks" in sig.parameters or any(
             p.annotation.__name__ == "BackgroundTasks" for p in sig.parameters.values() if hasattr(p.annotation, "__name__")
+        )
+
+        # A handler needs the Python `Request` object (and thus one must be
+        # built per request) if it takes any parameters, has any dependencies
+        # to resolve, or is wrapped by any (route- or app-level) middleware —
+        # middleware runs against the request and would break on an empty dict.
+        # 0-parameter, dependency-free, middleware-free handlers can skip it.
+        needs_request = (
+            bool(sig.parameters)
+            or bool(all_deps)
+            or bool(self.middlewares)
+            or bool(route_middlewares)
         )
 
         if is_async:
@@ -330,11 +541,10 @@ class JustAPIApp:
                         result = handler(**kwargs)
                         
                     if bg_tasks: bg_tasks()
-                    from ._native_helper import wrap_result
-                    return wrap_result(result)
+                    return result
                 except Exception as e:
                     return self._handle_exception(request, e)
-            return self._apply_middlewares(async_wrapper, route_middlewares)
+            wrapper = self._apply_middlewares(async_wrapper, route_middlewares)
         else:
             def sync_wrapper(request):
                 try:
@@ -348,8 +558,7 @@ class JustAPIApp:
                     kwargs = self._resolve_kwargs_sync(sig, request)
                     result = handler(**kwargs)
                     if bg_tasks: bg_tasks()
-                    from ._native_helper import wrap_result
-                    return wrap_result(result)
+                    return result
                 except Exception as e:
                     return self._handle_exception(request, e)
             
@@ -361,16 +570,26 @@ class JustAPIApp:
                     loop = asyncio.get_running_loop()
                     ctx = contextvars.copy_context()
                     return await loop.run_in_executor(None, ctx.run, sync_wrapper, request)
-                return self._apply_middlewares(async_base_handler, route_middlewares)
-                
-            return sync_wrapper
+                wrapper = self._apply_middlewares(async_base_handler, route_middlewares)
+            else:
+                wrapper = sync_wrapper
+
+        wrapper._needs_request = needs_request
+        return wrapper
 
     def _resolve_batch_config(self, func):
         batch_size = getattr(func, "__batch_size__", None)
         batch_window_ms = getattr(func, "__batch_window_ms__", None)
         return batch_size, batch_window_ms
 
-    def _wrap_batch_handler(self, handler):
+    def _wrap_batch_handler(self, handler, native=False):
+        if native and (self.dependencies or self.middlewares):
+            raise ValueError(
+                "native=True cannot be combined with dependencies or route "
+                "middlewares: the native fast path validates and echoes the "
+                "request without invoking the handler, so those would be "
+                "silently bypassed."
+            )
         is_async = inspect.iscoroutinefunction(handler)
         if is_async:
             async def async_batch_wrapper(requests):
@@ -381,77 +600,176 @@ class JustAPIApp:
                 return handler(requests)
             return sync_batch_wrapper
 
-    def get(self, path: str, handler=None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None):
+    def _meta(self, responses, openapi_extra):
+        """Serialize the OpenAPI metadata dicts to JSON strings for the Rust layer."""
+        import json
+        responses_json = json.dumps(responses) if responses is not None else None
+        extra_json = json.dumps(openapi_extra) if openapi_extra is not None else None
+        return responses_json, extra_json
+
+    def _route_kw(self, tags=None, summary=None, description=None, deprecated=None,
+                  status_code=None, responses=None, operation_id=None, openapi_extra=None,
+                  include_in_schema=True, name=None):
+        responses_json, extra_json = self._meta(responses, openapi_extra)
+        return dict(
+            tags=tags,
+            summary=summary,
+            description=description,
+            deprecated=deprecated or False,
+            status_code=status_code,
+            responses=responses_json,
+            operation_id=operation_id,
+            openapi_extra=extra_json,
+            include_in_schema=include_in_schema,
+            name=name,
+        )
+
+    def get(self, path: str, handler=None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None, tags: typing.List[str] = None, summary: str = None, description: str = None, deprecated: bool = False, status_code: int = None, responses: dict = None, operation_id: str = None, openapi_extra: dict = None, name: str = None, include_in_schema: bool = True, query_schema=None, native: bool = False):
+        if name is not None: self._named_routes[name] = path
+        kw = self._route_kw(tags, summary, description, deprecated, status_code, responses, operation_id, openapi_extra, include_in_schema, name=name)
         if handler is None:
             def decorator(func):
-                self._app.get(path, self._wrap_handler(func, route_dependencies=dependencies, route_middlewares=middlewares))
+                self._app.get(path, self._wrap_handler(func, route_dependencies=dependencies, route_middlewares=middlewares), query_schema=query_schema, native=native, **kw)
+                self._record("GET", path, func, query_schema=query_schema, native=native, **kw)
                 return func
             return decorator
-        self._app.get(path, self._wrap_handler(handler, route_dependencies=dependencies, route_middlewares=middlewares))
+        self._app.get(path, self._wrap_handler(handler, route_dependencies=dependencies, route_middlewares=middlewares), query_schema=query_schema, native=native, **kw)
+        self._record("GET", path, handler, query_schema=query_schema, native=native, **kw)
         return handler
 
-    def post(self, path: str, handler=None, body_schema=None, schema=None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None):
-        if handler is None:
-            def decorator(func):
-                batch_size, batch_window_ms = self._resolve_batch_config(func)
-                wrapped = self._wrap_batch_handler(func) if batch_size else self._wrap_handler(func, route_dependencies=dependencies, route_middlewares=middlewares)
-                self._app.post(path, wrapped, body_schema, schema, batch_size=batch_size, batch_window_ms=batch_window_ms)
-                return func
-            return decorator
-        batch_size, batch_window_ms = self._resolve_batch_config(handler)
-        wrapped = self._wrap_batch_handler(handler) if batch_size else self._wrap_handler(handler, route_dependencies=dependencies, route_middlewares=middlewares)
-        self._app.post(path, wrapped, body_schema, schema, batch_size=batch_size, batch_window_ms=batch_window_ms)
-        return handler
-
-    def put(self, path: str, handler=None, body_schema=None, schema=None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None):
-        if handler is None:
-            def decorator(func):
-                batch_size, batch_window_ms = self._resolve_batch_config(func)
-                wrapped = self._wrap_batch_handler(func) if batch_size else self._wrap_handler(func, route_dependencies=dependencies, route_middlewares=middlewares)
-                self._app.put(path, wrapped, body_schema, schema, batch_size=batch_size, batch_window_ms=batch_window_ms)
-                return func
-            return decorator
-        batch_size, batch_window_ms = self._resolve_batch_config(handler)
-        wrapped = self._wrap_batch_handler(handler) if batch_size else self._wrap_handler(handler, route_dependencies=dependencies, route_middlewares=middlewares)
-        self._app.put(path, wrapped, body_schema, schema, batch_size=batch_size, batch_window_ms=batch_window_ms)
-        return handler
-
-    def delete(self, path: str, handler=None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None):
-        if handler is None:
-            def decorator(func):
-                self._app.delete(path, self._wrap_handler(func, route_dependencies=dependencies, route_middlewares=middlewares))
-                return func
-            return decorator
-        self._app.delete(path, self._wrap_handler(handler, route_dependencies=dependencies, route_middlewares=middlewares))
-        return handler
-
-    def patch(self, path: str, handler=None, body_schema=None, schema=None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None):
+    def post(self, path: str, handler=None, body_schema=None, schema=None, query_schema=None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None, tags: typing.List[str] = None, summary: str = None, description: str = None, deprecated: bool = False, status_code: int = None, responses: dict = None, operation_id: str = None, openapi_extra: dict = None, name: str = None, include_in_schema: bool = True, native: bool = False):
+        if name is not None: self._named_routes[name] = path
+        kw = self._route_kw(tags, summary, description, deprecated, status_code, responses, operation_id, openapi_extra, include_in_schema, name=name)
+        kw["native"] = native
         if handler is None:
             def decorator(func):
                 batch_size, batch_window_ms = self._resolve_batch_config(func)
-                wrapped = self._wrap_batch_handler(func) if batch_size else self._wrap_handler(func, route_dependencies=dependencies, route_middlewares=middlewares)
-                self._app.patch(path, wrapped, body_schema, schema, batch_size=batch_size, batch_window_ms=batch_window_ms)
+                wrapped = self._wrap_batch_handler(func, native=native) if batch_size else self._wrap_handler(func, route_dependencies=dependencies, route_middlewares=middlewares, native=native)
+                self._app.post(path, wrapped, body_schema, schema, query_schema=query_schema, batch_size=batch_size, batch_window_ms=batch_window_ms, **kw)
+                self._record("POST", path, func, body_schema=body_schema, schema=schema, query_schema=query_schema, **kw)
                 return func
             return decorator
         batch_size, batch_window_ms = self._resolve_batch_config(handler)
-        wrapped = self._wrap_batch_handler(handler) if batch_size else self._wrap_handler(handler, route_dependencies=dependencies, route_middlewares=middlewares)
-        self._app.patch(path, wrapped, body_schema, schema, batch_size=batch_size, batch_window_ms=batch_window_ms)
+        wrapped = self._wrap_batch_handler(handler, native=native) if batch_size else self._wrap_handler(handler, route_dependencies=dependencies, route_middlewares=middlewares, native=native)
+        self._app.post(path, wrapped, body_schema, schema, query_schema=query_schema, batch_size=batch_size, batch_window_ms=batch_window_ms, **kw)
+        self._record("POST", path, handler, body_schema=body_schema, schema=schema, query_schema=query_schema, **kw)
         return handler
 
-    def query(self, path: str, handler=None, body_schema=None, schema=None, experimental: bool = True, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None):
+    def put(self, path: str, handler=None, body_schema=None, schema=None, query_schema=None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None, tags: typing.List[str] = None, summary: str = None, description: str = None, deprecated: bool = False, status_code: int = None, responses: dict = None, operation_id: str = None, openapi_extra: dict = None, name: str = None, include_in_schema: bool = True, native: bool = False):
+        if name is not None: self._named_routes[name] = path
+        kw = self._route_kw(tags, summary, description, deprecated, status_code, responses, operation_id, openapi_extra, include_in_schema, name=name)
+        kw["native"] = native
+        if handler is None:
+            def decorator(func):
+                batch_size, batch_window_ms = self._resolve_batch_config(func)
+                wrapped = self._wrap_batch_handler(func, native=native) if batch_size else self._wrap_handler(func, route_dependencies=dependencies, route_middlewares=middlewares, native=native)
+                self._app.put(path, wrapped, body_schema, schema, query_schema=query_schema, batch_size=batch_size, batch_window_ms=batch_window_ms, **kw)
+                self._record("PUT", path, func, body_schema=body_schema, schema=schema, query_schema=query_schema, **kw)
+                return func
+            return decorator
+        batch_size, batch_window_ms = self._resolve_batch_config(handler)
+        wrapped = self._wrap_batch_handler(handler, native=native) if batch_size else self._wrap_handler(handler, route_dependencies=dependencies, route_middlewares=middlewares, native=native)
+        self._app.put(path, wrapped, body_schema, schema, query_schema=query_schema, batch_size=batch_size, batch_window_ms=batch_window_ms, **kw)
+        self._record("PUT", path, handler, body_schema=body_schema, schema=schema, query_schema=query_schema, **kw)
+        return handler
+
+    def delete(self, path: str, handler=None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None, tags: typing.List[str] = None, summary: str = None, description: str = None, deprecated: bool = False, status_code: int = None, responses: dict = None, operation_id: str = None, openapi_extra: dict = None, name: str = None, include_in_schema: bool = True, query_schema=None, native: bool = False):
+        if name is not None: self._named_routes[name] = path
+        kw = self._route_kw(tags, summary, description, deprecated, status_code, responses, operation_id, openapi_extra, include_in_schema, name=name)
+        if handler is None:
+            def decorator(func):
+                self._app.delete(path, self._wrap_handler(func, route_dependencies=dependencies, route_middlewares=middlewares), query_schema=query_schema, native=native, **kw)
+                self._record("DELETE", path, func, query_schema=query_schema, native=native, **kw)
+                return func
+            return decorator
+        self._app.delete(path, self._wrap_handler(handler, route_dependencies=dependencies, route_middlewares=middlewares), query_schema=query_schema, native=native, **kw)
+        self._record("DELETE", path, handler, query_schema=query_schema, native=native, **kw)
+        return handler
+
+    def patch(self, path: str, handler=None, body_schema=None, schema=None, query_schema=None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None, tags: typing.List[str] = None, summary: str = None, description: str = None, deprecated: bool = False, status_code: int = None, responses: dict = None, operation_id: str = None, openapi_extra: dict = None, name: str = None, include_in_schema: bool = True, native: bool = False):
+        if name is not None: self._named_routes[name] = path
+        kw = self._route_kw(tags, summary, description, deprecated, status_code, responses, operation_id, openapi_extra, include_in_schema, name=name)
+        kw["native"] = native
+        if handler is None:
+            def decorator(func):
+                batch_size, batch_window_ms = self._resolve_batch_config(func)
+                wrapped = self._wrap_batch_handler(func, native=native) if batch_size else self._wrap_handler(func, route_dependencies=dependencies, route_middlewares=middlewares, native=native)
+                self._app.patch(path, wrapped, body_schema, schema, query_schema=query_schema, batch_size=batch_size, batch_window_ms=batch_window_ms, **kw)
+                self._record("PATCH", path, func, body_schema=body_schema, schema=schema, query_schema=query_schema, **kw)
+                return func
+            return decorator
+        batch_size, batch_window_ms = self._resolve_batch_config(handler)
+        wrapped = self._wrap_batch_handler(handler, native=native) if batch_size else self._wrap_handler(handler, route_dependencies=dependencies, route_middlewares=middlewares, native=native)
+        self._app.patch(path, wrapped, body_schema, schema, query_schema=query_schema, batch_size=batch_size, batch_window_ms=batch_window_ms, **kw)
+        self._record("PATCH", path, handler, body_schema=body_schema, schema=schema, query_schema=query_schema, **kw)
+        return handler
+
+    def query(self, path: str, handler=None, body_schema=None, schema=None, query_schema=None, experimental: bool = True, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None, tags: typing.List[str] = None, summary: str = None, description: str = None, deprecated: bool = False, status_code: int = None, responses: dict = None, operation_id: str = None, openapi_extra: dict = None, name: str = None, include_in_schema: bool = True, native: bool = False):
         """Register a route for the HTTP QUERY method (RFC 10008).
 
         QUERY is safe and idempotent like GET, but carries a request body
         like POST — ideal for queries too large for the URI. By default the
         generated OpenAPI operation is tagged ``experimental``.
         """
+        kw = self._route_kw(tags, summary, description, deprecated, status_code, responses, operation_id, openapi_extra, include_in_schema, name=name)
+        kw["native"] = native
         if handler is None:
             def decorator(func):
-                self._app.query(path, self._wrap_handler(func, route_dependencies=dependencies, route_middlewares=middlewares), body_schema, schema, experimental)
+                self._app.query(path, self._wrap_handler(func, route_dependencies=dependencies, route_middlewares=middlewares, native=native), body_schema, schema, query_schema=query_schema, experimental=experimental, **kw)
+                self._record("QUERY", path, func, body_schema=body_schema, schema=schema, query_schema=query_schema, experimental=experimental, **kw)
                 return func
             return decorator
-        self._app.query(path, self._wrap_handler(handler, route_dependencies=dependencies, route_middlewares=middlewares), body_schema, schema, experimental)
+        self._app.query(path, self._wrap_handler(handler, route_dependencies=dependencies, route_middlewares=middlewares, native=native), body_schema, schema, query_schema=query_schema, experimental=experimental, **kw)
+        self._record("QUERY", path, handler, body_schema=body_schema, schema=schema, query_schema=query_schema, experimental=experimental, **kw)
         return handler
+
+    def head(self, path: str, handler=None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None, tags: typing.List[str] = None, summary: str = None, description: str = None, deprecated: bool = False, status_code: int = None, responses: dict = None, operation_id: str = None, openapi_extra: dict = None, name: str = None, include_in_schema: bool = True, query_schema=None, native: bool = False):
+        if name is not None: self._named_routes[name] = path
+        kw = self._route_kw(tags, summary, description, deprecated, status_code, responses, operation_id, openapi_extra, include_in_schema, name=name)
+        if handler is None:
+            def decorator(func):
+                self._app.head(path, self._wrap_handler(func, route_dependencies=dependencies, route_middlewares=middlewares), query_schema=query_schema, native=native, **kw)
+                self._record("HEAD", path, func, query_schema=query_schema, native=native, **kw)
+                return func
+            return decorator
+        self._app.head(path, self._wrap_handler(handler, route_dependencies=dependencies, route_middlewares=middlewares), query_schema=query_schema, native=native, **kw)
+        self._record("HEAD", path, handler, query_schema=query_schema, native=native, **kw)
+        return handler
+
+    def options(self, path: str, handler=None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None, tags: typing.List[str] = None, summary: str = None, description: str = None, deprecated: bool = False, status_code: int = None, responses: dict = None, operation_id: str = None, openapi_extra: dict = None, name: str = None, include_in_schema: bool = True, query_schema=None, native: bool = False):
+        if name is not None: self._named_routes[name] = path
+        kw = self._route_kw(tags, summary, description, deprecated, status_code, responses, operation_id, openapi_extra, include_in_schema, name=name)
+        if handler is None:
+            def decorator(func):
+                self._app.options(path, self._wrap_handler(func, route_dependencies=dependencies, route_middlewares=middlewares), query_schema=query_schema, native=native, **kw)
+                self._record("OPTIONS", path, func, query_schema=query_schema, native=native, **kw)
+                return func
+            return decorator
+        self._app.options(path, self._wrap_handler(handler, route_dependencies=dependencies, route_middlewares=middlewares), query_schema=query_schema, native=native, **kw)
+        self._record("OPTIONS", path, handler, query_schema=query_schema, native=native, **kw)
+        return handler
+
+    def trace(self, path: str, handler=None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None, tags: typing.List[str] = None, summary: str = None, description: str = None, deprecated: bool = False, status_code: int = None, responses: dict = None, operation_id: str = None, openapi_extra: dict = None, name: str = None, include_in_schema: bool = True, query_schema=None, native: bool = False):
+        kw = self._route_kw(tags, summary, description, deprecated, status_code, responses, operation_id, openapi_extra, include_in_schema, name=name)
+        if handler is None:
+            def decorator(func):
+                self._app.trace(path, self._wrap_handler(func, route_dependencies=dependencies, route_middlewares=middlewares), query_schema=query_schema, native=native, **kw)
+                self._record("TRACE", path, func, query_schema=query_schema, native=native, **kw)
+                return func
+            return decorator
+        self._app.trace(path, self._wrap_handler(handler, route_dependencies=dependencies, route_middlewares=middlewares), query_schema=query_schema, native=native, **kw)
+        self._record("TRACE", path, handler, query_schema=query_schema, native=native, **kw)
+        return handler
+
+    def frontend(self, path: str, directory: str, html: bool = True, check_dir: bool = True):
+        """Serve a static frontend (SPA) from ``directory`` under ``path``.
+
+        When ``html`` is true unknown routes fall back to ``index.html``
+        (SPA client-side routing), mirroring FastAPI's ``StaticFiles(html=True)``.
+        """
+        fallback = "index.html" if html else None
+        self._app.frontend(path, directory, fallback, check_dir)
+        return directory
 
     def add_plugin(self, plugin):
         self._app.use(plugin)
@@ -487,7 +805,7 @@ class JustAPIApp:
         distinct representations of the same resource are not collapsed together.
         """
         self._app.enable_request_coalescing(headers)
-        
+
     def set_grpc_addr(self, addr: str):
         self._app.set_grpc_addr(addr)
         
@@ -524,29 +842,205 @@ class JustAPIApp:
                 elif route["method"] == "WS":
                     self._app.websocket(path, method)
 
-    def include_router(self, router, prefix: str = ""):
+    def route(self, path: str, methods: typing.List[str] = None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None):
+        if methods is None:
+            methods = ["GET"]
+        def decorator(func):
+            for method in methods:
+                m = method.upper()
+                if m == "GET":
+                    self.get(path, func, dependencies=dependencies, middlewares=middlewares)
+                elif m == "POST":
+                    self.post(path, func, dependencies=dependencies, middlewares=middlewares)
+                elif m == "PUT":
+                    self.put(path, func, dependencies=dependencies, middlewares=middlewares)
+                elif m == "DELETE":
+                    self.delete(path, func, dependencies=dependencies, middlewares=middlewares)
+                elif m == "PATCH":
+                    self.patch(path, func, dependencies=dependencies, middlewares=middlewares)
+                elif m == "QUERY":
+                    self.query(path, func, dependencies=dependencies, middlewares=middlewares)
+            return func
+        return decorator
+
+    def include_router(self, router, prefix: str = "", tags: typing.List[str] = None):
         for route in router.routes:
             path = prefix + route["path"]
             # Combine dependencies: App -> Router -> Route
             combined_deps = router.dependencies + route["dependencies"]
             combined_mws = router.middlewares + route.get("middlewares", [])
+            # Include-level tags, then router-level tags, then the route's
+            # own tags (FastAPI merge order).
+            route_tags = (tags or []) + (router.tags or []) + (route.get("tags") or [])
+
+            kw = dict(
+                dependencies=combined_deps,
+                middlewares=combined_mws,
+                tags=route_tags or None,
+                summary=route.get("summary"),
+                description=route.get("description"),
+                deprecated=route.get("deprecated", False),
+                status_code=route.get("status_code"),
+                responses=route.get("responses"),
+                operation_id=route.get("operation_id"),
+                openapi_extra=route.get("openapi_extra"),
+                include_in_schema=route.get("include_in_schema", True),
+                name=route.get("name"),
+            )
 
             if route["method"] == "GET":
-                self.get(path, route["handler"], dependencies=combined_deps, middlewares=combined_mws)
+                self.get(path, route["handler"], **kw)
             elif route["method"] == "POST":
-                self.post(path, route["handler"], body_schema=route["body_schema"], schema=route["schema"], dependencies=combined_deps, middlewares=combined_mws)
+                self.post(path, route["handler"], body_schema=route.get("body_schema"), schema=route.get("schema"), **kw)
             elif route["method"] == "PUT":
-                self.put(path, route["handler"], body_schema=route["body_schema"], schema=route["schema"], dependencies=combined_deps, middlewares=combined_mws)
+                self.put(path, route["handler"], body_schema=route.get("body_schema"), schema=route.get("schema"), **kw)
             elif route["method"] == "PATCH":
-                self.patch(path, route["handler"], body_schema=route["body_schema"], schema=route["schema"], dependencies=combined_deps, middlewares=combined_mws)
+                self.patch(path, route["handler"], body_schema=route.get("body_schema"), schema=route.get("schema"), **kw)
             elif route["method"] == "DELETE":
-                self.delete(path, route["handler"], dependencies=combined_deps, middlewares=combined_mws)
+                self.delete(path, route["handler"], **kw)
             elif route["method"] == "QUERY":
-                self.query(path, route["handler"], body_schema=route.get("body_schema"), schema=route.get("schema"), experimental=route.get("experimental", True), dependencies=combined_deps, middlewares=combined_mws)
+                self.query(path, route["handler"], body_schema=route.get("body_schema"), schema=route.get("schema"), experimental=route.get("experimental", True), **kw)
+            elif route["method"] == "HEAD":
+                self.head(path, route["handler"], **kw)
+            elif route["method"] == "OPTIONS":
+                self.options(path, route["handler"], **kw)
+            elif route["method"] == "TRACE":
+                self.trace(path, route["handler"], **kw)
+            elif route["method"] == "FRONTEND":
+                self.frontend(path, route["directory"], html=route.get("html", True), check_dir=route.get("check_dir", True))
+            elif route["method"] == "TRACE":
+                self.trace(path, route["handler"], **kw)
             elif route["method"] == "SSE":
                 self._app.get(path, self._wrap_sse_handler(route["handler"]))
             elif route["method"] == "WS":
                 self._app.websocket(path, route["handler"])
+
+    def url_for(self, name, **path_params):
+        """Build a URL path for a named route, substituting path parameters.
+
+        Mirrors FastAPI/Starlette ``request.url_for(name, **params)``.
+        """
+        try:
+            path = self._named_routes[name]
+        except KeyError:
+            raise KeyError(f"No route named {name!r} is registered")
+        def repl(m):
+            p = m.group(1)
+            if p not in path_params:
+                raise KeyError(f"Missing path parameter {p!r} for route {name!r}")
+            return quote(str(path_params[p]), safe="")
+        return re.sub(r"{([^}]+)}", repl, path)
+
+    # --- Native MCP tool surface (Rust registry; Python is thin glue) ---
+
+    def tool(self, func=None, *, name=None, description=None, input_schema=None, annotations=None):
+        """Register a Python callable as a native MCP tool.
+
+        The tool is stored in the Rust registry and exposed over
+        ``/_system/tools`` and the bundled MCP server. The input JSON schema is
+        inferred from the function signature / type hints unless ``input_schema``
+        is given. Schema inference is Python glue; the registry and serving live
+        in Rust.
+
+        Usable both bare (``@app.tool``) and with arguments
+        (``@app.tool(description="...")``).
+
+        Example::
+
+            @app.tool(description="Add two numbers")
+            def add(a: int, b: int) -> int:
+                return a + b
+        """
+        def decorator(f):
+            tool_name = name or f.__name__
+            tool_desc = description or (inspect.getdoc(f) or f"Tool {tool_name}")
+            schema_json = input_schema
+            if schema_json is None:
+                schema_json = _infer_tool_schema(f)
+            if isinstance(schema_json, (dict, list)):
+                schema_json = json.dumps(schema_json)
+            self._app.register_tool(tool_name, tool_desc, schema_json, f)
+            return f
+        if func is not None and callable(func):
+            return decorator(func)
+        return decorator
+
+    def list_tools(self):
+        """Return registered tools in MCP ``tools/list`` shape (list of dicts)."""
+        return self._app.list_tools()
+
+    def call_tool(self, name, arguments=None):
+        """Invoke a registered tool; returns the handler result (or a coroutine
+        if the handler is async)."""
+        return self._app.call_tool(name, json.dumps(arguments or {}))
+
+    # --- Agent session state (Rust-backed store) ---
+
+    def create_session(self, data: dict = None, id: str = None):
+        """Create a new session, optionally seeded with a JSON dict and/or a
+        caller-supplied id (used to materialize a known session id such as one
+        passed via ``?session=``)."""
+        raw = json.dumps(data) if data is not None else None
+        return self._app.create_session(id, raw)
+
+    def get_session(self, id: str):
+        """Return a session's data as a dict, or None if unknown."""
+        raw = self._app.get_session(id)
+        return json.loads(raw) if raw else None
+
+    def set_session(self, id: str, data: dict):
+        return self._app.set_session(id, json.dumps(data))
+
+    def update_session(self, id: str, **fields):
+        return self._app.update_session(id, json.dumps(fields))
+
+    def delete_session(self, id: str):
+        return self._app.delete_session(id)
+
+    def enable_sessions(self, cookie_name: str = "justapi_session"):
+        """Enable automatic session id resolution for injected ``Session`` params."""
+        self._sessions_enabled = True
+        self._session_cookie = cookie_name
+        return self
+
+    # --- Streaming validated structured output ---
+
+    def stream_json(self, path: str, schema=None, mode: str = "ndjson", handler=None, dependencies=None):
+        """Register a route that streams JSON objects, validating each against
+        ``schema`` (a JSON Schema dict/str) before it is sent to the client.
+
+        The handler must return a (sync or async) generator yielding
+        JSON-serialisable Python objects. ``mode`` is ``"ndjson"`` (one object
+        per line) or ``"array"`` (a single JSON array). Validation runs in Rust.
+
+        The handler's parameters participate in normal dependency injection, so
+        ``session: Session`` and query-string params work exactly as on a regular
+        route.
+        """
+        schema_json = schema if isinstance(schema, str) else json.dumps(schema or {})
+
+        def decorator(func):
+            @functools.wraps(func)
+            def adapted(*args, **kwargs):
+                gen = func(*args, **kwargs)
+                return ValidatedStreamResponse(gen, schema_json, mode)
+
+            self._app.get(path, self._wrap_handler(adapted, route_dependencies=dependencies))
+            self._record("GET", path, func)
+            return func
+
+        if handler is None:
+            return decorator
+        return decorator(handler)
+
+    def enable_system_routes(self):
+        """Mount ``/_system/help``, ``/_system/help/{name}`` and ``/_system/openapi``.
+
+        These expose the app's full route metadata (signatures, parameters,
+        schemas, docstrings, examples) over HTTP for editors and AI agents.
+        """
+        register_system_routes(self)
+        return self
 
     def run(self, addr: str):
         self._app.run(addr)
@@ -605,65 +1099,136 @@ class JustAPIApp:
         return self._app
 
 class APIRouter:
-    def __init__(self, prefix: str = "", dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None):
+    def __init__(self, prefix: str = "", tags: typing.List[str] = None, responses: dict = None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None, callbacks: typing.List[typing.Callable] = None, deprecated: bool = False, name: str = None, include_in_schema: bool = True):
         self.prefix = prefix
+        self.tags = tags or []
+        self.responses = responses
         self.dependencies = dependencies or []
         self.middlewares = middlewares or []
+        self.callbacks = callbacks or []
+        self.deprecated = deprecated
+        self.include_in_schema = include_in_schema
         self.routes = []
+        self._named_routes = {}
 
-    def get(self, path: str, handler=None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None):
+    def _store(self, method, path, handler, body_schema=None, schema=None, experimental=False,
+               dependencies=None, middlewares=None, tags=None, summary=None, description=None,
+               deprecated=None, status_code=None, responses=None, operation_id=None,
+               openapi_extra=None, include_in_schema=None, name=None):
+        full_path = self.prefix + path
+        # Route-level tags override the router default; include-level merging
+        # happens in JustAPIApp.include_router.
+        if name is not None:
+            self._named_routes[name] = full_path
+        route_tags = tags if tags is not None else (self.tags or [])
+        route_responses = responses if responses is not None else self.responses
+        route_deprecated = deprecated if deprecated else self.deprecated
+        route_include = include_in_schema if include_in_schema is not None else self.include_in_schema
+        self.routes.append({
+            "method": method,
+            "path": full_path,
+            "handler": handler,
+            "body_schema": body_schema,
+            "schema": schema,
+            "experimental": experimental,
+            "dependencies": dependencies or [],
+            "middlewares": middlewares or [],
+            "tags": route_tags or [],
+            "summary": summary,
+            "description": description,
+            "deprecated": route_deprecated,
+            "status_code": status_code,
+            "responses": route_responses,
+            "operation_id": operation_id,
+            "openapi_extra": openapi_extra,
+            "include_in_schema": route_include,
+            "name": name,
+        })
+
+    def get(self, path: str, handler=None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None, tags: typing.List[str] = None, summary: str = None, description: str = None, deprecated: bool = False, status_code: int = None, responses: dict = None, operation_id: str = None, openapi_extra: dict = None, name: str = None, include_in_schema: bool = True):
         if handler is None:
             def decorator(func):
-                self.routes.append({"method": "GET", "path": self.prefix + path, "handler": func, "dependencies": dependencies or [], "middlewares": middlewares or []})
+                self._store("GET", path, func, dependencies=dependencies, middlewares=middlewares, tags=tags, summary=summary, description=description, deprecated=deprecated, status_code=status_code, responses=responses, operation_id=operation_id, openapi_extra=openapi_extra, include_in_schema=include_in_schema, name=name)
                 return func
             return decorator
-        self.routes.append({"method": "GET", "path": self.prefix + path, "handler": handler, "dependencies": dependencies or [], "middlewares": middlewares or []})
+        self._store("GET", path, handler, dependencies=dependencies, middlewares=middlewares, tags=tags, summary=summary, description=description, deprecated=deprecated, status_code=status_code, responses=responses, operation_id=operation_id, openapi_extra=openapi_extra, include_in_schema=include_in_schema, name=name)
         return handler
 
-    def post(self, path: str, handler=None, body_schema=None, schema=None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None):
+    def post(self, path: str, handler=None, body_schema=None, schema=None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None, tags: typing.List[str] = None, summary: str = None, description: str = None, deprecated: bool = False, status_code: int = None, responses: dict = None, operation_id: str = None, openapi_extra: dict = None, name: str = None, include_in_schema: bool = True):
         if handler is None:
             def decorator(func):
-                self.routes.append({"method": "POST", "path": self.prefix + path, "handler": func, "body_schema": body_schema, "schema": schema, "dependencies": dependencies or [], "middlewares": middlewares or []})
+                self._store("POST", path, func, body_schema=body_schema, schema=schema, dependencies=dependencies, middlewares=middlewares, tags=tags, summary=summary, description=description, deprecated=deprecated, status_code=status_code, responses=responses, operation_id=operation_id, openapi_extra=openapi_extra, include_in_schema=include_in_schema, name=name)
                 return func
             return decorator
-        self.routes.append({"method": "POST", "path": self.prefix + path, "handler": handler, "body_schema": body_schema, "schema": schema, "dependencies": dependencies or [], "middlewares": middlewares or []})
+        self._store("POST", path, handler, body_schema=body_schema, schema=schema, dependencies=dependencies, middlewares=middlewares, tags=tags, summary=summary, description=description, deprecated=deprecated, status_code=status_code, responses=responses, operation_id=operation_id, openapi_extra=openapi_extra, include_in_schema=include_in_schema, name=name)
         return handler
 
-    def put(self, path: str, handler=None, body_schema=None, schema=None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None):
+    def put(self, path: str, handler=None, body_schema=None, schema=None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None, tags: typing.List[str] = None, summary: str = None, description: str = None, deprecated: bool = False, status_code: int = None, responses: dict = None, operation_id: str = None, openapi_extra: dict = None, name: str = None, include_in_schema: bool = True):
         if handler is None:
             def decorator(func):
-                self.routes.append({"method": "PUT", "path": self.prefix + path, "handler": func, "body_schema": body_schema, "schema": schema, "dependencies": dependencies or [], "middlewares": middlewares or []})
+                self._store("PUT", path, func, body_schema=body_schema, schema=schema, dependencies=dependencies, middlewares=middlewares, tags=tags, summary=summary, description=description, deprecated=deprecated, status_code=status_code, responses=responses, operation_id=operation_id, openapi_extra=openapi_extra, include_in_schema=include_in_schema, name=name)
                 return func
             return decorator
-        self.routes.append({"method": "PUT", "path": self.prefix + path, "handler": handler, "body_schema": body_schema, "schema": schema, "dependencies": dependencies or [], "middlewares": middlewares or []})
+        self._store("PUT", path, handler, body_schema=body_schema, schema=schema, dependencies=dependencies, middlewares=middlewares, tags=tags, summary=summary, description=description, deprecated=deprecated, status_code=status_code, responses=responses, operation_id=operation_id, openapi_extra=openapi_extra, include_in_schema=include_in_schema, name=name)
         return handler
 
-    def patch(self, path: str, handler=None, body_schema=None, schema=None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None):
+    def patch(self, path: str, handler=None, body_schema=None, schema=None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None, tags: typing.List[str] = None, summary: str = None, description: str = None, deprecated: bool = False, status_code: int = None, responses: dict = None, operation_id: str = None, openapi_extra: dict = None, name: str = None, include_in_schema: bool = True):
         if handler is None:
             def decorator(func):
-                self.routes.append({"method": "PATCH", "path": self.prefix + path, "handler": func, "body_schema": body_schema, "schema": schema, "dependencies": dependencies or [], "middlewares": middlewares or []})
+                self._store("PATCH", path, func, body_schema=body_schema, schema=schema, dependencies=dependencies, middlewares=middlewares, tags=tags, summary=summary, description=description, deprecated=deprecated, status_code=status_code, responses=responses, operation_id=operation_id, openapi_extra=openapi_extra, include_in_schema=include_in_schema, name=name)
                 return func
             return decorator
-        self.routes.append({"method": "PATCH", "path": self.prefix + path, "handler": handler, "body_schema": body_schema, "schema": schema, "dependencies": dependencies or [], "middlewares": middlewares or []})
+        self._store("PATCH", path, handler, body_schema=body_schema, schema=schema, dependencies=dependencies, middlewares=middlewares, tags=tags, summary=summary, description=description, deprecated=deprecated, status_code=status_code, responses=responses, operation_id=operation_id, openapi_extra=openapi_extra, include_in_schema=include_in_schema, name=name)
         return handler
 
-    def delete(self, path: str, handler=None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None):
+    def delete(self, path: str, handler=None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None, tags: typing.List[str] = None, summary: str = None, description: str = None, deprecated: bool = False, status_code: int = None, responses: dict = None, operation_id: str = None, openapi_extra: dict = None, name: str = None, include_in_schema: bool = True):
         if handler is None:
             def decorator(func):
-                self.routes.append({"method": "DELETE", "path": self.prefix + path, "handler": func, "dependencies": dependencies or [], "middlewares": middlewares or []})
+                self._store("DELETE", path, func, dependencies=dependencies, middlewares=middlewares, tags=tags, summary=summary, description=description, deprecated=deprecated, status_code=status_code, responses=responses, operation_id=operation_id, openapi_extra=openapi_extra, include_in_schema=include_in_schema, name=name)
                 return func
             return decorator
-        self.routes.append({"method": "DELETE", "path": self.prefix + path, "handler": handler, "dependencies": dependencies or [], "middlewares": middlewares or []})
+        self._store("DELETE", path, handler, dependencies=dependencies, middlewares=middlewares, tags=tags, summary=summary, description=description, deprecated=deprecated, status_code=status_code, responses=responses, operation_id=operation_id, openapi_extra=openapi_extra, include_in_schema=include_in_schema, name=name)
         return handler
 
-    def query(self, path: str, handler=None, body_schema=None, schema=None, experimental: bool = True, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None):
+    def query(self, path: str, handler=None, body_schema=None, schema=None, experimental: bool = True, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None, tags: typing.List[str] = None, summary: str = None, description: str = None, deprecated: bool = False, status_code: int = None, responses: dict = None, operation_id: str = None, openapi_extra: dict = None, name: str = None, include_in_schema: bool = True):
         if handler is None:
             def decorator(func):
-                self.routes.append({"method": "QUERY", "path": self.prefix + path, "handler": func, "body_schema": body_schema, "schema": schema, "experimental": experimental, "dependencies": dependencies or [], "middlewares": middlewares or []})
+                self._store("QUERY", path, func, body_schema=body_schema, schema=schema, experimental=experimental, dependencies=dependencies, middlewares=middlewares, tags=tags, summary=summary, description=description, deprecated=deprecated, status_code=status_code, responses=responses, operation_id=operation_id, openapi_extra=openapi_extra, include_in_schema=include_in_schema, name=name)
                 return func
             return decorator
-        self.routes.append({"method": "QUERY", "path": self.prefix + path, "handler": handler, "body_schema": body_schema, "schema": schema, "experimental": experimental, "dependencies": dependencies or [], "middlewares": middlewares or []})
+        self._store("QUERY", path, handler, body_schema=body_schema, schema=schema, experimental=experimental, dependencies=dependencies, middlewares=middlewares, tags=tags, summary=summary, description=description, deprecated=deprecated, status_code=status_code, responses=responses, operation_id=operation_id, openapi_extra=openapi_extra, include_in_schema=include_in_schema, name=name)
         return handler
+
+    def head(self, path: str, handler=None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None, tags: typing.List[str] = None, summary: str = None, description: str = None, deprecated: bool = False, status_code: int = None, responses: dict = None, operation_id: str = None, openapi_extra: dict = None, name: str = None, include_in_schema: bool = True):
+        if handler is None:
+            def decorator(func):
+                self._store("HEAD", path, func, dependencies=dependencies, middlewares=middlewares, tags=tags, summary=summary, description=description, deprecated=deprecated, status_code=status_code, responses=responses, operation_id=operation_id, openapi_extra=openapi_extra, include_in_schema=include_in_schema, name=name)
+                return func
+            return decorator
+        self._store("HEAD", path, handler, dependencies=dependencies, middlewares=middlewares, tags=tags, summary=summary, description=description, deprecated=deprecated, status_code=status_code, responses=responses, operation_id=operation_id, openapi_extra=openapi_extra, include_in_schema=include_in_schema, name=name)
+        return handler
+
+    def options(self, path: str, handler=None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None, tags: typing.List[str] = None, summary: str = None, description: str = None, deprecated: bool = False, status_code: int = None, responses: dict = None, operation_id: str = None, openapi_extra: dict = None, name: str = None, include_in_schema: bool = True):
+        if handler is None:
+            def decorator(func):
+                self._store("OPTIONS", path, func, dependencies=dependencies, middlewares=middlewares, tags=tags, summary=summary, description=description, deprecated=deprecated, status_code=status_code, responses=responses, operation_id=operation_id, openapi_extra=openapi_extra, include_in_schema=include_in_schema, name=name)
+                return func
+            return decorator
+        self._store("OPTIONS", path, handler, dependencies=dependencies, middlewares=middlewares, tags=tags, summary=summary, description=description, deprecated=deprecated, status_code=status_code, responses=responses, operation_id=operation_id, openapi_extra=openapi_extra, include_in_schema=include_in_schema, name=name)
+        return handler
+
+    def trace(self, path: str, handler=None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None, tags: typing.List[str] = None, summary: str = None, description: str = None, deprecated: bool = False, status_code: int = None, responses: dict = None, operation_id: str = None, openapi_extra: dict = None, name: str = None, include_in_schema: bool = True):
+        if handler is None:
+            def decorator(func):
+                self._store("TRACE", path, func, dependencies=dependencies, middlewares=middlewares, tags=tags, summary=summary, description=description, deprecated=deprecated, status_code=status_code, responses=responses, operation_id=operation_id, openapi_extra=openapi_extra, include_in_schema=include_in_schema, name=name)
+                return func
+            return decorator
+        self._store("TRACE", path, handler, dependencies=dependencies, middlewares=middlewares, tags=tags, summary=summary, description=description, deprecated=deprecated, status_code=status_code, responses=responses, operation_id=operation_id, openapi_extra=openapi_extra, include_in_schema=include_in_schema, name=name)
+        return handler
+
+    def frontend(self, path: str, directory: str, html: bool = True, check_dir: bool = True):
+        """Register a static frontend (SPA) mount under ``path``."""
+        self.routes.append({"method": "FRONTEND", "path": path, "directory": directory, "html": html, "check_dir": check_dir})
 
     def sse(self, path: str, handler=None, dependencies: typing.List[Depends] = None):
         if handler is None:
@@ -682,6 +1247,58 @@ class APIRouter:
             return decorator
         self.routes.append({"method": "WS", "path": self.prefix + path, "handler": handler, "dependencies": dependencies or []})
         return handler
+
+    def route(self, path: str, methods: typing.List[str] = None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None):
+        if methods is None:
+            methods = ["GET"]
+        def decorator(func):
+            for method in methods:
+                m = method.upper()
+                if m == "GET":
+                    self.get(path, func, dependencies=dependencies, middlewares=middlewares)
+                elif m == "POST":
+                    self.post(path, func, dependencies=dependencies, middlewares=middlewares)
+                elif m == "PUT":
+                    self.put(path, func, dependencies=dependencies, middlewares=middlewares)
+                elif m == "DELETE":
+                    self.delete(path, func, dependencies=dependencies, middlewares=middlewares)
+                elif m == "PATCH":
+                    self.patch(path, func, dependencies=dependencies, middlewares=middlewares)
+                elif m == "QUERY":
+                    self.query(path, func, dependencies=dependencies, middlewares=middlewares)
+                elif m == "HEAD":
+                    self.head(path, func, dependencies=dependencies, middlewares=middlewares)
+                elif m == "OPTIONS":
+                    self.options(path, func, dependencies=dependencies, middlewares=middlewares)
+                elif m == "TRACE":
+                    self.trace(path, func, dependencies=dependencies, middlewares=middlewares)
+            return func
+        return decorator
+
+    def include_router(self, router, prefix: str = "", tags: typing.List[str] = None):
+        self._named_routes.update(router._named_routes)
+        for route in router.routes:
+            new_route = route.copy()
+            # route["path"] already has router.prefix; prepend our prefix + include prefix.
+            new_route["path"] = self.prefix + prefix + route["path"]
+            new_route["dependencies"] = router.dependencies + route["dependencies"]
+            new_route["middlewares"] = router.middlewares + route.get("middlewares", [])
+            # Include-level tags are prepended to the route's existing tags.
+            new_route["tags"] = (tags or []) + route.get("tags", [])
+            self.routes.append(new_route)
+
+    def url_for(self, name, **path_params):
+        """Build a URL path for a named route, substituting path parameters."""
+        try:
+            path = self._named_routes[name]
+        except KeyError:
+            raise KeyError(f"No route named {name!r} is registered")
+        def repl(m):
+            p = m.group(1)
+            if p not in path_params:
+                raise KeyError(f"Missing path parameter {p!r} for route {name!r}")
+            return quote(str(path_params[p]), safe="")
+        return re.sub(r"{([^}]+)}", repl, path)
 
 class Controller:
     """Base class for controller classes."""
@@ -738,8 +1355,18 @@ def route_sse(path: str, dependencies: typing.List[Depends] = None):
 
 def route_websocket(path: str, dependencies: typing.List[Depends] = None):
     def decorator(func):
-        func.__route_info__ = {"method": "WS", "path": path, "dependencies": dependencies or []}
-        return func
+        @functools.wraps(func)
+        async def wrapper(websocket):
+            ws = WebSocket(websocket)
+            try:
+                return await func(ws)
+            except WebSocketException as exc:
+                # FastAPI/Starlette semantics: a raised WebSocketException
+                # closes the socket with the given close code and reason.
+                await ws.close(exc.code, exc.reason)
+                return
+        wrapper.__route_info__ = {"method": "WS", "path": path, "dependencies": dependencies or []}
+        return wrapper
     return decorator
 
 class _JustAPIGrpcContext:
@@ -801,3 +1428,5 @@ class JustAPITestClient:
     def __new__(cls, app, database=None):
         inner = getattr(app, "_inner", app)
         return _JustAPITestClient(inner, database=database)
+
+JustAPI = JustAPIApp

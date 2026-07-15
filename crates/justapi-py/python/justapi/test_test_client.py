@@ -100,7 +100,7 @@ def test_test_client_wrong_method():
     client = JustAPITestClient(app)
 
     resp = client.get("/echo")
-    assert resp["status"] == 404
+    assert resp["status"] == 405
 
 
 def test_test_client_schema_validation():
