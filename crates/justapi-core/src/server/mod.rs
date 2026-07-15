@@ -401,7 +401,7 @@ impl Server {
         router.insert(Method::POST, "/graphql", Handler::GraphQL).expect("valid");
         router.set_fallback(Handler::Static {
             status: StatusCode::NOT_FOUND,
-            body: r#"{"error":"not found"}"#,
+            body: r#"{"detail":"not found"}"#,
         });
         self.router = Some(router);
         self.default_routes_set = true;
@@ -855,7 +855,7 @@ pub async fn serve(listener: TcpListener) -> Result<()> {
     let mut router: Router<Handler> = Router::new();
     router.set_fallback(Handler::Static {
         status: StatusCode::NOT_FOUND,
-        body: r#"{"error":"not found"}"#,
+        body: r#"{"detail":"not found"}"#,
     });
     router
         .insert(
@@ -924,22 +924,24 @@ fn make_handler(
                 }
                 Err(crate::router::RouterError::MethodNotAllowed) => Ok(json_response(
                     StatusCode::METHOD_NOT_ALLOWED,
-                    r#"{"error":"method not allowed"}"#,
+                    r#"{"detail":"method not allowed"}"#,
                 )),
-                Err(crate::router::RouterError::NotFound) => {
-                    let fb = router.fallback().unwrap();
-                    let m = Match { handler: fb, params: matchit::Params::new() };
-                    execute_handler(
-                        m,
-                        req,
-                        &pool,
-                        &metrics,
-                        Some(&health_registry),
-                        Some(&graphql_schema),
-                        openapi_spec.as_deref().map(|s| s.as_str()),
-                    )
-                    .await
-                }
+                Err(crate::router::RouterError::NotFound) => match router.fallback() {
+                    Some(fb) => {
+                        let m = Match { handler: fb, params: matchit::Params::new() };
+                        execute_handler(
+                            m,
+                            req,
+                            &pool,
+                            &metrics,
+                            Some(&health_registry),
+                            Some(&graphql_schema),
+                            openapi_spec.as_deref().map(|s| s.as_str()),
+                        )
+                        .await
+                    }
+                    None => Ok(json_response(StatusCode::NOT_FOUND, r#"{"detail":"not found"}"#)),
+                },
             }
         })
     })
@@ -1205,7 +1207,7 @@ async fn serve_http(
                                 }
                                 Ok(json_response(
                                     StatusCode::NOT_FOUND,
-                                    r#"{"error":"not found"}"#
+                                    r#"{"detail":"not found"}"#
                                 ))
                             }
                         },
@@ -1222,7 +1224,7 @@ async fn serve_http(
                             );
                             Ok(json_response(
                                 StatusCode::GATEWAY_TIMEOUT,
-                                r#"{"error":"request timeout"}"#
+                                r#"{"detail":"request timeout"}"#
                             ))
                         }
                     }
@@ -1315,7 +1317,10 @@ async fn execute_handler(
                     bytes
                 }
                 Err(_) => {
-                    return Ok(json_response(StatusCode::BAD_REQUEST, r#"{"error":"bad request"}"#))
+                    return Ok(json_response(
+                        StatusCode::BAD_REQUEST,
+                        r#"{"detail":"bad request"}"#,
+                    ))
                 }
             };
             let mut buf = pool.acquire(body_bytes.len());
@@ -1678,7 +1683,7 @@ async fn serve_with_tls(
                                     }
                                     Ok(json_response(
                                         StatusCode::NOT_FOUND,
-                                        r#"{"error":"not found"}"#,
+                                        r#"{"detail":"not found"}"#,
                                     ))
                                 },
                         },
@@ -1694,7 +1699,7 @@ async fn serve_with_tls(
                             );
                             Ok(json_response(
                                 StatusCode::GATEWAY_TIMEOUT,
-                                r#"{"error":"request timeout"}"#
+                                r#"{"detail":"request timeout"}"#
                             ))
                         }
                     }
@@ -1778,7 +1783,7 @@ mod tests {
         let mut router: Router<Handler> = Router::new();
         router.set_fallback(Handler::Static {
             status: StatusCode::NOT_FOUND,
-            body: r#"{"error":"not found"}"#,
+            body: r#"{"detail":"not found"}"#,
         });
         let fb = router.fallback().unwrap();
         assert!(matches!(fb, Handler::Static { .. }));

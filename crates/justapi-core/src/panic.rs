@@ -39,12 +39,12 @@ pub fn with_panic_recovery(handler: HandlerFn) -> HandlerFn {
                     tracing::error!(error = %e, "Handler returned error");
                     Ok(json_response(
                         StatusCode::INTERNAL_SERVER_ERROR,
-                        r#"{"error":"Internal error"}"#,
+                        r#"{"detail":"Internal error"}"#,
                     ))
                 }
                 Err(_panic) => Ok(json_response(
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    r#"{"error":"Internal server error"}"#,
+                    r#"{"detail":"Internal server error"}"#,
                 )),
             }
         })

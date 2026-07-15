@@ -323,7 +323,7 @@ fn parse_range(range_str: &str, total_len: u64) -> Option<ByteRange> {
 }
 
 fn not_found() -> Result<Response<ResponseBody>> {
-    Ok(crate::json_response(StatusCode::NOT_FOUND, r#"{"error":"not found"}"#))
+    Ok(crate::json_response(StatusCode::NOT_FOUND, r#"{"detail":"not found"}"#))
 }
 
 fn guess_content_type(path: &Path) -> &'static str {

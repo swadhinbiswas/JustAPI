@@ -79,7 +79,7 @@ async fn test_loopback_404() {
     let addr = start_server().await;
     let (status, body) = send_request(addr, Method::GET, "/nonexistent", None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
-    assert_eq!(&body[..], br#"{"error":"not found"}"#);
+    assert_eq!(&body[..], br#"{"detail":"not found"}"#);
 }
 
 #[tokio::test]
