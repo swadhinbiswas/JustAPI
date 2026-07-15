@@ -1079,3 +1079,28 @@ k8s guides, OpenAPI.
       disaggregated P/D structural benchmark).
 
 
+
+---
+
+## Production-readiness hardening (post-audit, 2026-07-15)
+
+Status of the P0 sprint driven by the MED#9 audit verdict (see BENCHMARKS.md
+"Production-readiness verdict").
+
+- [x] **Security defaults** (ADR-050): CORS secure-by-default (empty origins),
+      `*`+credentials bug fixed; `SecurityHeaders` opt-in via
+      `enable_secure_headers()` (non-HSTS default; HSTS on `with_hsts=True`).
+- [x] **Observability** (ADR-051): Python `/metrics` exports real Prometheus
+      data; `/ready` reflects the `HealthRegistry` (503 on unhealthy dep);
+      `register_health_check(name, callable)` wires Python probes.
+- [x] **API footguns** (prior session, in save-point): `with_default_routes`/
+      `with_handler` clobber is a hard panic; OpenAPI UI (`/openapi.json`,
+      `/docs`, `/redoc`) served for Python apps.
+- [x] **Dead code / CI** (prior session): HTTP/3 removed (ADR-049); fuzz CI
+      fixed to run all 7 real targets; orphan root `.rs` removed; `rustfmt.toml`
+      stable-only so `cargo fmt --check` passes.
+- [ ] **Error-contract unification** (P1): three inconsistent shapes
+      (`{"error"}` vs `{"detail"}` vs RFC-7807) should collapse to one.
+- [ ] **Panic isolation** (P1/P2): `panic = "abort"` means one bad request can
+      kill the process; a GIL-path `catch_unwind` around handlers + an unwrap
+      audit on the hot path (server/ + native/) is still TODO.
