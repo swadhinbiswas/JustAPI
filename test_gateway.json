@@ -1,0 +1,1 @@
+{"routes": {"/api/proxy": {"GET": {"upstream": "http://v2.upstream.com"}}, "/api/new-proxy": {"GET": {"upstream": "http://v3.new.upstream.com"}}}}

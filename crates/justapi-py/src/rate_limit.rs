@@ -15,9 +15,7 @@ impl PyRateLimiter {
             let limiter = RateLimiter::new_redis(&redis_url)
                 .await
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-            Ok(PyRateLimiter {
-                inner: Arc::new(limiter),
-            })
+            Ok(PyRateLimiter { inner: Arc::new(limiter) })
         };
         pyo3_async_runtimes::tokio::future_into_py(py, fut)
     }
@@ -36,10 +34,7 @@ impl PyRateLimiter {
                 .check_limit(&key, capacity, replenish_rate, tokens)
                 .await
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-            Ok(PyRateLimitResult {
-                allowed: res.allowed,
-                retry_after_ms: res.retry_after_ms,
-            })
+            Ok(PyRateLimitResult { allowed: res.allowed, retry_after_ms: res.retry_after_ms })
         };
         pyo3_async_runtimes::tokio::future_into_py(py, fut)
     }

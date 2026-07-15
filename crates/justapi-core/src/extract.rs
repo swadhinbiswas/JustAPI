@@ -43,11 +43,7 @@ impl<T: DeserializeOwned> Form<T> {
         B::Error: std::error::Error + Send + Sync + 'static,
     {
         let (_parts, body) = req.into_parts();
-        let bytes = body
-            .collect()
-            .await
-            .map_err(|e| anyhow::anyhow!(e))?
-            .to_bytes();
+        let bytes = body.collect().await.map_err(|e| anyhow::anyhow!(e))?.to_bytes();
         Self::from_bytes(&bytes)
     }
 }
@@ -194,11 +190,7 @@ mod tests {
     type TestBody = http_body_util::Full<Bytes>;
 
     fn test_req(method: Method, uri: &str) -> Request<TestBody> {
-        Request::builder()
-            .method(method)
-            .uri(uri)
-            .body(TestBody::new(Bytes::new()))
-            .unwrap()
+        Request::builder().method(method).uri(uri).body(TestBody::new(Bytes::new())).unwrap()
     }
 
     fn form_req(body: &str) -> Request<TestBody> {
@@ -286,8 +278,7 @@ mod tests {
     #[test]
     fn cookies_single() {
         let mut req = test_req(Method::GET, "/");
-        req.headers_mut()
-            .insert("cookie", "session_id=abc123".parse().unwrap());
+        req.headers_mut().insert("cookie", "session_id=abc123".parse().unwrap());
         let jar = CookieJar::from_request(&req);
         assert_eq!(jar.get("session_id"), Some("abc123"));
     }
@@ -295,10 +286,7 @@ mod tests {
     #[test]
     fn cookies_multiple() {
         let mut req = test_req(Method::GET, "/");
-        req.headers_mut().insert(
-            "cookie",
-            "session=xyz; theme=dark; lang=en-US".parse().unwrap(),
-        );
+        req.headers_mut().insert("cookie", "session=xyz; theme=dark; lang=en-US".parse().unwrap());
         let jar = CookieJar::from_request(&req);
         assert_eq!(jar.get("session"), Some("xyz"));
         assert_eq!(jar.get("theme"), Some("dark"));
@@ -316,8 +304,7 @@ mod tests {
     #[test]
     fn cookies_url_decoded() {
         let mut req = test_req(Method::GET, "/");
-        req.headers_mut()
-            .insert("cookie", "name=Hello%20World".parse().unwrap());
+        req.headers_mut().insert("cookie", "name=Hello%20World".parse().unwrap());
         let jar = CookieJar::from_request(&req);
         assert_eq!(jar.get("name"), Some("Hello World"));
     }
@@ -325,8 +312,7 @@ mod tests {
     #[test]
     fn cookies_plus_decoded() {
         let mut req = test_req(Method::GET, "/");
-        req.headers_mut()
-            .insert("cookie", "q=rust+lang".parse().unwrap());
+        req.headers_mut().insert("cookie", "q=rust+lang".parse().unwrap());
         let jar = CookieJar::from_request(&req);
         assert_eq!(jar.get("q"), Some("rust lang"));
     }
@@ -336,8 +322,7 @@ mod tests {
     #[test]
     fn header_value_present() {
         let mut req = test_req(Method::GET, "/");
-        req.headers_mut()
-            .insert("x-api-key", "secret".parse().unwrap());
+        req.headers_mut().insert("x-api-key", "secret".parse().unwrap());
         assert_eq!(get_header(&req, "x-api-key"), Some("secret"));
     }
 

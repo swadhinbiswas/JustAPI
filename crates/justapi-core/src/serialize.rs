@@ -66,11 +66,7 @@ pub struct JsonResponse<T: serde::Serialize> {
 impl<T: serde::Serialize> JsonResponse<T> {
     /// Create a new `JsonResponse` with status 200 OK and no extra headers.
     pub fn new(data: T) -> Self {
-        Self {
-            data,
-            status: StatusCode::OK,
-            headers: Vec::new(),
-        }
+        Self { data, status: StatusCode::OK, headers: Vec::new() }
     }
 
     /// Set the HTTP status code.
@@ -125,10 +121,7 @@ mod tests {
 
     #[test]
     fn test_to_json_string() {
-        let payload = TestPayload {
-            message: "hello".into(),
-            count: 42,
-        };
+        let payload = TestPayload { message: "hello".into(), count: 42 };
         let json = to_json_string(&payload).unwrap();
         assert!(json.contains(r#""message":"hello""#));
         assert!(json.contains(r#""count":42"#));
@@ -136,10 +129,7 @@ mod tests {
 
     #[test]
     fn test_to_json_vec() {
-        let payload = TestPayload {
-            message: "hello".into(),
-            count: 42,
-        };
+        let payload = TestPayload { message: "hello".into(), count: 42 };
         let vec = to_json_vec(&payload).unwrap();
         let json = String::from_utf8(vec).unwrap();
         assert!(json.contains(r#""message":"hello""#));
@@ -157,11 +147,7 @@ mod tests {
 
     #[tokio::test]
     async fn json_response_default_status() {
-        let user = UserResp {
-            id: 1,
-            name: "Alice".into(),
-            email: None,
-        };
+        let user = UserResp { id: 1, name: "Alice".into(), email: None };
         let resp = JsonResponse::new(user).into_response().unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let body = resp.into_body().collect().await.unwrap().to_bytes();
@@ -174,11 +160,7 @@ mod tests {
 
     #[tokio::test]
     async fn json_response_custom_status_and_headers() {
-        let user = UserResp {
-            id: 2,
-            name: "Bob".into(),
-            email: Some("bob@example.com".into()),
-        };
+        let user = UserResp { id: 2, name: "Bob".into(), email: Some("bob@example.com".into()) };
         let resp = JsonResponse::new(user)
             .with_status(StatusCode::CREATED)
             .with_header("x-request-id", "req-999")
@@ -196,11 +178,7 @@ mod tests {
 
     #[tokio::test]
     async fn json_response_from_convenience() {
-        let user = UserResp {
-            id: 3,
-            name: "Carol".into(),
-            email: None,
-        };
+        let user = UserResp { id: 3, name: "Carol".into(), email: None };
         let resp = json_response_from(user).into_response().unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
     }
@@ -212,9 +190,7 @@ mod tests {
             #[serde(rename = "userId")]
             user_id: u64,
         }
-        let resp = JsonResponse::new(Renamed { user_id: 42 })
-            .into_response()
-            .unwrap();
+        let resp = JsonResponse::new(Renamed { user_id: 42 }).into_response().unwrap();
         let body = resp.into_body().collect().await.unwrap().to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["userId"], 42);
@@ -234,10 +210,7 @@ mod tests {
 
         let mut meta = HashMap::new();
         meta.insert("page".into(), serde_json::json!(1));
-        let val = WithMeta {
-            data: "content".into(),
-            meta,
-        };
+        let val = WithMeta { data: "content".into(), meta };
         let resp = JsonResponse::new(val).into_response().unwrap();
         let body = resp.into_body().collect().await.unwrap().to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();

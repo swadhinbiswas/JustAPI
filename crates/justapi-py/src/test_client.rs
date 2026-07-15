@@ -45,11 +45,43 @@ pub struct JustAPITestClient {
 impl JustAPITestClient {
     #[new]
     #[pyo3(signature = (app, database=None))]
-    fn new(app: &mut JustAPIApp, py: Python<'_>, database: Option<String>) -> PyResult<Self> {
-        let router = Arc::new(std::mem::take(&mut app.router));
-        let handlers = Arc::new(std::mem::take(&mut app.handlers));
-        let schemas = Arc::new(std::mem::take(&mut app.schemas));
-        let schema_jsons = Arc::new(std::mem::take(&mut app.schema_jsons));
+    fn new(app: Py<JustAPIApp>, py: Python<'_>, database: Option<String>) -> PyResult<Self> {
+        // Surface the app object on `request.app`.
+        let app_py: Option<Py<PyAny>> = Some(app.clone_ref(py).into_bound(py).into_any().unbind());
+        let mut app_ref = app.borrow_mut(py);
+        // Clone (don't take) the routing tables: the test client should not
+        // consume the app, otherwise a second JustAPITestClient built from the
+        // same app sees an empty router and returns 404 for every route. The
+        // real `app.run` server is what legitimately takes ownership.
+        let router = Arc::new(app_ref.router.clone());
+        let handlers =
+            Arc::new(app_ref.handlers.iter().map(|h| h.clone_ref(py)).collect::<Vec<_>>());
+        let schemas = Arc::new(
+            app_ref.schemas.iter().map(|s| s.as_ref().map(|v| v.clone_ref(py))).collect::<Vec<_>>(),
+        );
+        let schema_jsons = Arc::new(app_ref.schema_jsons.clone());
+        let query_schema_jsons = Arc::new(app_ref.query_schema_jsons.clone());
+
+        // Per-handler flag: does this route need a Python `Request` object?
+        let needs_request: Vec<bool> = app_ref
+            .handlers
+            .iter()
+            .map(|h| {
+                h.bind(py)
+                    .getattr("_needs_request")
+                    .and_then(|v| v.extract::<bool>())
+                    .unwrap_or(true)
+            })
+            .collect();
+        let needs_request = Arc::new(needs_request);
+        let native: Vec<bool> = app_ref.native.clone();
+        let native = Arc::new(native);
+        let schema_validators: Vec<Option<justapi_core::validate::CompiledValidator>> = app_ref
+            .schema_jsons
+            .iter()
+            .map(|s| s.as_ref().and_then(|j| justapi_core::validate::compile_schema(j).ok()))
+            .collect();
+        let schema_validators = Arc::new(schema_validators);
 
         // Initialize database pool if a database URL is provided.
         let (db_pool, db_url_str) = if let Some(ref url) = database {
@@ -79,13 +111,18 @@ impl JustAPITestClient {
             handlers,
             schemas,
             schema_jsons,
+            query_schema_jsons,
             db_pool.clone(),
             db_url_str,
+            app_py,
+            needs_request,
+            native,
+            schema_validators,
         );
 
         // Apply request coalescing (singleflight) if the app enabled it, so the
         // test client exercises the same pipeline as the real server.
-        let coalesce_headers = app.coalesce_headers.take();
+        let coalesce_headers = app_ref.coalesce_headers.take();
         let handler: HandlerFn = match coalesce_headers {
             Some(headers) => {
                 let mut coalescer = RequestCoalescer::new();
@@ -109,10 +146,7 @@ impl JustAPITestClient {
         };
 
         let test_client = TestClient::new(handler);
-        Ok(Self {
-            test_client: Some(test_client),
-            db_pool,
-        })
+        Ok(Self { test_client: Some(test_client), db_pool })
     }
 
     fn get(&self, py: Python<'_>, path: &str) -> PyResult<Py<PyAny>> {
@@ -123,6 +157,20 @@ impl JustAPITestClient {
     fn post(&self, py: Python<'_>, path: &str, body: Vec<u8>) -> PyResult<Py<PyAny>> {
         let path = path.to_owned();
         self.do_request(py, move |client, rt| rt.block_on(client.post(&path, body)))
+    }
+
+    #[pyo3(signature = (path, body, headers))]
+    fn post_with(
+        &self,
+        py: Python<'_>,
+        path: &str,
+        body: Vec<u8>,
+        headers: Vec<(String, String)>,
+    ) -> PyResult<Py<PyAny>> {
+        let path = path.to_owned();
+        let hdr: Vec<(&str, &str)> =
+            headers.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        self.do_request(py, move |client, rt| rt.block_on(client.post_with(&path, body, &hdr)))
     }
 
     fn put(&self, py: Python<'_>, path: &str, body: Vec<u8>) -> PyResult<Py<PyAny>> {

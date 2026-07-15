@@ -73,19 +73,13 @@ pub struct MiddlewareChain<B = Incoming> {
 
 impl<B> Clone for MiddlewareChain<B> {
     fn clone(&self) -> Self {
-        Self {
-            middlewares: self.middlewares.clone(),
-            handler: self.handler.clone(),
-        }
+        Self { middlewares: self.middlewares.clone(), handler: self.handler.clone() }
     }
 }
 
 impl<B> MiddlewareChain<B> {
     pub fn new(handler: HandlerFn<B>) -> Self {
-        Self {
-            middlewares: Vec::new(),
-            handler,
-        }
+        Self { middlewares: Vec::new(), handler }
     }
 
     pub fn add(&mut self, mw: impl Middleware<B> + 'static) {
@@ -104,11 +98,7 @@ impl<B> MiddlewareChain<B> {
         if self.middlewares.is_empty() {
             return (self.handler)(req).await;
         }
-        let next = Next {
-            middlewares: &self.middlewares,
-            index: 0,
-            handler: &self.handler,
-        };
+        let next = Next { middlewares: &self.middlewares, index: 0, handler: &self.handler };
         next.run(req).await
     }
 }
@@ -142,12 +132,8 @@ impl Default for AccessLogger {
 }
 
 #[async_trait]
-impl Middleware<Incoming> for AccessLogger {
-    async fn handle(
-        &self,
-        req: Request<Incoming>,
-        next: Next<'_, Incoming>,
-    ) -> Result<Response<ResponseBody>> {
+impl<B: Send + 'static> Middleware<B> for AccessLogger {
+    async fn handle(&self, req: Request<B>, next: Next<'_, B>) -> Result<Response<ResponseBody>> {
         let method = req.method().clone();
         let uri = req.uri().clone();
         let start = std::time::Instant::now();
@@ -160,9 +146,7 @@ impl Middleware<Incoming> for AccessLogger {
         };
         let duration = start.elapsed();
 
-        let _ = self
-            .tx
-            .send(format!("[{method}] {uri} - {status} - {duration:?}"));
+        let _ = self.tx.send(format!("[{method}] {uri} - {status} - {duration:?}"));
 
         res
     }
@@ -248,12 +232,8 @@ fn origin_matches(origin: &str, allowed: &[String]) -> bool {
 }
 
 #[async_trait]
-impl Middleware<Incoming> for Cors {
-    async fn handle(
-        &self,
-        req: Request<Incoming>,
-        next: Next<'_, Incoming>,
-    ) -> Result<Response<ResponseBody>> {
+impl<B: Send + 'static> Middleware<B> for Cors {
+    async fn handle(&self, req: Request<B>, next: Next<'_, B>) -> Result<Response<ResponseBody>> {
         let req_origin = req.headers().get("origin").and_then(|v| v.to_str().ok());
 
         let allow_all = self.allow_origins.iter().any(|a| a == "*");
@@ -284,10 +264,8 @@ impl Middleware<Incoming> for Cors {
                 builder = builder.header("access-control-allow-credentials", "true");
             }
             if !self.expose_headers.is_empty() {
-                builder = builder.header(
-                    "access-control-expose-headers",
-                    self.expose_headers.join(", "),
-                );
+                builder =
+                    builder.header("access-control-expose-headers", self.expose_headers.join(", "));
             }
             if add_vary {
                 builder = builder.header("vary", "Origin");
@@ -303,13 +281,9 @@ impl Middleware<Incoming> for Cors {
         }
 
         let mut resp = next.run(req).await?;
-        resp.headers_mut().insert(
-            "access-control-allow-origin",
-            matched_origin.parse().unwrap(),
-        );
+        resp.headers_mut().insert("access-control-allow-origin", matched_origin.parse().unwrap());
         if self.allow_credentials {
-            resp.headers_mut()
-                .insert("access-control-allow-credentials", "true".parse().unwrap());
+            resp.headers_mut().insert("access-control-allow-credentials", "true".parse().unwrap());
         }
         if !self.expose_headers.is_empty() {
             resp.headers_mut().insert(
@@ -368,12 +342,8 @@ impl SecurityHeaders {
 }
 
 #[async_trait]
-impl Middleware<Incoming> for SecurityHeaders {
-    async fn handle(
-        &self,
-        req: Request<Incoming>,
-        next: Next<'_, Incoming>,
-    ) -> Result<Response<ResponseBody>> {
+impl<B: Send + 'static> Middleware<B> for SecurityHeaders {
+    async fn handle(&self, req: Request<B>, next: Next<'_, B>) -> Result<Response<ResponseBody>> {
         let mut resp = next.run(req).await?;
         let headers = resp.headers_mut();
 
@@ -458,10 +428,8 @@ impl JwtAuth {
     pub fn from_ec_pem(pem: &str) -> anyhow::Result<Self> {
         let decoding_key = jsonwebtoken::DecodingKey::from_ec_pem(pem.as_bytes())?;
         let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::ES256);
-        validation.algorithms = vec![
-            jsonwebtoken::Algorithm::ES256,
-            jsonwebtoken::Algorithm::ES384,
-        ];
+        validation.algorithms =
+            vec![jsonwebtoken::Algorithm::ES256, jsonwebtoken::Algorithm::ES384];
         Ok(Self {
             validation,
             decoding_key,
@@ -489,10 +457,8 @@ impl JwtAuth {
     pub fn from_ec_der(der: &[u8]) -> Self {
         let decoding_key = jsonwebtoken::DecodingKey::from_ec_der(der);
         let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::ES256);
-        validation.algorithms = vec![
-            jsonwebtoken::Algorithm::ES256,
-            jsonwebtoken::Algorithm::ES384,
-        ];
+        validation.algorithms =
+            vec![jsonwebtoken::Algorithm::ES256, jsonwebtoken::Algorithm::ES384];
         Self {
             validation,
             decoding_key,
@@ -523,8 +489,7 @@ impl JwtAuth {
 
     /// Require JWT validation for requests whose path starts with the given prefix.
     pub fn require_for(mut self, path_prefix: &str, requirement: JwtRequirement) -> Self {
-        self.route_rules
-            .push((path_prefix.to_string(), requirement));
+        self.route_rules.push((path_prefix.to_string(), requirement));
         self
     }
 
@@ -557,10 +522,7 @@ fn check_claims(
                 Some(role_list) => {
                     let user_roles: Vec<&str> =
                         role_list.iter().filter_map(|v| v.as_str()).collect();
-                    if required_roles
-                        .iter()
-                        .any(|r| user_roles.contains(&r.as_str()))
-                    {
+                    if required_roles.iter().any(|r| user_roles.contains(&r.as_str())) {
                         Ok(())
                     } else {
                         Err("missing required role")
@@ -584,10 +546,7 @@ fn check_claims(
                 });
             match scopes {
                 Some(user_scopes) => {
-                    if required_scopes
-                        .iter()
-                        .any(|s| user_scopes.contains(&s.as_str()))
-                    {
+                    if required_scopes.iter().any(|s| user_scopes.contains(&s.as_str())) {
                         Ok(())
                     } else {
                         Err("missing required scope")
@@ -600,12 +559,8 @@ fn check_claims(
 }
 
 #[async_trait]
-impl Middleware<Incoming> for JwtAuth {
-    async fn handle(
-        &self,
-        req: Request<Incoming>,
-        next: Next<'_, Incoming>,
-    ) -> Result<Response<ResponseBody>> {
+impl<B: Send + 'static> Middleware<B> for JwtAuth {
+    async fn handle(&self, req: Request<B>, next: Next<'_, B>) -> Result<Response<ResponseBody>> {
         let path = req.uri().path().to_string();
         let requirement = self.requirement_for_path(&path);
 
@@ -614,10 +569,7 @@ impl Middleware<Incoming> for JwtAuth {
             return next.run(req).await;
         }
 
-        let auth_header = req
-            .headers()
-            .get("authorization")
-            .and_then(|v| v.to_str().ok());
+        let auth_header = req.headers().get("authorization").and_then(|v| v.to_str().ok());
         let token = match auth_header {
             Some(h) if h.starts_with("Bearer ") => &h[7..],
             _ => {
@@ -656,9 +608,7 @@ impl RateLimiter {
         let quota = governor::Quota::with_period(duration)
             .unwrap()
             .allow_burst(NonZeroU32::new(max_burst).unwrap());
-        Self {
-            limiter: governor::RateLimiter::direct(quota),
-        }
+        Self { limiter: governor::RateLimiter::direct(quota) }
     }
 
     pub fn per_second(max_burst: u32) -> Self {
@@ -667,12 +617,8 @@ impl RateLimiter {
 }
 
 #[async_trait]
-impl Middleware<Incoming> for RateLimiter {
-    async fn handle(
-        &self,
-        req: Request<Incoming>,
-        next: Next<'_, Incoming>,
-    ) -> Result<Response<ResponseBody>> {
+impl<B: Send + 'static> Middleware<B> for RateLimiter {
+    async fn handle(&self, req: Request<B>, next: Next<'_, B>) -> Result<Response<ResponseBody>> {
         match self.limiter.check() {
             Ok(()) => next.run(req).await,
             Err(negative) => {
@@ -683,10 +629,8 @@ impl Middleware<Incoming> for RateLimiter {
                 let mut resp = json_error(StatusCode::TOO_MANY_REQUESTS, "rate limit exceeded");
                 resp.headers_mut()
                     .insert("retry-after", retry_after_secs.to_string().parse().unwrap());
-                resp.headers_mut().insert(
-                    "x-ratelimit-reset",
-                    retry_after_secs.to_string().parse().unwrap(),
-                );
+                resp.headers_mut()
+                    .insert("x-ratelimit-reset", retry_after_secs.to_string().parse().unwrap());
                 Ok(resp)
             }
         }
@@ -730,12 +674,8 @@ impl IpRateLimiter {
 }
 
 #[async_trait]
-impl Middleware<Incoming> for IpRateLimiter {
-    async fn handle(
-        &self,
-        req: Request<Incoming>,
-        next: Next<'_, Incoming>,
-    ) -> Result<Response<ResponseBody>> {
+impl<B: Send + 'static> Middleware<B> for IpRateLimiter {
+    async fn handle(&self, req: Request<B>, next: Next<'_, B>) -> Result<Response<ResponseBody>> {
         let ip = req
             .extensions()
             .get::<SocketAddr>()
@@ -752,10 +692,8 @@ impl Middleware<Incoming> for IpRateLimiter {
                 let mut resp = json_error(StatusCode::TOO_MANY_REQUESTS, "rate limit exceeded");
                 resp.headers_mut()
                     .insert("retry-after", retry_after_secs.to_string().parse().unwrap());
-                resp.headers_mut().insert(
-                    "x-ratelimit-reset",
-                    retry_after_secs.to_string().parse().unwrap(),
-                );
+                resp.headers_mut()
+                    .insert("x-ratelimit-reset", retry_after_secs.to_string().parse().unwrap());
                 Ok(resp)
             }
         }
@@ -843,11 +781,7 @@ impl ApiKeyAuth {
     }
 
     fn extract_key<B>(&self, req: &Request<B>) -> Option<String> {
-        if let Some(v) = req
-            .headers()
-            .get(&self.header_name)
-            .and_then(|v| v.to_str().ok())
-        {
+        if let Some(v) = req.headers().get(&self.header_name).and_then(|v| v.to_str().ok()) {
             return Some(v.to_string());
         }
         if let Some(qp) = &self.query_param {
@@ -890,12 +824,8 @@ impl ApiKeyAuth {
 }
 
 #[async_trait]
-impl Middleware<Incoming> for ApiKeyAuth {
-    async fn handle(
-        &self,
-        req: Request<Incoming>,
-        next: Next<'_, Incoming>,
-    ) -> Result<Response<ResponseBody>> {
+impl<B: Send + 'static> Middleware<B> for ApiKeyAuth {
+    async fn handle(&self, req: Request<B>, next: Next<'_, B>) -> Result<Response<ResponseBody>> {
         self.handle_inner(req, next).await
     }
 }
@@ -1018,21 +948,15 @@ impl OAuth2Password {
 
             Box::pin(async move {
                 if req.method() != Method::POST {
-                    return Ok(json_error(
-                        StatusCode::METHOD_NOT_ALLOWED,
-                        "only POST is allowed",
-                    ));
+                    return Ok(json_error(StatusCode::METHOD_NOT_ALLOWED, "only POST is allowed"));
                 }
 
                 if req.uri().path() != path {
                     return Ok(json_error(StatusCode::NOT_FOUND, "not found"));
                 }
 
-                let content_type = req
-                    .headers()
-                    .get("content-type")
-                    .and_then(|v| v.to_str().ok())
-                    .unwrap_or("");
+                let content_type =
+                    req.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("");
                 if !content_type.starts_with("application/x-www-form-urlencoded") {
                     return Ok(json_error(
                         StatusCode::UNSUPPORTED_MEDIA_TYPE,
@@ -1040,11 +964,7 @@ impl OAuth2Password {
                     ));
                 }
 
-                let body_bytes = req
-                    .collect()
-                    .await
-                    .map_err(|e| anyhow::anyhow!(e))?
-                    .to_bytes();
+                let body_bytes = req.collect().await.map_err(|e| anyhow::anyhow!(e))?.to_bytes();
                 let body_str = String::from_utf8_lossy(&body_bytes).to_string();
 
                 let params: HashMap<String, String> = serde_urlencoded::from_str(&body_str)
@@ -1169,185 +1089,8 @@ mod tests {
 
     type TestBody = http_body_util::Full<Bytes>;
 
-    #[async_trait]
-    impl Middleware<TestBody> for Cors {
-        async fn handle(
-            &self,
-            req: Request<TestBody>,
-            next: Next<'_, TestBody>,
-        ) -> Result<Response<ResponseBody>> {
-            let req_origin = req.headers().get("origin").and_then(|v| v.to_str().ok());
-
-            let allow_all = self.allow_origins.iter().any(|a| a == "*");
-
-            let matched_origin = if allow_all {
-                "*".to_string()
-            } else if let Some(origin) = req_origin {
-                if origin_matches(origin, &self.allow_origins) {
-                    origin.to_string()
-                } else {
-                    return next.run(req).await;
-                }
-            } else {
-                return next.run(req).await;
-            };
-
-            let add_vary = !allow_all;
-
-            if req.method() == Method::OPTIONS {
-                let mut builder = Response::builder()
-                    .status(StatusCode::NO_CONTENT)
-                    .header("access-control-allow-origin", matched_origin)
-                    .header("access-control-allow-methods", &self.allow_methods)
-                    .header("access-control-allow-headers", &self.allow_headers)
-                    .header("access-control-max-age", &self.max_age);
-
-                if self.allow_credentials {
-                    builder = builder.header("access-control-allow-credentials", "true");
-                }
-                if !self.expose_headers.is_empty() {
-                    builder = builder.header(
-                        "access-control-expose-headers",
-                        self.expose_headers.join(", "),
-                    );
-                }
-                if add_vary {
-                    builder = builder.header("vary", "Origin");
-                }
-
-                let resp = builder
-                    .body(UnsyncBoxBody::new(
-                        http_body_util::Full::new(Bytes::new())
-                            .map_err(|e: std::convert::Infallible| -> anyhow::Error { match e {} }),
-                    ))
-                    .unwrap();
-                return Ok(resp);
-            }
-
-            let mut resp = next.run(req).await?;
-            resp.headers_mut().insert(
-                "access-control-allow-origin",
-                matched_origin.parse().unwrap(),
-            );
-            if self.allow_credentials {
-                resp.headers_mut()
-                    .insert("access-control-allow-credentials", "true".parse().unwrap());
-            }
-            if !self.expose_headers.is_empty() {
-                resp.headers_mut().insert(
-                    "access-control-expose-headers",
-                    self.expose_headers.join(", ").parse().unwrap(),
-                );
-            }
-            if add_vary {
-                resp.headers_mut().insert("vary", "Origin".parse().unwrap());
-            }
-            Ok(resp)
-        }
-    }
-
-    #[async_trait]
-    impl Middleware<TestBody> for SecurityHeaders {
-        async fn handle(
-            &self,
-            req: Request<TestBody>,
-            next: Next<'_, TestBody>,
-        ) -> Result<Response<ResponseBody>> {
-            let mut resp = next.run(req).await?;
-            let headers = resp.headers_mut();
-            headers.insert("x-content-type-options", "nosniff".parse().unwrap());
-            if self.include_xfo {
-                headers.insert("x-frame-options", "DENY".parse().unwrap());
-            }
-            let hsts_val = if self.include_hsts_preload {
-                format!("{}; preload", self.hsts.trim_end_matches("; preload"))
-            } else {
-                self.hsts.clone()
-            };
-            headers.insert("strict-transport-security", hsts_val.parse().unwrap());
-            if self.include_csp {
-                let csp = self.csp_directives.join("; ");
-                headers.insert("content-security-policy", csp.parse().unwrap());
-            }
-            headers.insert("x-xss-protection", "0".parse().unwrap());
-            Ok(resp)
-        }
-    }
-
-    #[async_trait]
-    impl Middleware<TestBody> for JwtAuth {
-        async fn handle(
-            &self,
-            req: Request<TestBody>,
-            next: Next<'_, TestBody>,
-        ) -> Result<Response<ResponseBody>> {
-            let path = req.uri().path().to_string();
-            let requirement = self.requirement_for_path(&path);
-
-            if matches!(requirement, JwtRequirement::None) {
-                return next.run(req).await;
-            }
-
-            let auth_header = req
-                .headers()
-                .get("authorization")
-                .and_then(|v| v.to_str().ok());
-            let token = match auth_header {
-                Some(h) if h.starts_with("Bearer ") => &h[7..],
-                _ => {
-                    return Ok(json_error(
-                        StatusCode::UNAUTHORIZED,
-                        "missing or invalid authorization header",
-                    ))
-                }
-            };
-            match jsonwebtoken::decode::<serde_json::Value>(
-                token,
-                &self.decoding_key,
-                &self.validation,
-            ) {
-                Ok(token_data) => {
-                    if let Err(msg) = check_claims(&token_data.claims, requirement) {
-                        return Ok(json_error(StatusCode::FORBIDDEN, msg));
-                    }
-                    let mut req = req;
-                    req.extensions_mut().insert(token_data.claims);
-                    next.run(req).await
-                }
-                Err(_) => Ok(json_error(StatusCode::UNAUTHORIZED, "invalid token")),
-            }
-        }
-    }
-
-    #[async_trait]
-    impl Middleware<TestBody> for RateLimiter {
-        async fn handle(
-            &self,
-            req: Request<TestBody>,
-            next: Next<'_, TestBody>,
-        ) -> Result<Response<ResponseBody>> {
-            match self.limiter.check() {
-                Ok(()) => next.run(req).await,
-                Err(negative) => {
-                    let clock = governor::clock::DefaultClock::default();
-                    let now = clock.now();
-                    let wait = negative.wait_time_from(now);
-                    let retry_after_secs = wait.as_secs().max(1);
-                    let mut resp = json_error(StatusCode::TOO_MANY_REQUESTS, "rate limit exceeded");
-                    resp.headers_mut()
-                        .insert("retry-after", retry_after_secs.to_string().parse().unwrap());
-                    Ok(resp)
-                }
-            }
-        }
-    }
-
     fn test_req(method: Method, uri: &str) -> Request<TestBody> {
-        Request::builder()
-            .method(method)
-            .uri(uri)
-            .body(TestBody::new(Bytes::new()))
-            .unwrap()
+        Request::builder().method(method).uri(uri).body(TestBody::new(Bytes::new())).unwrap()
     }
 
     fn test_req_with_header(method: Method, uri: &str, key: &str, val: &str) -> Request<TestBody> {
@@ -1485,10 +1228,7 @@ mod tests {
         chain.add(Cors::new().allow_origin("https://example.com"));
         let req = test_req_with_header(Method::GET, "/hello", "origin", "https://example.com");
         let resp = chain.run(req).await.unwrap();
-        assert_eq!(
-            resp.headers()["access-control-allow-origin"],
-            "https://example.com"
-        );
+        assert_eq!(resp.headers()["access-control-allow-origin"], "https://example.com");
         assert_eq!(resp.headers()["vary"], "Origin");
     }
 
@@ -1525,10 +1265,7 @@ mod tests {
         chain.add(Cors::new().expose_headers(&["x-custom-header", "x-trace-id"]));
         let req = test_req_with_header(Method::GET, "/hello", "origin", "https://example.com");
         let resp = chain.run(req).await.unwrap();
-        assert_eq!(
-            resp.headers()["access-control-expose-headers"],
-            "x-custom-header, x-trace-id"
-        );
+        assert_eq!(resp.headers()["access-control-expose-headers"], "x-custom-header, x-trace-id");
     }
 
     #[tokio::test]
@@ -1544,18 +1281,11 @@ mod tests {
                 .allow_methods("POST, OPTIONS")
                 .allow_headers("Authorization, Content-Type"),
         );
-        let req = test_req_with_header(
-            Method::OPTIONS,
-            "/hello",
-            "origin",
-            "https://app.example.com",
-        );
+        let req =
+            test_req_with_header(Method::OPTIONS, "/hello", "origin", "https://app.example.com");
         let resp = chain.run(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NO_CONTENT);
-        assert_eq!(
-            resp.headers()["access-control-allow-origin"],
-            "https://app.example.com"
-        );
+        assert_eq!(resp.headers()["access-control-allow-origin"], "https://app.example.com");
         assert_eq!(resp.headers()["access-control-allow-credentials"], "true");
         assert_eq!(resp.headers()["vary"], "Origin");
     }
@@ -1659,10 +1389,7 @@ mod tests {
         chain.add(
             JwtAuth::from_secret(b"secret")
                 .default_requirement(JwtRequirement::None)
-                .require_for(
-                    "/api",
-                    JwtRequirement::Scopes(vec!["read:data".to_string()]),
-                ),
+                .require_for("/api", JwtRequirement::Scopes(vec!["read:data".to_string()])),
         );
         let token = jsonwebtoken::encode(
             &jsonwebtoken::Header::default(),
@@ -1689,10 +1416,7 @@ mod tests {
         chain.add(
             JwtAuth::from_secret(b"secret")
                 .default_requirement(JwtRequirement::None)
-                .require_for(
-                    "/api",
-                    JwtRequirement::Scopes(vec!["admin:all".to_string()]),
-                ),
+                .require_for("/api", JwtRequirement::Scopes(vec!["admin:all".to_string()])),
         );
         let token = jsonwebtoken::encode(
             &jsonwebtoken::Header::default(),
@@ -1712,17 +1436,6 @@ mod tests {
 
     // --- ApiKeyAuth tests ------------------------------------------------
 
-    #[async_trait]
-    impl Middleware<TestBody> for ApiKeyAuth {
-        async fn handle(
-            &self,
-            req: Request<TestBody>,
-            next: Next<'_, TestBody>,
-        ) -> Result<Response<ResponseBody>> {
-            self.handle_inner(req, next).await
-        }
-    }
-
     fn api_chain(handler: HandlerFn<TestBody>, auth: ApiKeyAuth) -> MiddlewareChain<TestBody> {
         let mut chain = MiddlewareChain::new(handler);
         chain.add(auth);
@@ -1734,10 +1447,8 @@ mod tests {
         let handler: HandlerFn<TestBody> = Arc::new(|_req: Request<TestBody>| {
             Box::pin(async { Ok(json_response(StatusCode::OK, "ok")) })
         });
-        let auth = ApiKeyAuth::new("x-api-key").with_key(
-            "secret-123",
-            serde_json::json!({"sub": "user-1", "roles": ["admin"]}),
-        );
+        let auth = ApiKeyAuth::new("x-api-key")
+            .with_key("secret-123", serde_json::json!({"sub": "user-1", "roles": ["admin"]}));
         let chain = api_chain(handler, auth);
         let req = test_req_with_header(Method::GET, "/v1/models", "x-api-key", "secret-123");
         let resp = chain.run(req).await.unwrap();
@@ -1909,11 +1620,8 @@ mod tests {
             jsonwebtoken::DecodingKey::from_secret(b"test"),
         );
         let handler: HandlerFn<TestBody> = oauth2.token_handler();
-        let req = form_req(
-            Method::POST,
-            "/token",
-            "grant_type=password&username=alice&password=wrong",
-        );
+        let req =
+            form_req(Method::POST, "/token", "grant_type=password&username=alice&password=wrong");
         let resp = handler(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
@@ -1932,18 +1640,12 @@ mod tests {
             jsonwebtoken::DecodingKey::from_secret(b"test"),
         );
         let handler: HandlerFn<TestBody> = oauth2.token_handler();
-        let req = form_req(
-            Method::POST,
-            "/token",
-            "grant_type=password&username=alice&password=secret",
-        );
+        let req =
+            form_req(Method::POST, "/token", "grant_type=password&username=alice&password=secret");
         let resp = handler(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let body: serde_json::Value = serde_json::from_slice(
-            &http_body_util::BodyExt::collect(resp.into_body())
-                .await
-                .unwrap()
-                .to_bytes(),
+            &http_body_util::BodyExt::collect(resp.into_body()).await.unwrap().to_bytes(),
         )
         .unwrap();
         assert!(body.get("access_token").and_then(|v| v.as_str()).is_some());
@@ -1966,17 +1668,11 @@ mod tests {
         );
         // 1. Get a token from the token handler.
         let handler: HandlerFn<TestBody> = oauth2.token_handler();
-        let req = form_req(
-            Method::POST,
-            "/token",
-            "grant_type=password&username=alice&password=secret",
-        );
+        let req =
+            form_req(Method::POST, "/token", "grant_type=password&username=alice&password=secret");
         let resp = handler(req).await.unwrap();
         let body: serde_json::Value = serde_json::from_slice(
-            &http_body_util::BodyExt::collect(resp.into_body())
-                .await
-                .unwrap()
-                .to_bytes(),
+            &http_body_util::BodyExt::collect(resp.into_body()).await.unwrap().to_bytes(),
         )
         .unwrap();
         let token = body["access_token"].as_str().unwrap().to_string();
@@ -1991,10 +1687,7 @@ mod tests {
                     "claims": claims,
                     "ok": true,
                 });
-                Ok(json_response(
-                    StatusCode::OK,
-                    &serde_json::to_string(&body).unwrap(),
-                ))
+                Ok(json_response(StatusCode::OK, &serde_json::to_string(&body).unwrap()))
             })
         });
         let mut chain = MiddlewareChain::new(handler2);

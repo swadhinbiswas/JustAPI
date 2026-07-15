@@ -17,10 +17,7 @@ fn mock_tokenize_detokenize_roundtrip() {
 #[test]
 fn mock_generate_respects_max_tokens() {
     let model = MockModel::new(26);
-    let params = SamplingParams {
-        max_tokens: 10,
-        ..Default::default()
-    };
+    let params = SamplingParams { max_tokens: 10, ..Default::default() };
     let count = std::cell::Cell::new(0usize);
     let reason = model
         .generate(&[0], &params, &|t| {
@@ -37,11 +34,7 @@ fn mock_generate_respects_max_tokens() {
 fn mock_generate_stops_on_stop_token() {
     let model = MockModel::new(26);
     // Starting from prompt [0], next is 1 ('b'); stop when we produce token 3.
-    let params = SamplingParams {
-        max_tokens: 100,
-        stop_tokens: vec![3],
-        ..Default::default()
-    };
+    let params = SamplingParams { max_tokens: 100, stop_tokens: vec![3], ..Default::default() };
     let produced: Vec<u32> = Vec::new();
     let produced = std::sync::Mutex::new(produced);
     let reason = model
@@ -73,10 +66,7 @@ fn engine_registers_and_lists_mock() {
 async fn engine_generate_streams_tokens() {
     let engine = Engine::new(EngineDevice::Cpu).unwrap();
     engine.register_mock("demo");
-    let params = SamplingParams {
-        max_tokens: 8,
-        ..Default::default()
-    };
+    let params = SamplingParams { max_tokens: 8, ..Default::default() };
     let mut rx = engine.generate("demo", &[0], params).unwrap();
 
     let mut count = 0;
@@ -127,11 +117,7 @@ fn engine_speculative_decoding_end_to_end() {
     let draft = std::sync::Arc::new(MockModel::new(32));
     engine.register_speculative("spec", target, draft, 4, 7);
 
-    let params = SamplingParams {
-        max_tokens: 20,
-        temperature: 0.0,
-        ..Default::default()
-    };
+    let params = SamplingParams { max_tokens: 20, temperature: 0.0, ..Default::default() };
 
     // Collect the speculatively-decoded stream.
     let mut spec_rx = engine.generate("spec", &[0], params.clone()).unwrap();
@@ -148,10 +134,7 @@ fn engine_speculative_decoding_end_to_end() {
     while let Some(tok) = plain_rx.blocking_recv() {
         plain_ids.push(tok.id);
     }
-    assert_eq!(
-        spec_ids, plain_ids,
-        "speculation must not change the output"
-    );
+    assert_eq!(spec_ids, plain_ids, "speculation must not change the output");
 }
 
 #[test]
@@ -159,11 +142,7 @@ fn acceptance_rate_perfect_draft_is_one() {
     // Direct verify of AcceptanceStats with a perfect draft.
     let target = MockModel::new(32);
     let draft = MockModel::new(32);
-    let params = SamplingParams {
-        max_tokens: 30,
-        temperature: 0.0,
-        ..Default::default()
-    };
+    let params = SamplingParams { max_tokens: 30, temperature: 0.0, ..Default::default() };
     let out = std::cell::RefCell::new(Vec::new());
     let (_finish, stats) =
         justapi_inference::speculative_generate(&target, &draft, &[0], &params, 4, 11, &|t| {

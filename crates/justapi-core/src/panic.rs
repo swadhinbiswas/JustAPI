@@ -29,9 +29,7 @@ pub fn with_panic_recovery(handler: HandlerFn) -> HandlerFn {
                 );
             }));
 
-            let result = std::panic::AssertUnwindSafe(handler(req))
-                .catch_unwind()
-                .await;
+            let result = std::panic::AssertUnwindSafe(handler(req)).catch_unwind().await;
 
             std::panic::set_hook(prev);
 

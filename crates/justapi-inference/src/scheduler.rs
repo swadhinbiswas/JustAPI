@@ -272,11 +272,8 @@ impl Scheduler {
 
     /// Snapshot of scheduler state.
     pub fn stats(&self) -> SchedulerStats {
-        let num_prefilling = self
-            .running
-            .iter()
-            .filter(|s| s.state == SeqState::Prefilling)
-            .count();
+        let num_prefilling =
+            self.running.iter().filter(|s| s.state == SeqState::Prefilling).count();
         SchedulerStats {
             num_waiting: self.wait_queue.len(),
             num_running: self.running.len(),
@@ -314,10 +311,7 @@ impl Scheduler {
     /// How many tokens a running sequence has generated so far, if it is
     /// currently running.
     pub fn running_seq_generated(&self, seq_id: u64) -> Option<usize> {
-        self.running
-            .iter()
-            .find(|s| s.seq.id() == seq_id)
-            .map(|s| s.num_generated)
+        self.running.iter().find(|s| s.seq.id() == seq_id).map(|s| s.num_generated)
     }
 
     // -- scheduling ---------------------------------------------------------
@@ -401,8 +395,7 @@ impl Scheduler {
             for _ in 0..uncached_blocks {
                 if seq.grow(&mut self.pool).is_none() {
                     let freed = self.prefix.evict_filter(uncached_blocks, |bs| {
-                        bs.iter()
-                            .all(|b| self.prefix_refs.get(b).copied().unwrap_or(0) == 0)
+                        bs.iter().all(|b| self.prefix_refs.get(b).copied().unwrap_or(0) == 0)
                     });
                     for b in freed {
                         self.pool.unpin(b);
@@ -449,11 +442,7 @@ impl Scheduler {
 
         // Decode capacity: at most one token per running sequence that is
         // in decode mode.
-        let decode_count = self
-            .running
-            .iter()
-            .filter(|s| s.state == SeqState::Decoding)
-            .count();
+        let decode_count = self.running.iter().filter(|s| s.state == SeqState::Decoding).count();
         let decode_tokens = decode_count.min(token_budget);
         token_budget = token_budget.saturating_sub(decode_tokens);
 
@@ -488,11 +477,7 @@ impl Scheduler {
                 s.state = SeqState::Decoding;
             }
 
-            prefill.push(PrefillStep {
-                seq_id: s.seq.id(),
-                tokens,
-                computed_tokens,
-            });
+            prefill.push(PrefillStep { seq_id: s.seq.id(), tokens, computed_tokens });
         }
 
         // Fill decode list.
@@ -504,11 +489,7 @@ impl Scheduler {
 
         self.last_back_pressure = back_pressure;
 
-        Schedule {
-            prefill,
-            decode,
-            back_pressure,
-        }
+        Schedule { prefill, decode, back_pressure }
     }
 
     // -- step completion ----------------------------------------------------
@@ -527,8 +508,7 @@ impl Scheduler {
             return;
         }
         let cache_tokens = cache_blocks * BLOCK_SIZE;
-        self.prefix
-            .insert(&prompt[..cache_tokens], &blocks[..cache_blocks]);
+        self.prefix.insert(&prompt[..cache_tokens], &blocks[..cache_blocks]);
         for &b in &blocks[..cache_blocks] {
             let entry = self.prefix_refs.entry(b).or_insert(0);
             if *entry == 0 {
@@ -673,10 +653,7 @@ mod tests {
         NewRequest {
             id,
             prompt: (0..8).collect(),
-            sampling_params: SamplingParams {
-                max_tokens: 16,
-                ..Default::default()
-            },
+            sampling_params: SamplingParams { max_tokens: 16, ..Default::default() },
             prefix_cached_tokens: 0,
             cached_blocks: Vec::new(),
         }
@@ -720,10 +697,7 @@ mod tests {
         sched.add_request(NewRequest {
             id: 1,
             prompt: (0..10).collect(), // 10 tokens
-            sampling_params: SamplingParams {
-                max_tokens: 8,
-                ..Default::default()
-            },
+            sampling_params: SamplingParams { max_tokens: 8, ..Default::default() },
             prefix_cached_tokens: 0,
             cached_blocks: Vec::new(),
         });
@@ -776,10 +750,7 @@ mod tests {
         sched.add_request(NewRequest {
             id: 20,
             prompt: (0..16).collect(),
-            sampling_params: SamplingParams {
-                max_tokens: 8,
-                ..Default::default()
-            },
+            sampling_params: SamplingParams { max_tokens: 8, ..Default::default() },
             prefix_cached_tokens: 0,
             cached_blocks: Vec::new(),
         }); // internal seq_id = 2
@@ -842,10 +813,7 @@ mod tests {
         sched.add_request(NewRequest {
             id: 1,
             prompt: (0..4).collect(),
-            sampling_params: SamplingParams {
-                max_tokens: 3,
-                ..Default::default()
-            },
+            sampling_params: SamplingParams { max_tokens: 3, ..Default::default() },
             prefix_cached_tokens: 0,
             cached_blocks: Vec::new(),
         });
@@ -907,10 +875,7 @@ mod tests {
         sched.add_request(NewRequest {
             id: 1,
             prompt: (0..48).collect(),
-            sampling_params: SamplingParams {
-                max_tokens: 8,
-                ..Default::default()
-            },
+            sampling_params: SamplingParams { max_tokens: 8, ..Default::default() },
             prefix_cached_tokens: 32, // 2 blocks × 16 tokens
             cached_blocks: vec![b0, b1],
         });
@@ -987,10 +952,7 @@ mod tests {
         sched.add_request(NewRequest {
             id: 1,
             prompt: (0..48).collect(),
-            sampling_params: SamplingParams {
-                max_tokens: 1,
-                ..Default::default()
-            },
+            sampling_params: SamplingParams { max_tokens: 1, ..Default::default() },
             prefix_cached_tokens: 0,
             cached_blocks: Vec::new(),
         });
@@ -1008,19 +970,13 @@ mod tests {
         sched.add_request(NewRequest {
             id: 2,
             prompt: (0..48).collect(),
-            sampling_params: SamplingParams {
-                max_tokens: 1,
-                ..Default::default()
-            },
+            sampling_params: SamplingParams { max_tokens: 1, ..Default::default() },
             prefix_cached_tokens: 0,
             cached_blocks: Vec::new(),
         });
         let s = sched.schedule();
         // Nothing to prefill; the cached prefix covers the whole prompt.
-        assert!(
-            s.prefill.is_empty(),
-            "shared prefix should be reused, not prefilled"
-        );
+        assert!(s.prefill.is_empty(), "shared prefix should be reused, not prefilled");
         assert_eq!(s.decode.len(), 1);
         // The hit should have been recorded and 48 tokens saved.
         let stats = sched.prefix_cache().stats();
@@ -1037,10 +993,7 @@ mod tests {
         sched.add_request(NewRequest {
             id: 1,
             prompt: (0..48).collect(), // 3 blocks
-            sampling_params: SamplingParams {
-                max_tokens: 1,
-                ..Default::default()
-            },
+            sampling_params: SamplingParams { max_tokens: 1, ..Default::default() },
             prefix_cached_tokens: 0,
             cached_blocks: Vec::new(),
         });
@@ -1052,10 +1005,7 @@ mod tests {
         sched.add_request(NewRequest {
             id: 2,
             prompt: (0..64).collect(),
-            sampling_params: SamplingParams {
-                max_tokens: 1,
-                ..Default::default()
-            },
+            sampling_params: SamplingParams { max_tokens: 1, ..Default::default() },
             prefix_cached_tokens: 0,
             cached_blocks: Vec::new(),
         });
@@ -1081,10 +1031,7 @@ mod tests {
             sched.add_request(NewRequest {
                 id: i,
                 prompt,
-                sampling_params: SamplingParams {
-                    max_tokens: 1,
-                    ..Default::default()
-                },
+                sampling_params: SamplingParams { max_tokens: 1, ..Default::default() },
                 prefix_cached_tokens: 0,
                 cached_blocks: Vec::new(),
             });
@@ -1106,10 +1053,7 @@ mod tests {
         sched.add_request(NewRequest {
             id: 1,
             prompt: (0..48).collect(),
-            sampling_params: SamplingParams {
-                max_tokens: 1,
-                ..Default::default()
-            },
+            sampling_params: SamplingParams { max_tokens: 1, ..Default::default() },
             prefix_cached_tokens: 0,
             cached_blocks: Vec::new(),
         });
@@ -1127,10 +1071,7 @@ mod tests {
         sched.add_request(NewRequest {
             id: 2,
             prompt: (0..48).collect(),
-            sampling_params: SamplingParams {
-                max_tokens: 1,
-                ..Default::default()
-            },
+            sampling_params: SamplingParams { max_tokens: 1, ..Default::default() },
             prefix_cached_tokens: 0,
             cached_blocks: Vec::new(),
         });

@@ -26,13 +26,9 @@ impl WasmEngine {
 
         let mut linker = Linker::new(&self.engine);
         // Link host functions if needed (e.g., logging)
-        linker.func_wrap(
-            "env",
-            "log",
-            |_caller: Caller<'_, ()>, _ptr: i32, _len: i32| {
-                // Placeholder for host logging from WASM
-            },
-        )?;
+        linker.func_wrap("env", "log", |_caller: Caller<'_, ()>, _ptr: i32, _len: i32| {
+            // Placeholder for host logging from WASM
+        })?;
 
         let instance = linker.instantiate_async(&mut store, &self.module).await?;
 
@@ -41,9 +37,7 @@ impl WasmEngine {
         // - `deallocate(ptr: i32, size: i32)`
         // - `process_request(ptr: i32, len: i32) -> i64` (returns (ptr << 32) | len)
 
-        let memory = instance
-            .get_memory(&mut store, "memory")
-            .context("Failed to find memory")?;
+        let memory = instance.get_memory(&mut store, "memory").context("Failed to find memory")?;
 
         let allocate = instance
             .get_typed_func::<i32, i32>(&mut store, "allocate")

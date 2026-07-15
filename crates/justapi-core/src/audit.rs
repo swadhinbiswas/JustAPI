@@ -14,10 +14,7 @@ pub struct AuditRule {
 
 impl AuditRule {
     pub fn new() -> Self {
-        Self {
-            methods: Vec::new(),
-            paths: Vec::new(),
-        }
+        Self { methods: Vec::new(), paths: Vec::new() }
     }
 
     pub fn method(mut self, method: Method) -> Self {

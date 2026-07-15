@@ -53,20 +53,12 @@ impl Migration {
             .and_then(|s| s.to_str())
             .ok_or_else(|| format!("Invalid filename: {:?}", path))?;
         let (version, name) = Self::parse_filename(full_filename).ok_or_else(|| {
-            format!(
-                "Migration filename must be <version>_<name>.sql, got: {:?}",
-                full_filename
-            )
+            format!("Migration filename must be <version>_<name>.sql, got: {:?}", full_filename)
         })?;
         let content =
             fs::read_to_string(path).map_err(|e| format!("Cannot read {:?}: {}", path, e))?;
         let (up_sql, down_sql) = Self::parse_content(&content);
-        Ok(Migration {
-            version,
-            name,
-            up_sql,
-            down_sql,
-        })
+        Ok(Migration { version, name, up_sql, down_sql })
     }
 }
 
@@ -78,9 +70,7 @@ pub struct Migrator {
 
 impl Migrator {
     pub fn new() -> Self {
-        Self {
-            migrations: Vec::new(),
-        }
+        Self { migrations: Vec::new() }
     }
 
     pub fn discover(&mut self, dir: &Path) -> Result<(), String> {
@@ -115,16 +105,11 @@ impl Migrator {
             if applied.contains(&migration.version) {
                 continue;
             }
-            tracing::info!(
-                "Running migration UP v{} ({})",
-                migration.version,
-                migration.name
-            );
+            tracing::info!("Running migration UP v{} ({})", migration.version, migration.name);
             pool.execute(&migration.up_sql)
                 .await
                 .map_err(|e| format!("Migration v{} error: {}", migration.version, e))?;
-            self.record_migration(pool, migration.version, &migration.name)
-                .await?;
+            self.record_migration(pool, migration.version, &migration.name).await?;
             applied_list.push(migration.clone());
         }
         Ok(applied_list)
@@ -171,9 +156,7 @@ impl Migrator {
                  )"
             }
         };
-        pool.execute(sql)
-            .await
-            .map_err(|e| format!("Create tracking table error: {}", e))?;
+        pool.execute(sql).await.map_err(|e| format!("Create tracking table error: {}", e))?;
         Ok(())
     }
 
@@ -211,20 +194,13 @@ impl Migrator {
                 )
             }
         };
-        pool.execute(&sql)
-            .await
-            .map_err(|e| format!("Record migration error: {}", e))?;
+        pool.execute(&sql).await.map_err(|e| format!("Record migration error: {}", e))?;
         Ok(())
     }
 
     async fn remove_migration(&self, pool: &AnyPool, version: u64) -> Result<(), String> {
-        let sql = format!(
-            "DELETE FROM _justapi_migrations WHERE version = {}",
-            version
-        );
-        pool.execute(&sql)
-            .await
-            .map_err(|e| format!("Delete migration error: {}", e))?;
+        let sql = format!("DELETE FROM _justapi_migrations WHERE version = {}", version);
+        pool.execute(&sql).await.map_err(|e| format!("Delete migration error: {}", e))?;
         Ok(())
     }
 }

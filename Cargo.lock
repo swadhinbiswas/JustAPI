@@ -2717,6 +2717,7 @@ dependencies = [
  "proptest",
  "prost 0.14.4",
  "rand 0.8.6",
+ "rcgen",
  "redis",
  "rustls",
  "rustls-pemfile",
@@ -2770,19 +2771,23 @@ dependencies = [
  "anyhow",
  "futures",
  "http",
+ "http-body",
  "http-body-util",
  "hyper",
+ "jsonschema",
  "justapi-core",
  "pyo3",
  "pyo3-async-runtimes",
  "serde",
  "serde_json",
+ "serde_urlencoded",
  "tokio",
  "tokio-stream",
  "tokio-tungstenite",
  "tokio-util",
  "tonic 0.14.6",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -4015,6 +4020,19 @@ checksum = "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
 dependencies = [
  "crossbeam-deque",
  "crossbeam-utils",
+]
+
+[[package]]
+name = "rcgen"
+version = "0.13.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75e669e5202259b5314d1ea5397316ad400819437857b90861765f24c4cf80a2"
+dependencies = [
+ "pem",
+ "ring",
+ "rustls-pki-types",
+ "time",
+ "yasna",
 ]
 
 [[package]]
@@ -5617,6 +5635,7 @@ version = "1.23.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf80a72845275afea99e7f2b434723d3bc7e38470fcd1c7ed39a599c73319a53"
 dependencies = [
+ "getrandom 0.4.3",
  "js-sys",
  "wasm-bindgen",
 ]
@@ -6506,6 +6525,15 @@ name = "xxhash-rust"
 version = "0.8.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4d93c89cdc2d3a63c3ec48ffe926931bdc069eafa8e4402fe6d8f790c9d1e576"
+
+[[package]]
+name = "yasna"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e17bb3549cc1321ae1296b9cdc2698e2b6cb1992adfa19a8c72e5b7a738f44cd"
+dependencies = [
+ "time",
+]
 
 [[package]]
 name = "yoke"

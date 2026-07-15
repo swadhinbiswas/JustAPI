@@ -110,10 +110,7 @@ fn default_ws_echo() -> WsHandler {
 #[derive(Clone)]
 #[allow(dead_code)]
 pub(crate) enum Handler {
-    Static {
-        status: StatusCode,
-        body: &'static str,
-    },
+    Static { status: StatusCode, body: &'static str },
     Echo,
     ParamsEcho,
     Sse,
@@ -359,37 +356,21 @@ impl Server {
             .insert(
                 Method::GET,
                 "/hello",
-                Handler::Static {
-                    status: StatusCode::OK,
-                    body: r#"{"message":"hello"}"#,
-                },
+                Handler::Static { status: StatusCode::OK, body: r#"{"message":"hello"}"# },
             )
             .expect("valid");
-        router
-            .insert(Method::POST, "/echo", Handler::Echo)
-            .expect("valid");
-        router
-            .insert(Method::GET, "/echo/{*rest}", Handler::ParamsEcho)
-            .expect("valid");
+        router.insert(Method::POST, "/echo", Handler::Echo).expect("valid");
+        router.insert(Method::GET, "/echo/{*rest}", Handler::ParamsEcho).expect("valid");
         router
             .insert(
                 Method::GET,
                 "/users/{id}",
-                Handler::Static {
-                    status: StatusCode::OK,
-                    body: r#"{"message":"user lookup"}"#,
-                },
+                Handler::Static { status: StatusCode::OK, body: r#"{"message":"user lookup"}"# },
             )
             .expect("valid");
-        router
-            .insert(Method::GET, "/events", Handler::Sse)
-            .expect("valid");
-        router
-            .insert(Method::GET, "/graphql", Handler::GraphQL)
-            .expect("valid");
-        router
-            .insert(Method::POST, "/graphql", Handler::GraphQL)
-            .expect("valid");
+        router.insert(Method::GET, "/events", Handler::Sse).expect("valid");
+        router.insert(Method::GET, "/graphql", Handler::GraphQL).expect("valid");
+        router.insert(Method::POST, "/graphql", Handler::GraphQL).expect("valid");
         router.set_fallback(Handler::Static {
             status: StatusCode::NOT_FOUND,
             body: r#"{"error":"not found"}"#,
@@ -494,8 +475,7 @@ impl Server {
                 )
             }
         };
-        self.metrics
-            .register_extra_provider(Box::new(stats_provider));
+        self.metrics.register_extra_provider(Box::new(stats_provider));
 
         if let Some(ref mut r) = self.router {
             r.insert(
@@ -525,9 +505,7 @@ impl Server {
             r.insert(
                 hyper::Method::GET,
                 "/v1/models",
-                Handler::Custom(crate::openai::models_handler(
-                    scheduler_engine.engine().clone(),
-                )),
+                Handler::Custom(crate::openai::models_handler(scheduler_engine.engine().clone())),
             )
             .expect("valid route: /v1/models");
         }
@@ -597,8 +575,7 @@ impl Server {
 
     /// Attach a Gateway configuration with hot reloading
     pub fn add_gateway(mut self, state: std::sync::Arc<crate::gateway::GatewayState>) -> Self {
-        self.chain
-            .add(crate::gateway::GatewayMiddleware::new(state));
+        self.chain.add(crate::gateway::GatewayMiddleware::new(state));
         self
     }
 
@@ -659,9 +636,7 @@ impl Server {
             r.insert(hyper::Method::POST, &path, Handler::Custom(handler))
                 .expect("valid oauth2 token path");
         }
-        let jwt = oauth2
-            .jwt_auth()
-            .require_for(&path, crate::middleware::JwtRequirement::None);
+        let jwt = oauth2.jwt_auth().require_for(&path, crate::middleware::JwtRequirement::None);
         self.chain.add(jwt);
         self
     }
@@ -679,10 +654,7 @@ impl Server {
     }
 
     pub fn add_circuit_breaker(mut self, config: crate::resilience::CircuitBreakerConfig) -> Self {
-        self.chain
-            .add(crate::resilience::PerRouteCircuitBreakerMiddleware::new(
-                config,
-            ));
+        self.chain.add(crate::resilience::PerRouteCircuitBreakerMiddleware::new(config));
         self
     }
 
@@ -833,15 +805,8 @@ impl Server {
         )
         .await;
         #[cfg(not(feature = "ws"))]
-        let res = serve_http(
-            listener,
-            chain,
-            static_dir,
-            metrics,
-            self.shutdown,
-            wasm_middleware,
-        )
-        .await;
+        let res =
+            serve_http(listener, chain, static_dir, metrics, self.shutdown, wasm_middleware).await;
         plugin_registry.on_shutdown_all().await?;
         res
     }
@@ -857,7 +822,13 @@ pub async fn serve(listener: TcpListener) -> Result<()> {
         status: StatusCode::NOT_FOUND,
         body: r#"{"error":"not found"}"#,
     });
-    router.insert(hyper::Method::GET, "/hello", Handler::Static { status: StatusCode::OK, body: r#"{"message":"hello"}"# }).unwrap();
+    router
+        .insert(
+            hyper::Method::GET,
+            "/hello",
+            Handler::Static { status: StatusCode::OK, body: r#"{"message":"hello"}"# },
+        )
+        .unwrap();
     router.insert(hyper::Method::POST, "/echo", Handler::Echo).unwrap();
     router.insert(hyper::Method::GET, "/health", Handler::Health).unwrap();
     router.insert(hyper::Method::GET, "/ready", Handler::Ready).unwrap();
@@ -873,16 +844,7 @@ pub async fn serve(listener: TcpListener) -> Result<()> {
     let chain = Arc::new(MiddlewareChain::new(handler));
 
     #[cfg(feature = "ws")]
-    let res = serve_http(
-        listener,
-        chain,
-        None,
-        metrics,
-        None,
-        None,
-        Some(default_ws_echo()),
-    )
-    .await;
+    let res = serve_http(listener, chain, None, metrics, None, None, Some(default_ws_echo())).await;
     #[cfg(not(feature = "ws"))]
     let res = serve_http(listener, chain, None, metrics, None, None).await;
     res
@@ -931,10 +893,7 @@ fn make_handler(
                 )),
                 Err(crate::router::RouterError::NotFound) => {
                     let fb = router.fallback().unwrap();
-                    let m = Match {
-                        handler: fb,
-                        params: matchit::Params::new(),
-                    };
+                    let m = Match { handler: fb, params: matchit::Params::new() };
                     execute_handler(
                         m,
                         req,
@@ -955,6 +914,33 @@ fn make_handler(
 // HTTP server loop
 // ---------------------------------------------------------------------------
 
+/// Max time to wait for a client to send complete request headers (slowloris
+/// protection). Applies to HTTP/1 and HTTP/2.
+const HEADER_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Max wall-clock time a single request handler may run before we respond 504
+/// and abort it. Guards against stuck/slow handlers and resource exhaustion.
+/// Configurable via `JUSTAPI_REQUEST_TIMEOUT_SECS`.
+fn request_timeout() -> std::time::Duration {
+    std::env::var("JUSTAPI_REQUEST_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .map(std::time::Duration::from_secs)
+        .unwrap_or_else(|| std::time::Duration::from_secs(60))
+}
+
+/// Hard cap on concurrently accepted connections. Beyond this, new connections
+/// block at accept time instead of letting the process exhaust memory/file
+/// descriptors (connection-flood protection). Configurable via
+/// `JUSTAPI_MAX_CONNECTIONS`.
+fn max_connections() -> usize {
+    std::env::var("JUSTAPI_MAX_CONNECTIONS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(10_000)
+}
+
 async fn serve_http(
     listener: TcpListener,
     chain: Arc<MiddlewareChain>,
@@ -965,6 +951,7 @@ async fn serve_http(
     #[cfg(feature = "ws")] ws_handler: Option<WsHandler>,
 ) -> Result<()> {
     let mut connections = tokio::task::JoinSet::new();
+    let conn_semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(max_connections()));
 
     loop {
         let token = shutdown.as_ref().cloned();
@@ -993,9 +980,17 @@ async fn serve_http(
 
         #[cfg(feature = "ws")]
         let ws_handler = ws_handler.clone();
-        
+
         let token_clone = shutdown.clone();
+        let conn_semaphore = conn_semaphore.clone();
         connections.spawn(async move {
+            // Bound concurrent connections: a permit is held for the life of
+            // the connection so a flood of accepts can't exhaust FDs/memory
+            // (connection-flood / slowloris resource exhaustion).
+            let _permit = conn_semaphore
+                .acquire_owned()
+                .await
+                .expect("connection semaphore closed");
             let io = TokioIo::new(stream);
             let arena = Arc::new(SharedArena::new());
             let svc = service_fn(move |mut req| {
@@ -1130,17 +1125,38 @@ async fn serve_http(
                     }
 
                     // Run middleware chain (async, no entered span across await)
-                    let resp = chain.run(req).await;
+                    let resp = tokio::time::timeout(request_timeout(), chain.run(req)).await;
 
                     match resp {
-                        Ok(r) => {
-                            let status = r.status();
-                            span.record("http.status_code", status.as_u16());
-                            metrics.record_status(status);
-                            metrics.record_latency(start.elapsed().as_secs_f64() * 1000.0);
+                        Ok(r) => match r {
+                            Ok(response) => {
+                                let status = response.status();
+                                span.record("http.status_code", status.as_u16());
+                                metrics.record_status(status);
+                                metrics.record_latency(start.elapsed().as_secs_f64() * 1000.0);
 
-                            // If the response is 404 and we have a static dir, try serving files
-                            if status == StatusCode::NOT_FOUND {
+                                // If the response is 404 and we have a static dir, try serving files
+                                if status == StatusCode::NOT_FOUND {
+                                    if let Some(ref sd) = static_dir {
+                                        if let Some(file_path) = sd.resolve(&path) {
+                                            if tokio::fs::metadata(&file_path)
+                                                .await
+                                                .map(|m| m.is_file())
+                                                .unwrap_or(false)
+                                            {
+                                                return sd.serve_file(&file_path).await;
+                                            }
+                                        }
+                                    }
+                                }
+                                Ok(response)
+                            }
+                            Err(_) => {
+                                span.record("http.status_code", 404u16);
+                                metrics.record_status(StatusCode::NOT_FOUND);
+                                metrics.record_latency(start.elapsed().as_secs_f64() * 1000.0);
+
+                                // Middleware error — try static files
                                 if let Some(ref sd) = static_dir {
                                     if let Some(file_path) = sd.resolve(&path) {
                                         if tokio::fs::metadata(&file_path)
@@ -1152,35 +1168,33 @@ async fn serve_http(
                                         }
                                     }
                                 }
+                                Ok(json_response(
+                                    StatusCode::NOT_FOUND,
+                                    r#"{"error":"not found"}"#
+                                ))
                             }
-                            Ok(r)
-                        }
+                        },
                         Err(_) => {
-                            span.record("http.status_code", 404u16);
-                            metrics.record_status(StatusCode::NOT_FOUND);
+                            // Handler exceeded the request timeout.
+                            span.record("http.status_code", 504u16);
+                            metrics.record_status(StatusCode::GATEWAY_TIMEOUT);
                             metrics.record_latency(start.elapsed().as_secs_f64() * 1000.0);
-
-                            // Middleware error — try static files
-                            if let Some(ref sd) = static_dir {
-                                if let Some(file_path) = sd.resolve(&path) {
-                                    if tokio::fs::metadata(&file_path)
-                                        .await
-                                        .map(|m| m.is_file())
-                                        .unwrap_or(false)
-                                    {
-                                        return sd.serve_file(&file_path).await;
-                                    }
-                                }
-                            }
+                            tracing::warn!(
+                                "Request to {} {} timed out after {:?}",
+                                method,
+                                path,
+                                request_timeout()
+                            );
                             Ok(json_response(
-                                StatusCode::NOT_FOUND,
-                                r#"{"error":"not found"}"#,
+                                StatusCode::GATEWAY_TIMEOUT,
+                                r#"{"error":"request timeout"}"#
                             ))
                         }
                     }
                 }
             });
-            let builder = hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new());
+            let mut builder = hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new());
+            builder.http1().timer(hyper_util::rt::TokioTimer::new()).header_read_timeout(HEADER_READ_TIMEOUT);
             let mut conn = std::pin::pin!(builder.serve_connection_with_upgrades(io, svc));
 
             if let Some(token) = token_clone {
@@ -1207,10 +1221,7 @@ async fn serve_http(
     }
 
     if shutdown.is_some() {
-        tracing::info!(
-            "Waiting for {} active connections to drain...",
-            connections.len()
-        );
+        tracing::info!("Waiting for {} active connections to drain...", connections.len());
         tokio::select! {
             _ = async { while connections.join_next().await.is_some() {} } => {
                 tracing::debug!("all connections closed gracefully");
@@ -1269,10 +1280,7 @@ async fn execute_handler(
                     bytes
                 }
                 Err(_) => {
-                    return Ok(json_response(
-                        StatusCode::BAD_REQUEST,
-                        r#"{"error":"bad request"}"#,
-                    ))
+                    return Ok(json_response(StatusCode::BAD_REQUEST, r#"{"error":"bad request"}"#))
                 }
             };
             let mut buf = pool.acquire(body_bytes.len());
@@ -1282,11 +1290,8 @@ async fn execute_handler(
             Ok(json_response(StatusCode::OK, &body_str))
         }
         Handler::ParamsEcho => {
-            let params_str: Vec<String> = m
-                .params
-                .iter()
-                .map(|(k, v)| format!(r#""{}":"{}""#, k, v))
-                .collect();
+            let params_str: Vec<String> =
+                m.params.iter().map(|(k, v)| format!(r#""{}":"{}""#, k, v)).collect();
             let body = format!("{{{}}}", params_str.join(","));
             Ok(json_response(StatusCode::OK, &body))
         }
@@ -1306,11 +1311,8 @@ async fn execute_handler(
         Handler::Live => Ok(metrics::live_response()),
         Handler::Prometheus => Ok(metrics::metrics_response(metrics)),
         Handler::OpenApiJson => {
-            let body: String = if let Some(spec) = openapi_spec {
-                spec.to_string()
-            } else {
-                BUILTIN_SPEC.clone()
-            };
+            let body: String =
+                if let Some(spec) = openapi_spec { spec.to_string() } else { BUILTIN_SPEC.clone() };
             Ok(json_response(StatusCode::OK, &body))
         }
         Handler::SwaggerUi => {
@@ -1339,22 +1341,17 @@ async fn execute_handler(
         }
         Handler::GraphQL => {
             if let Some(schema) = graphql_schema {
-                crate::graphql::handle_graphql(schema, req)
-                    .await
-                    .or_else(|e| {
-                        Ok(Response::builder()
-                            .status(StatusCode::INTERNAL_SERVER_ERROR)
-                            .body(crate::UnsyncBoxBody::new(
-                                http_body_util::Full::new(Bytes::from(format!(
-                                    "GraphQL Error: {}",
-                                    e
-                                )))
-                                .map_err(
-                                    |e: std::convert::Infallible| -> anyhow::Error { match e {} },
-                                ),
-                            ))
-                            .unwrap())
-                    })
+                crate::graphql::handle_graphql(schema, req).await.or_else(|e| {
+                    Ok(Response::builder()
+                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .body(crate::UnsyncBoxBody::new(
+                            http_body_util::Full::new(Bytes::from(format!("GraphQL Error: {}", e)))
+                                .map_err(|e: std::convert::Infallible| -> anyhow::Error {
+                                    match e {}
+                                }),
+                        ))
+                        .unwrap())
+                })
             } else {
                 Ok(Response::builder()
                     .status(StatusCode::INTERNAL_SERVER_ERROR)
@@ -1436,21 +1433,18 @@ async fn serve_with_tls(
             .ok_or_else(|| anyhow::anyhow!("no private key in {}", config.key_path))?
     };
 
-    let mut server_config = rustls::ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(certs, key)?;
+    let mut server_config =
+        rustls::ServerConfig::builder().with_no_client_auth().with_single_cert(certs, key)?;
 
     server_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
 
     let acceptor = tokio_rustls::TlsAcceptor::from(StdArc::new(server_config));
 
     let local_addr = listener.local_addr()?;
-    tracing::info!(
-        "Listening on {} (TLS, HTTP/1.1 + HTTP/2 via ALPN)",
-        local_addr
-    );
+    tracing::info!("Listening on {} (TLS, HTTP/1.1 + HTTP/2 via ALPN)", local_addr);
 
     let mut connections = tokio::task::JoinSet::new();
+    let conn_semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(max_connections()));
 
     loop {
         let token = shutdown.as_ref().cloned();
@@ -1478,7 +1472,13 @@ async fn serve_with_tls(
         #[cfg(feature = "ws")]
         let ws_handler = ws_handler.clone();
         let token_clone = shutdown.clone();
+        let conn_semaphore = conn_semaphore.clone();
         connections.spawn(async move {
+            // Bound concurrent connections (see serve_http for rationale).
+            let _permit = conn_semaphore
+                .acquire_owned()
+                .await
+                .expect("connection semaphore closed");
             match acceptor.accept(stream).await {
                 Ok(tls_stream) => {
                     let io = TokioIo::new(tls_stream);
@@ -1602,11 +1602,12 @@ async fn serve_with_tls(
                                 }
                             }
 
-                            let resp = chain.run(req).await;
+                            let resp = tokio::time::timeout(request_timeout(), chain.run(req)).await;
 
                             match resp {
-                                Ok(r) => {
-                                    let status = r.status();
+                                Ok(r) => match r {
+                                    Ok(response) => {
+                                    let status = response.status();
                                     metrics.record_status(status);
                                     metrics.record_latency(start.elapsed().as_secs_f64() * 1000.0);
 
@@ -1623,7 +1624,7 @@ async fn serve_with_tls(
                                             }
                                         }
                                     }
-                                    Ok(r)
+                                    Ok(response)
                                 }
                                 Err(_) => {
                                     metrics.record_status(StatusCode::NOT_FOUND);
@@ -1644,12 +1645,29 @@ async fn serve_with_tls(
                                         StatusCode::NOT_FOUND,
                                         r#"{"error":"not found"}"#,
                                     ))
-                                }
-                            }
+                                },
+                        },
+                        Err(_) => {
+                            // Handler exceeded the request timeout.
+                            metrics.record_status(StatusCode::GATEWAY_TIMEOUT);
+                            metrics.record_latency(start.elapsed().as_secs_f64() * 1000.0);
+                            tracing::warn!(
+                                "Request to {} {} timed out after {:?}",
+                                method,
+                                path,
+                                request_timeout()
+                            );
+                            Ok(json_response(
+                                StatusCode::GATEWAY_TIMEOUT,
+                                r#"{"error":"request timeout"}"#
+                            ))
                         }
-                    });
+                    }
+                    }
+                });
 
-                    let builder = hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new());
+                    let mut builder = hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new());
+                    builder.http1().timer(hyper_util::rt::TokioTimer::new()).header_read_timeout(HEADER_READ_TIMEOUT);
                     let mut conn = std::pin::pin!(builder.serve_connection_with_upgrades(io, svc));
 
                     if let Some(token) = token_clone {
@@ -1681,10 +1699,7 @@ async fn serve_with_tls(
     }
 
     if let Some(_) = shutdown {
-        tracing::info!(
-            "Waiting for {} active TLS connections to drain...",
-            connections.len()
-        );
+        tracing::info!("Waiting for {} active TLS connections to drain...", connections.len());
         tokio::select! {
             _ = async { while connections.join_next().await.is_some() {} } => {
                 tracing::debug!("all connections closed after fallback drain");
@@ -1716,10 +1731,7 @@ mod tests {
             .insert(
                 Method::GET,
                 "/hello",
-                Handler::Static {
-                    status: StatusCode::OK,
-                    body: r#"{"message":"hello"}"#,
-                },
+                Handler::Static { status: StatusCode::OK, body: r#"{"message":"hello"}"# },
             )
             .unwrap();
         let m = router.at(&Method::GET, "/hello").unwrap();
@@ -1744,10 +1756,7 @@ mod tests {
             .insert(
                 Method::GET,
                 "/users/{id}",
-                Handler::Static {
-                    status: StatusCode::OK,
-                    body: r#"{"message":"user lookup"}"#,
-                },
+                Handler::Static { status: StatusCode::OK, body: r#"{"message":"user lookup"}"# },
             )
             .unwrap();
         let m = router.at(&Method::GET, "/users/42").unwrap();
@@ -1774,9 +1783,7 @@ mod tests {
     #[tokio::test]
     async fn test_health_route_exists() {
         let mut router: Router<Handler> = Router::new();
-        router
-            .insert(Method::GET, "/health", Handler::Health)
-            .unwrap();
+        router.insert(Method::GET, "/health", Handler::Health).unwrap();
         let m = router.at(&Method::GET, "/health").unwrap();
         assert!(matches!(m.handler, Handler::Health));
     }
@@ -1784,9 +1791,7 @@ mod tests {
     #[tokio::test]
     async fn test_prometheus_route_exists() {
         let mut router: Router<Handler> = Router::new();
-        router
-            .insert(Method::GET, "/metrics", Handler::Prometheus)
-            .unwrap();
+        router.insert(Method::GET, "/metrics", Handler::Prometheus).unwrap();
         let m = router.at(&Method::GET, "/metrics").unwrap();
         assert!(matches!(m.handler, Handler::Prometheus));
     }

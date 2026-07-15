@@ -30,10 +30,7 @@ impl Database {
     #[new]
     #[pyo3(signature = (url, max_connections=10))]
     fn py_new(url: String, max_connections: u32) -> Self {
-        Self {
-            url,
-            max_connections,
-        }
+        Self { url, max_connections }
     }
 
     fn __repr__(&self) -> String {
@@ -43,17 +40,10 @@ impl Database {
 
 impl Database {
     pub fn new(url: String, max_connections: u32) -> Self {
-        Self {
-            url,
-            max_connections,
-        }
+        Self { url, max_connections }
     }
 
     pub fn to_config(&self) -> DatabaseConfig {
-        DatabaseConfig {
-            url: self.url.clone(),
-            max_connections: self.max_connections,
-            kind: None,
-        }
+        DatabaseConfig { url: self.url.clone(), max_connections: self.max_connections, kind: None }
     }
 }

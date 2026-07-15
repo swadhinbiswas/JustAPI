@@ -24,12 +24,8 @@ const EXCLUDED_DIRS: &[&str] = &[
 /// Returns `true` if the given path should be ignored because it resides
 /// inside one of the [`EXCLUDED_DIRS`].
 pub fn should_ignore_path(path: &Path) -> bool {
-    path.components().any(|c| {
-        c.as_os_str()
-            .to_str()
-            .map(|s| EXCLUDED_DIRS.contains(&s))
-            .unwrap_or(false)
-    })
+    path.components()
+        .any(|c| c.as_os_str().to_str().map(|s| EXCLUDED_DIRS.contains(&s)).unwrap_or(false))
 }
 
 /// Returns `true` if `path` has one of the given extensions.
@@ -56,10 +52,8 @@ pub fn spawn_file_watcher(
     extra_extensions: &[String],
 ) -> Result<mpsc::Receiver<()>, anyhow::Error> {
     // Build the full extension list.
-    let mut extensions: Vec<String> = DEFAULT_WATCH_EXTENSIONS
-        .iter()
-        .map(|s| (*s).to_owned())
-        .collect();
+    let mut extensions: Vec<String> =
+        DEFAULT_WATCH_EXTENSIONS.iter().map(|s| (*s).to_owned()).collect();
     for ext in extra_extensions {
         let ext = ext.strip_prefix('.').unwrap_or(ext).to_owned();
         if !extensions.contains(&ext) {
@@ -74,9 +68,8 @@ pub fn spawn_file_watcher(
     let (reload_tx, reload_rx) = mpsc::channel::<()>(1);
 
     let exts = extensions.clone();
-    let mut debouncer = new_debouncer(
-        Duration::from_millis(300),
-        move |result: DebounceEventResult| {
+    let mut debouncer =
+        new_debouncer(Duration::from_millis(300), move |result: DebounceEventResult| {
             if let Ok(events) = result {
                 for event in &events {
                     if should_ignore_path(&event.path) {
@@ -94,12 +87,9 @@ pub fn spawn_file_watcher(
                     }
                 }
             }
-        },
-    )?;
+        })?;
 
-    debouncer
-        .watcher()
-        .watch(watch_dir, RecursiveMode::Recursive)?;
+    debouncer.watcher().watch(watch_dir, RecursiveMode::Recursive)?;
 
     tokio::spawn(async move {
         // Keep the debouncer alive as long as the task runs.
@@ -165,10 +155,7 @@ mod tests {
 
     #[test]
     fn test_has_watched_extension_matches() {
-        let exts: Vec<String> = vec!["py", "toml", "json"]
-            .into_iter()
-            .map(String::from)
-            .collect();
+        let exts: Vec<String> = vec!["py", "toml", "json"].into_iter().map(String::from).collect();
         assert!(has_watched_extension(&PathBuf::from("app/main.py"), &exts));
         assert!(has_watched_extension(&PathBuf::from("config.toml"), &exts));
         assert!(has_watched_extension(&PathBuf::from("data.json"), &exts));
@@ -176,10 +163,7 @@ mod tests {
 
     #[test]
     fn test_has_watched_extension_rejects_non_matching() {
-        let exts: Vec<String> = vec!["py", "toml", "json"]
-            .into_iter()
-            .map(String::from)
-            .collect();
+        let exts: Vec<String> = vec!["py", "toml", "json"].into_iter().map(String::from).collect();
         assert!(!has_watched_extension(&PathBuf::from("style.css"), &exts));
         assert!(!has_watched_extension(&PathBuf::from("binary"), &exts));
         assert!(!has_watched_extension(&PathBuf::from("readme.md"), &exts));

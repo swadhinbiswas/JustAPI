@@ -17,10 +17,9 @@ impl std::str::FromStr for ClientLanguage {
         match s.to_ascii_lowercase().as_str() {
             "py" | "python" => Ok(ClientLanguage::Python),
             "ts" | "typescript" | "js" => Ok(ClientLanguage::Typescript),
-            other => anyhow::bail!(
-                "unsupported language '{}' (expected python or typescript)",
-                other
-            ),
+            other => {
+                anyhow::bail!("unsupported language '{}' (expected python or typescript)", other)
+            }
         }
     }
 }
@@ -142,11 +141,7 @@ fn collect_ops(doc: &OpenApiDocument) -> Vec<Op> {
                     _ => None,
                 });
                 let arg = sanitize_ident(&p.name);
-                let param = Param {
-                    original: p.name.clone(),
-                    arg,
-                    ty: t,
-                };
+                let param = Param { original: p.name.clone(), arg, ty: t };
                 match p.location {
                     ParameterLocation::Path => path_params.push(param),
                     ParameterLocation::Query => query_params.push(param),
@@ -155,19 +150,15 @@ fn collect_ops(doc: &OpenApiDocument) -> Vec<Op> {
                 }
             }
 
-            let name = op
-                .operation_id
-                .clone()
-                .map(|id| sanitize_ident(&id))
-                .unwrap_or_else(|| {
-                    let base = raw_path
-                        .split('/')
-                        .filter(|s| !s.is_empty())
-                        .map(sanitize_ident)
-                        .collect::<Vec<_>>()
-                        .join("_");
-                    format!("{}_{}", method, base)
-                });
+            let name = op.operation_id.clone().map(|id| sanitize_ident(&id)).unwrap_or_else(|| {
+                let base = raw_path
+                    .split('/')
+                    .filter(|s| !s.is_empty())
+                    .map(sanitize_ident)
+                    .collect::<Vec<_>>()
+                    .join("_");
+                format!("{}_{}", method, base)
+            });
 
             let has_body = op.request_body.is_some();
 
@@ -322,20 +313,13 @@ fn python_method(op: &Op) -> String {
             fmt_path = fmt_path.replace(&format!("{{{}}}", p.original), &format!("{{{}}}", p.arg));
             fmt_args.push(format!("{}={}", p.arg, p.arg));
         }
-        format!(
-            "        path = {}.format({})",
-            fmt_path.quoted(),
-            fmt_args.join(", ")
-        )
+        format!("        path = {}.format({})", fmt_path.quoted(), fmt_args.join(", "))
     };
 
     let mut body_lines: Vec<String> = Vec::new();
     if !op.query_params.is_empty() {
-        let keys: Vec<String> = op
-            .query_params
-            .iter()
-            .map(|p| format!("{:?}: {}", p.original, p.arg))
-            .collect();
+        let keys: Vec<String> =
+            op.query_params.iter().map(|p| format!("{:?}: {}", p.original, p.arg)).collect();
         body_lines.push(format!(
             "        params = {{k: v for k, v in {{{}}}.items() if v is not None}}",
             keys.join(", ")
@@ -360,10 +344,7 @@ fn python_method(op: &Op) -> String {
             })
             .collect();
         parts.push("            **(extra_headers or {})".to_string());
-        body_lines.push(format!(
-            "        headers = {{\n{}\n        }}",
-            parts.join("\n")
-        ));
+        body_lines.push(format!("        headers = {{\n{}\n        }}", parts.join("\n")));
     } else {
         call_args.push("headers=extra_headers".to_string());
     }
@@ -371,11 +352,7 @@ fn python_method(op: &Op) -> String {
     let call = format!(
         "        result = self._request({}, path{})",
         op.method.quoted(),
-        if call_args.is_empty() {
-            String::new()
-        } else {
-            format!(", {}", call_args.join(", "))
-        }
+        if call_args.is_empty() { String::new() } else { format!(", {}", call_args.join(", ")) }
     );
 
     let body = format!(
@@ -481,18 +458,9 @@ fn ts_method(op: &Op) -> String {
         let repl: Vec<String> = op
             .path_params
             .iter()
-            .map(|p| {
-                format!(
-                    "path = path.replace(`{{{}}}`, String({}));",
-                    p.original, p.arg
-                )
-            })
+            .map(|p| format!("path = path.replace(`{{{}}}`, String({}));", p.original, p.arg))
             .collect();
-        format!(
-            "    let path = {};\n    {}",
-            op.raw_path.quoted(),
-            repl.join("\n    ")
-        )
+        format!("    let path = {};\n    {}", op.raw_path.quoted(), repl.join("\n    "))
     };
     body_lines.push(path_stmt);
 
@@ -531,11 +499,7 @@ fn ts_method(op: &Op) -> String {
         call_args.push("extraHeaders".to_string());
     }
 
-    let summary = op
-        .summary
-        .clone()
-        .map(|s| format!("  /** {} */\n", s))
-        .unwrap_or_default();
+    let summary = op.summary.clone().map(|s| format!("  /** {} */\n", s)).unwrap_or_default();
 
     let call = format!(
         "    return this.request(\"{}\", path{}) as Promise<unknown>;",
@@ -545,11 +509,7 @@ fn ts_method(op: &Op) -> String {
         } else {
             format!(
                 ", {{ {} }}",
-                call_args
-                    .iter()
-                    .map(|a| format!("{a}: {}", a))
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                call_args.iter().map(|a| format!("{a}: {}", a)).collect::<Vec<_>>().join(", ")
             )
         }
     );
@@ -627,6 +587,7 @@ mod tests {
                         m
                     },
                     deprecated: None,
+                    extensions: Default::default(),
                 },
             )
             .operation(
@@ -657,6 +618,7 @@ mod tests {
                         m
                     },
                     deprecated: None,
+                    extensions: Default::default(),
                 },
             )
             .operation(
@@ -674,9 +636,7 @@ mod tests {
                             let mut c = std::collections::BTreeMap::new();
                             c.insert(
                                 "application/json".to_string(),
-                                justapi_core::openapi::MediaType {
-                                    schema: Some(body_schema),
-                                },
+                                justapi_core::openapi::MediaType { schema: Some(body_schema) },
                             );
                             c
                         },
@@ -694,6 +654,7 @@ mod tests {
                         m
                     },
                     deprecated: None,
+                    extensions: Default::default(),
                 },
             )
             .build()
@@ -737,14 +698,8 @@ mod tests {
 
     #[test]
     fn test_language_parsing() {
-        assert_eq!(
-            "python".parse::<ClientLanguage>().unwrap(),
-            ClientLanguage::Python
-        );
-        assert_eq!(
-            "ts".parse::<ClientLanguage>().unwrap(),
-            ClientLanguage::Typescript
-        );
+        assert_eq!("python".parse::<ClientLanguage>().unwrap(), ClientLanguage::Python);
+        assert_eq!("ts".parse::<ClientLanguage>().unwrap(), ClientLanguage::Typescript);
         assert!("cobol".parse::<ClientLanguage>().is_err());
     }
 
@@ -775,9 +730,7 @@ mod tests {
                             let mut c = std::collections::BTreeMap::new();
                             c.insert(
                                 "application/x-www-form-urlencoded".to_string(),
-                                MediaType {
-                                    schema: Some(Schema::string()),
-                                },
+                                MediaType { schema: Some(Schema::string()) },
                             );
                             c
                         },
@@ -795,6 +748,7 @@ mod tests {
                         m
                     },
                     deprecated: None,
+                    extensions: Default::default(),
                 },
             )
             .build();

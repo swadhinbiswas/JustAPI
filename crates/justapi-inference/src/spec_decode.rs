@@ -45,10 +45,7 @@ pub struct AcceptanceStats {
 impl AcceptanceStats {
     /// Create stats for a tree-based speculation run with the given branch factor.
     pub fn with_tree_branch(branch: usize) -> Self {
-        Self {
-            tree_branch: branch,
-            ..Default::default()
-        }
+        Self { tree_branch: branch, ..Default::default() }
     }
 
     /// Total tokens emitted (`accepted_draft + bonus`).
@@ -112,9 +109,7 @@ pub fn sample_token(logits: &[f32], params: &SamplingParams, rng: &mut StdRng) -
     if params.top_k > 0 && params.top_k < vocab {
         let mut idx: Vec<usize> = (0..vocab).collect();
         idx.sort_by(|&a, &b| {
-            scaled[b]
-                .partial_cmp(&scaled[a])
-                .unwrap_or(std::cmp::Ordering::Equal)
+            scaled[b].partial_cmp(&scaled[a]).unwrap_or(std::cmp::Ordering::Equal)
         });
         let kth = scaled[idx[params.top_k.min(vocab - 1)]];
         for s in scaled.iter_mut() {
@@ -132,11 +127,8 @@ pub fn sample_token(logits: &[f32], params: &SamplingParams, rng: &mut StdRng) -
     // Top-p (nucleus) truncation.
     if params.top_p < 1.0 && sum > 0.0 {
         let mut order: Vec<usize> = (0..vocab).collect();
-        order.sort_by(|&a, &b| {
-            probs[b]
-                .partial_cmp(&probs[a])
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        order
+            .sort_by(|&a, &b| probs[b].partial_cmp(&probs[a]).unwrap_or(std::cmp::Ordering::Equal));
         let mut cum = 0.0;
         let mut cutoff = 1.0;
         for &i in &order {
@@ -413,11 +405,7 @@ mod tests {
         // gamma 0 must reproduce the target's normal decode exactly.
         let target = MockModel::new(32);
         let draft = MockModel::new(32);
-        let params = SamplingParams {
-            max_tokens: 12,
-            temperature: 0.0,
-            ..Default::default()
-        };
+        let params = SamplingParams { max_tokens: 12, temperature: 0.0, ..Default::default() };
         let prompt = vec![0u32];
         let baseline = collect(&target, &prompt, &params);
         let (spec, _) = collect_spec(&target, &draft, &prompt, &params, 0);
@@ -431,11 +419,7 @@ mod tests {
         // correctness-preserving, only faster.
         let target = MockModel::new(32);
         let draft = MockModel::new(32);
-        let params = SamplingParams {
-            max_tokens: 20,
-            temperature: 0.0,
-            ..Default::default()
-        };
+        let params = SamplingParams { max_tokens: 20, temperature: 0.0, ..Default::default() };
         let prompt = vec![5u32];
         let baseline = collect(&target, &prompt, &params);
         let (spec, _) = collect_spec(&target, &draft, &prompt, &params, 4);
@@ -448,11 +432,7 @@ mod tests {
         let draft = MockModel::new(32);
         let max = 20usize;
         let gamma = 4usize;
-        let params = SamplingParams {
-            max_tokens: max,
-            temperature: 0.0,
-            ..Default::default()
-        };
+        let params = SamplingParams { max_tokens: max, temperature: 0.0, ..Default::default() };
         let (spec, stats) = collect_spec(&target, &draft, &[0u32], &params, gamma);
         assert_eq!(spec.len(), max);
         // With a perfect draft, every step emits gamma+1 tokens, so we need
@@ -470,37 +450,19 @@ mod tests {
     fn imperfect_draft_lowers_acceptance_rate() {
         let target = MockModel::new(64);
         // Draft predicts (prev + 7) while target predicts (prev + 1): rarely equal.
-        let draft = OffsetModel {
-            vocab: 64,
-            offset: 7,
-        };
-        let params = SamplingParams {
-            max_tokens: 40,
-            temperature: 0.0,
-            ..Default::default()
-        };
+        let draft = OffsetModel { vocab: 64, offset: 7 };
+        let params = SamplingParams { max_tokens: 40, temperature: 0.0, ..Default::default() };
         let (_spec, stats) = collect_spec(&target, &draft, &[0u32], &params, 5);
         // With temperature 0 and a mismatched draft, acceptance is essentially 0.
-        assert!(
-            stats.acceptance_rate() < 0.2,
-            "got {}",
-            stats.acceptance_rate()
-        );
+        assert!(stats.acceptance_rate() < 0.2, "got {}", stats.acceptance_rate());
     }
 
     #[test]
     fn spec_honors_max_tokens_with_imperfect_draft() {
         let target = MockModel::new(64);
-        let draft = OffsetModel {
-            vocab: 64,
-            offset: 3,
-        };
+        let draft = OffsetModel { vocab: 64, offset: 3 };
         let max = 15usize;
-        let params = SamplingParams {
-            max_tokens: max,
-            temperature: 0.0,
-            ..Default::default()
-        };
+        let params = SamplingParams { max_tokens: max, temperature: 0.0, ..Default::default() };
         let (spec, _) = collect_spec(&target, &draft, &[0u32], &params, 3);
         assert_eq!(spec.len(), max);
     }
@@ -525,10 +487,7 @@ mod tests {
     #[test]
     fn sampling_token_argmax_is_greedy() {
         let logits = vec![-1.0, 3.0, -2.0, 0.5];
-        let params = SamplingParams {
-            temperature: 0.0,
-            ..Default::default()
-        };
+        let params = SamplingParams { temperature: 0.0, ..Default::default() };
         let mut rng = StdRng::seed_from_u64(1);
         assert_eq!(sample_token(&logits, &params, &mut rng), 1);
     }

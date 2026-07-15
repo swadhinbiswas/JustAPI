@@ -73,11 +73,7 @@ pub struct QuantConfig {
 impl QuantConfig {
     /// Build a uniform quant config (same method for all layers).
     pub fn uniform(method: QuantMethod, bits: f32) -> Self {
-        Self {
-            method,
-            layers: HashMap::new(),
-            bits,
-        }
+        Self { method, layers: HashMap::new(), bits }
     }
 
     /// Effective method for a specific layer (falls back to global).
@@ -207,11 +203,7 @@ mod tests {
         let mut cfg = QuantConfig::uniform(QuantMethod::Gptq, 4.0);
         cfg.layers.insert(
             "model.layers.0".to_string(),
-            LayerQuantConfig {
-                method: QuantMethod::None,
-                group_size: 128,
-                symmetric: true,
-            },
+            LayerQuantConfig { method: QuantMethod::None, group_size: 128, symmetric: true },
         );
         assert_eq!(cfg.method_for_layer("model.layers.0"), QuantMethod::None);
         assert_eq!(cfg.method_for_layer("model.layers.1"), QuantMethod::Gptq);
@@ -222,28 +214,14 @@ mod tests {
         let mut cfg = QuantConfig::uniform(QuantMethod::Awq, 4.0);
         cfg.layers.insert(
             "model.layers".to_string(),
-            LayerQuantConfig {
-                method: QuantMethod::Gptq,
-                group_size: 0,
-                symmetric: false,
-            },
+            LayerQuantConfig { method: QuantMethod::Gptq, group_size: 0, symmetric: false },
         );
         cfg.layers.insert(
             "model.layers.0.self_attn".to_string(),
-            LayerQuantConfig {
-                method: QuantMethod::None,
-                group_size: 128,
-                symmetric: true,
-            },
+            LayerQuantConfig { method: QuantMethod::None, group_size: 128, symmetric: true },
         );
-        assert_eq!(
-            cfg.method_for_layer("model.layers.0.self_attn.q_proj"),
-            QuantMethod::None
-        );
-        assert_eq!(
-            cfg.method_for_layer("model.layers.1.ffn"),
-            QuantMethod::Gptq
-        );
+        assert_eq!(cfg.method_for_layer("model.layers.0.self_attn.q_proj"), QuantMethod::None);
+        assert_eq!(cfg.method_for_layer("model.layers.1.ffn"), QuantMethod::Gptq);
     }
 
     #[test]
@@ -262,13 +240,7 @@ mod tests {
 
     #[test]
     fn gguf_to_quant_method() {
-        assert_eq!(
-            gguf::to_quant_method(gguf::GgufType::F16),
-            QuantMethod::None
-        );
-        assert_eq!(
-            gguf::to_quant_method(gguf::GgufType::Q4_K_M),
-            QuantMethod::Gguf
-        );
+        assert_eq!(gguf::to_quant_method(gguf::GgufType::F16), QuantMethod::None);
+        assert_eq!(gguf::to_quant_method(gguf::GgufType::Q4_K_M), QuantMethod::Gguf);
     }
 }

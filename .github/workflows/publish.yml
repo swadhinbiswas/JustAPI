@@ -12,11 +12,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build wheels
+      - name: Build abi3 wheel (GIL; CPython 3.11+)
         uses: PyO3/maturin-action@v1
         with:
           target: x86_64
           args: --release --out dist -m crates/justapi-py/Cargo.toml
+      - name: Build free-threaded wheel (cp314t; no-GIL CPython 3.14)
+        uses: PyO3/maturin-action@v1
+        with:
+          target: x86_64
+          args: --release --out dist -m crates/justapi-py/Cargo.toml -i python3.14t
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:

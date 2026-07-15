@@ -89,11 +89,7 @@ pub struct Router {
 impl Router {
     /// Create a router with the given strategy.
     pub fn new(strategy: RoutingStrategy) -> Self {
-        Self {
-            strategy,
-            replicas: Mutex::new(Vec::new()),
-            rr: AtomicUsize::new(0),
-        }
+        Self { strategy, replicas: Mutex::new(Vec::new()), rr: AtomicUsize::new(0) }
     }
 
     /// Register or replace a replica by id.
@@ -167,20 +163,16 @@ impl Router {
     /// Route a request: resolve it via the control plane, then select the best
     /// replica. Returns `None` if the model is unknown or no replica can serve it.
     pub fn route(&self, cp: &ControlPlane, request: &RouteRequest) -> Option<RouteDecision> {
-        let resolved = cp.resolve(
-            &request.model,
-            request.version.as_deref(),
-            request.routing_key.as_deref(),
-        )?;
+        let resolved =
+            cp.resolve(&request.model, request.version.as_deref(), request.routing_key.as_deref())?;
         let mut candidates = self.candidates(&resolved);
         if candidates.is_empty() {
             return None;
         }
         let chosen = match self.strategy {
-            RoutingStrategy::LeastLoaded => candidates
-                .into_iter()
-                .min_by_key(|r| r.active_sequences)
-                .unwrap(),
+            RoutingStrategy::LeastLoaded => {
+                candidates.into_iter().min_by_key(|r| r.active_sequences).unwrap()
+            }
             RoutingStrategy::LowestKvPressure => candidates
                 .into_iter()
                 .min_by(|a, b| {
@@ -195,10 +187,7 @@ impl Router {
                 candidates.swap_remove(idx)
             }
         };
-        Some(RouteDecision {
-            replica: chosen.id,
-            resolved,
-        })
+        Some(RouteDecision { replica: chosen.id, resolved })
     }
 }
 
@@ -250,11 +239,7 @@ mod tests {
         let d = router
             .route(
                 &cp,
-                &RouteRequest {
-                    model: "llama-7b".into(),
-                    version: None,
-                    routing_key: None,
-                },
+                &RouteRequest { model: "llama-7b".into(), version: None, routing_key: None },
             )
             .unwrap();
         assert_eq!(d.replica, "r1");
@@ -270,11 +255,7 @@ mod tests {
         let d = router
             .route(
                 &cp,
-                &RouteRequest {
-                    model: "llama-7b".into(),
-                    version: None,
-                    routing_key: None,
-                },
+                &RouteRequest { model: "llama-7b".into(), version: None, routing_key: None },
             )
             .unwrap();
         assert_eq!(d.replica, "idle"); // fewer active sequences wins
@@ -289,11 +270,7 @@ mod tests {
         let d = router
             .route(
                 &cp,
-                &RouteRequest {
-                    model: "llama-7b".into(),
-                    version: None,
-                    routing_key: None,
-                },
+                &RouteRequest { model: "llama-7b".into(), version: None, routing_key: None },
             )
             .unwrap();
         assert_eq!(d.replica, "cool");
@@ -343,11 +320,7 @@ mod tests {
         assert!(router
             .route(
                 &cp,
-                &RouteRequest {
-                    model: "llama-7b".into(),
-                    version: None,
-                    routing_key: None,
-                }
+                &RouteRequest { model: "llama-7b".into(), version: None, routing_key: None }
             )
             .is_none());
     }
@@ -357,14 +330,7 @@ mod tests {
         let cp = cp_with_model();
         let router = Router::new(RoutingStrategy::LeastLoaded);
         assert!(router
-            .route(
-                &cp,
-                &RouteRequest {
-                    model: "nope".into(),
-                    version: None,
-                    routing_key: None,
-                }
-            )
+            .route(&cp, &RouteRequest { model: "nope".into(), version: None, routing_key: None })
             .is_none());
     }
 
@@ -405,11 +371,7 @@ mod tests {
         assert!(router
             .route(
                 &cp,
-                &RouteRequest {
-                    model: "llama-7b".into(),
-                    version: None,
-                    routing_key: None,
-                }
+                &RouteRequest { model: "llama-7b".into(), version: None, routing_key: None }
             )
             .is_none());
     }

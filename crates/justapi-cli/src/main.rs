@@ -11,10 +11,7 @@ mod profile;
 mod watcher;
 
 #[derive(Parser)]
-#[command(
-    name = "justapi",
-    about = "JustAPI Runtime — Python application server"
-)]
+#[command(name = "justapi", about = "JustAPI Runtime — Python application server")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -380,10 +377,8 @@ async fn run() -> anyhow::Result<()> {
                 use justapi_inference::{KvBlockPool, Scheduler, SchedulerConfig, SchedulerEngine};
                 let eng = engine.as_ref().unwrap().clone();
                 let pool = KvBlockPool::new(pool_blocks.max(64));
-                let config = SchedulerConfig {
-                    max_num_seqs: max_seqs.max(1),
-                    ..Default::default()
-                };
+                let config =
+                    SchedulerConfig { max_num_seqs: max_seqs.max(1), ..Default::default() };
                 let scheduler =
                     std::sync::Arc::new(std::sync::Mutex::new(Scheduler::new(config, pool)));
                 let se = std::sync::Arc::new(SchedulerEngine::new(eng, scheduler));
@@ -462,10 +457,8 @@ async fn run() -> anyhow::Result<()> {
 
                     #[cfg(feature = "tls")]
                     if let (Some(cert), Some(key)) = (tls_cert.clone(), tls_key.clone()) {
-                        let config = justapi_core::server::TlsConfig {
-                            cert_path: cert,
-                            key_path: key,
-                        };
+                        let config =
+                            justapi_core::server::TlsConfig { cert_path: cert, key_path: key };
                         let result = server.with_tls(config).run().await;
                         justapi_core::tracing_setup::shutdown_tracing();
                         return result;
@@ -515,10 +508,7 @@ async fn run() -> anyhow::Result<()> {
 
                 #[cfg(feature = "tls")]
                 if let (Some(cert), Some(key)) = (tls_cert.clone(), tls_key.clone()) {
-                    let config = justapi_core::server::TlsConfig {
-                        cert_path: cert,
-                        key_path: key,
-                    };
+                    let config = justapi_core::server::TlsConfig { cert_path: cert, key_path: key };
                     let result = server.with_tls(config).run().await;
                     justapi_core::tracing_setup::shutdown_tracing();
                     return result;
@@ -534,11 +524,8 @@ async fn run() -> anyhow::Result<()> {
                 if !dir.exists() {
                     anyhow::bail!("Migrations directory does not exist: {:?}", dir);
                 }
-                let config = justapi_core::db::DatabaseConfig {
-                    url,
-                    max_connections: 1,
-                    kind: None,
-                };
+                let config =
+                    justapi_core::db::DatabaseConfig { url, max_connections: 1, kind: None };
                 let mut mgr = justapi_core::db::PoolManager::new();
                 let pool = mgr.init("", config).await?;
 
@@ -555,29 +542,20 @@ async fn run() -> anyhow::Result<()> {
                 if !dir.exists() {
                     anyhow::bail!("Migrations directory does not exist: {:?}", dir);
                 }
-                let config = justapi_core::db::DatabaseConfig {
-                    url,
-                    max_connections: 1,
-                    kind: None,
-                };
+                let config =
+                    justapi_core::db::DatabaseConfig { url, max_connections: 1, kind: None };
                 let mut mgr = justapi_core::db::PoolManager::new();
                 let pool = mgr.init("", config).await?;
 
                 let mut migrator = justapi_core::db::Migrator::new();
                 migrator.discover(&dir).map_err(|e| anyhow::anyhow!(e))?;
-                migrator
-                    .rollback_one(&pool)
-                    .await
-                    .map_err(|e| anyhow::anyhow!(e))?;
+                migrator.rollback_one(&pool).await.map_err(|e| anyhow::anyhow!(e))?;
                 tracing::info!("Rolled back most recent migration");
                 Ok(())
             }
             DbCommands::Init { url, dir } => {
-                let config = justapi_core::db::DatabaseConfig {
-                    url,
-                    max_connections: 1,
-                    kind: None,
-                };
+                let config =
+                    justapi_core::db::DatabaseConfig { url, max_connections: 1, kind: None };
                 let mut mgr = justapi_core::db::PoolManager::new();
                 let pool = mgr.init("", config).await?;
 
@@ -585,10 +563,7 @@ async fn run() -> anyhow::Result<()> {
                 if dir.exists() {
                     migrator.discover(&dir).map_err(|e| anyhow::anyhow!(e))?;
                 }
-                migrator
-                    .ensure_tracking_table(&pool)
-                    .await
-                    .map_err(|e| anyhow::anyhow!(e))?;
+                migrator.ensure_tracking_table(&pool).await.map_err(|e| anyhow::anyhow!(e))?;
                 tracing::info!("Migrations tracking table initialized");
                 Ok(())
             }
@@ -599,11 +574,8 @@ async fn run() -> anyhow::Result<()> {
                     .map_err(|e| anyhow::anyhow!("Cannot read {}: {}", path.display(), e))?;
                 let doc: serde_json::Value = serde_json::from_str(&spec)
                     .map_err(|e| anyhow::anyhow!("Invalid OpenAPI spec: {}", e))?;
-                let paths = doc
-                    .get("paths")
-                    .and_then(|p| p.as_object())
-                    .map(|p| p.len())
-                    .unwrap_or(0);
+                let paths =
+                    doc.get("paths").and_then(|p| p.as_object()).map(|p| p.len()).unwrap_or(0);
                 println!("Loaded OpenAPI spec with {} path(s)", paths);
                 if let Some(paths_obj) = doc.get("paths").and_then(|p| p.as_object()) {
                     for (path, item) in paths_obj {
@@ -634,16 +606,11 @@ async fn run() -> anyhow::Result<()> {
             Diagnostic::new(DiagLevel::Hint, "Rust toolchain available").emit();
 
             // Check Python availability
-            let py_ok = std::process::Command::new("python3")
-                .arg("--version")
-                .output()
-                .is_ok();
+            let py_ok = std::process::Command::new("python3").arg("--version").output().is_ok();
             if py_ok {
                 Diagnostic::new(DiagLevel::Hint, "Python 3 detected").emit();
             } else {
-                error_catalog::E006_PYTHON_NOT_FOUND
-                    .into_diagnostic()
-                    .emit();
+                error_catalog::E006_PYTHON_NOT_FOUND.to_diagnostic().emit();
             }
 
             // Check config file
@@ -684,11 +651,8 @@ async fn run() -> anyhow::Result<()> {
             if env_path.exists() {
                 Diagnostic::new(DiagLevel::Hint, ".env file found").emit();
             } else {
-                Diagnostic::new(
-                    DiagLevel::Warning,
-                    "No .env file (recommended for configuration)",
-                )
-                .emit();
+                Diagnostic::new(DiagLevel::Warning, "No .env file (recommended for configuration)")
+                    .emit();
             }
 
             // Check Dockerfile
@@ -696,11 +660,8 @@ async fn run() -> anyhow::Result<()> {
             if dockerfile.exists() {
                 Diagnostic::new(DiagLevel::Hint, "Dockerfile found").emit();
             } else {
-                Diagnostic::new(
-                    DiagLevel::Info,
-                    "No Dockerfile (use `justapi new` to create one)",
-                )
-                .emit();
+                Diagnostic::new(DiagLevel::Info, "No Dockerfile (use `justapi new` to create one)")
+                    .emit();
             }
 
             println!();
@@ -719,11 +680,7 @@ async fn run() -> anyhow::Result<()> {
                 println!("OpenAPI spec written to {}", output.display());
                 Ok(())
             }
-            GenCommands::Client {
-                spec,
-                output,
-                language,
-            } => {
+            GenCommands::Client { spec, output, language } => {
                 let lang: gen_client::ClientLanguage = language.parse()?;
                 let json = std::fs::read_to_string(&spec)
                     .map_err(|e| anyhow::anyhow!("Cannot read spec {}: {}", spec.display(), e))?;
@@ -850,12 +807,7 @@ justapi serve --reload
 
             Ok(())
         }
-        Commands::Profile {
-            addr,
-            duration,
-            connections,
-            output,
-        } => {
+        Commands::Profile { addr, duration, connections, output } => {
             println!("🔬 JustAPI Profiler");
             println!("  Target:       {addr}");
             println!("  Duration:     {duration}s");

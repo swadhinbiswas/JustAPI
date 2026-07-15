@@ -115,9 +115,7 @@ pub struct MockModel {
 impl MockModel {
     /// Create a mock model with the given vocabulary size (clamped to >= 1).
     pub fn new(vocab_size: usize) -> Self {
-        Self {
-            vocab_size: vocab_size.max(1),
-        }
+        Self { vocab_size: vocab_size.max(1) }
     }
 
     /// Trivial tokenization: each byte of `text` becomes a token id.
@@ -162,12 +160,7 @@ impl Model for MockModel {
             let text = decode_mock(next);
             let stop = params.stop_tokens.contains(&next);
             let finish_reason = if stop { Some(FinishReason::Stop) } else { None };
-            let token = GeneratedToken {
-                id: next,
-                text,
-                logprob: 0.0,
-                finish_reason,
-            };
+            let token = GeneratedToken { id: next, text, logprob: 0.0, finish_reason };
             if !sink(token) {
                 return Ok(FinishReason::Cancelled);
             }

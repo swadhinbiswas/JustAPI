@@ -20,12 +20,9 @@ fn extract_string_array(metadata: &HashMap<String, Value>, key: &str) -> Vec<Str
     metadata
         .get(key)
         .and_then(|v| match v {
-            Value::Array(arr) => Some(
-                arr.iter()
-                    .filter_map(|x| x.to_string().ok())
-                    .cloned()
-                    .collect(),
-            ),
+            Value::Array(arr) => {
+                Some(arr.iter().filter_map(|x| x.to_string().ok()).cloned().collect())
+            }
             _ => None,
         })
         .unwrap_or_default()
@@ -83,12 +80,8 @@ impl Tokenizer {
             "trim_offsets": false,
         });
 
-        let _bos = metadata
-            .get("tokenizer.ggml.bos_token_id")
-            .and_then(|v| v.to_u32().ok());
-        let _eos = metadata
-            .get("tokenizer.ggml.eos_token_id")
-            .and_then(|v| v.to_u32().ok());
+        let _bos = metadata.get("tokenizer.ggml.bos_token_id").and_then(|v| v.to_u32().ok());
+        let _eos = metadata.get("tokenizer.ggml.eos_token_id").and_then(|v| v.to_u32().ok());
 
         // BOS/EOS injection is handled by the model's generate path, not the
         // HuggingFace tokenizer post-processor, so we omit it here to keep the

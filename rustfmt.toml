@@ -1,6 +1,12 @@
 # JustAPI — rustfmt configuration
 # Applied by `cargo fmt` and CI.
 # See https://rust-lang.github.io/rustfmt/
+#
+# NOTE: only STABLE rustfmt options are used here so that `cargo fmt --check`
+# passes on the stable toolchain (the AGENTS.md gate runs on stable). Nightly-
+# only options (`imports_granularity`, `group_imports`, `format_code_in_doc_comments`,
+# `wrap_comments`, `normalize_comments`) were removed — keeping them makes
+# stable rustfmt emit "unstable features only available in nightly" warnings.
 
 edition = "2021"
 
@@ -8,12 +14,3 @@ edition = "2021"
 max_width = 100
 use_small_heuristics = "Max"
 tab_spaces = 4
-
-# ── Imports ──────────────────────────────────────────────────
-imports_granularity = "Crate"
-group_imports = "StdExternalCrate"
-
-# ── Misc ─────────────────────────────────────────────────────
-format_code_in_doc_comments = true
-wrap_comments = true
-normalize_comments = true

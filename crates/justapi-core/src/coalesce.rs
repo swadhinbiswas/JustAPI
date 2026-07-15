@@ -56,9 +56,10 @@ impl CoalescedResponse {
         }
         // `Infallible` can never be produced by `Full`, so this map is total.
         builder
-            .body(UnsyncBoxBody::new(Full::new(self.body.clone()).map_err(
-                |e: std::convert::Infallible| -> anyhow::Error { match e {} },
-            )))
+            .body(UnsyncBoxBody::new(
+                Full::new(self.body.clone())
+                    .map_err(|e: std::convert::Infallible| -> anyhow::Error { match e {} }),
+            ))
             .expect("static response construction never fails")
     }
 }
@@ -105,22 +106,14 @@ impl Body for FanoutBody {
         match Pin::new(&mut this.inner).poll_frame(cx) {
             Poll::Ready(Some(Ok(frame))) => {
                 if let Some(chunk) = frame.data_ref() {
-                    this.acc
-                        .lock()
-                        .expect("coalesce buffer poisoned")
-                        .extend_from_slice(chunk);
+                    this.acc.lock().expect("coalesce buffer poisoned").extend_from_slice(chunk);
                 }
                 Poll::Ready(Some(Ok(frame)))
             }
             Poll::Ready(None) => {
                 if !this.finished {
                     this.finished = true;
-                    let full = this
-                        .acc
-                        .lock()
-                        .expect("coalesce buffer poisoned")
-                        .split()
-                        .freeze();
+                    let full = this.acc.lock().expect("coalesce buffer poisoned").split().freeze();
                     this_tx_send(&this.tx, full, this.status, &this.headers);
                 }
                 Poll::Ready(None)
@@ -138,12 +131,7 @@ impl Drop for FanoutBody {
     fn drop(&mut self) {
         if !self.finished {
             self.finished = true;
-            let full = self
-                .acc
-                .lock()
-                .expect("coalesce buffer poisoned")
-                .split()
-                .freeze();
+            let full = self.acc.lock().expect("coalesce buffer poisoned").split().freeze();
             this_tx_send(&self.tx, full, self.status, &self.headers);
         }
     }
@@ -156,11 +144,7 @@ fn this_tx_send(
     status: StatusCode,
     headers: &HeaderMap,
 ) {
-    let _ = tx.send(Outcome::Ok(CoalescedResponse {
-        status,
-        headers: headers.clone(),
-        body,
-    }));
+    let _ = tx.send(Outcome::Ok(CoalescedResponse { status, headers: headers.clone(), body }));
 }
 
 /// Middleware that collapses concurrent identical requests into a single
@@ -173,10 +157,7 @@ pub struct RequestCoalescer {
 impl RequestCoalescer {
     /// Create a coalescer with default settings (no extra headers in the key).
     pub fn new() -> Self {
-        Self {
-            in_flight: AsyncMutex::new(HashMap::new()),
-            include_headers: Vec::new(),
-        }
+        Self { in_flight: AsyncMutex::new(HashMap::new()), include_headers: Vec::new() }
     }
 
     /// Include the values of the given request headers in the coalesce key.
@@ -187,18 +168,14 @@ impl RequestCoalescer {
         self
     }
 
-    fn key_of(&self, req: &Request<hyper::body::Incoming>) -> CoalesceKey {
+    fn key_of<B: Send + 'static>(&self, req: &Request<B>) -> CoalesceKey {
         let mut headers = Vec::with_capacity(self.include_headers.len());
         for name in &self.include_headers {
             if let Some(value) = req.headers().get(name) {
                 headers.push((name.clone(), value.clone()));
             }
         }
-        CoalesceKey {
-            method: req.method().clone(),
-            uri: req.uri().clone(),
-            headers,
-        }
+        CoalesceKey { method: req.method().clone(), uri: req.uri().clone(), headers }
     }
 }
 
@@ -209,12 +186,8 @@ impl Default for RequestCoalescer {
 }
 
 #[async_trait]
-impl Middleware<hyper::body::Incoming> for RequestCoalescer {
-    async fn handle(
-        &self,
-        req: Request<hyper::body::Incoming>,
-        next: Next<'_, hyper::body::Incoming>,
-    ) -> Result<Response<ResponseBody>> {
+impl<B: Send + 'static> Middleware<B> for RequestCoalescer {
+    async fn handle(&self, req: Request<B>, next: Next<'_, B>) -> Result<Response<ResponseBody>> {
         let key = self.key_of(&req);
 
         // Atomically check for an in-flight leader or claim leadership.
@@ -239,12 +212,12 @@ impl Middleware<hyper::body::Incoming> for RequestCoalescer {
 }
 
 impl RequestCoalescer {
-    async fn wait_for_leader(
+    async fn wait_for_leader<B: Send + 'static>(
         &self,
         key: CoalesceKey,
         tx: Arc<watch::Sender<Outcome>>,
-        req: Request<hyper::body::Incoming>,
-        next: Next<'_, hyper::body::Incoming>,
+        req: Request<B>,
+        next: Next<'_, B>,
     ) -> Result<Response<ResponseBody>> {
         let mut rx = tx.subscribe();
         loop {
@@ -262,12 +235,12 @@ impl RequestCoalescer {
         self.run_leader(key, tx, req, next).await
     }
 
-    async fn run_leader(
+    async fn run_leader<B: Send + 'static>(
         &self,
         key: CoalesceKey,
         tx: Arc<watch::Sender<Outcome>>,
-        req: Request<hyper::body::Incoming>,
-        next: Next<'_, hyper::body::Incoming>,
+        req: Request<B>,
+        next: Next<'_, B>,
     ) -> Result<Response<ResponseBody>> {
         let result = next.run(req).await;
         // Leadership for this key ends now; waiters already hold their own
@@ -351,10 +324,7 @@ mod tests {
     #[tokio::test]
     async fn single_request_runs_handler_once() {
         let counter = Arc::new(AtomicU64::new(0));
-        let client = client_with(
-            counting_handler(counter.clone(), 0),
-            RequestCoalescer::new(),
-        );
+        let client = client_with(counting_handler(counter.clone(), 0), RequestCoalescer::new());
         let resp = client.get("/a").await.unwrap();
         assert_eq!(resp.status, 200);
         assert_eq!(resp.body, br#"{"hello":"world"}"#);
@@ -364,10 +334,7 @@ mod tests {
     #[tokio::test]
     async fn concurrent_identical_gets_coalesce_to_one_handler_call() {
         let counter = Arc::new(AtomicU64::new(0));
-        let client = client_with(
-            counting_handler(counter.clone(), 50),
-            RequestCoalescer::new(),
-        );
+        let client = client_with(counting_handler(counter.clone(), 50), RequestCoalescer::new());
 
         let mut futs = Vec::new();
         for _ in 0..10 {
@@ -391,10 +358,7 @@ mod tests {
     #[tokio::test]
     async fn distinct_paths_are_not_coalesced() {
         let counter = Arc::new(AtomicU64::new(0));
-        let client = client_with(
-            counting_handler(counter.clone(), 20),
-            RequestCoalescer::new(),
-        );
+        let client = client_with(counting_handler(counter.clone(), 20), RequestCoalescer::new());
 
         let (a, b) = futures::future::join(client.get("/a"), client.get("/b")).await;
         let _ = (a, b);

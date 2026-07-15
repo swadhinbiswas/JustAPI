@@ -24,10 +24,7 @@ pub enum WeightLocation {
     /// Object storage (S3 / GCS / MinIO compatible).
     S3 { bucket: String, key: String },
     /// HuggingFace Hub repo (optional revision / branch).
-    HuggingFace {
-        repo: String,
-        revision: Option<String>,
-    },
+    HuggingFace { repo: String, revision: Option<String> },
     /// A remote model registry served over HTTP(S).
     RemoteRegistry { url: String },
 }
@@ -139,11 +136,7 @@ impl ModelRecord {
 
     /// Add (or replace) a version.
     pub fn add_version(&mut self, version: ModelVersion) {
-        if let Some(slot) = self
-            .versions
-            .iter_mut()
-            .find(|v| v.version == version.version)
-        {
+        if let Some(slot) = self.versions.iter_mut().find(|v| v.version == version.version) {
             *slot = version;
         } else {
             self.versions.push(version);
@@ -165,8 +158,7 @@ impl ModelRecord {
 
     /// Map a routing key to an adapter name for this model.
     pub fn route_adapter(&mut self, routing_key: impl Into<String>, adapter: impl Into<String>) {
-        self.adapter_routing
-            .insert(routing_key.into(), adapter.into());
+        self.adapter_routing.insert(routing_key.into(), adapter.into());
     }
 
     /// Resolve a version-or-alias string to a concrete version.
@@ -204,25 +196,18 @@ pub struct ControlPlane {
 impl ControlPlane {
     /// Create an empty control plane.
     pub fn new() -> Self {
-        Self {
-            inner: Arc::new(RwLock::new(HashMap::new())),
-        }
+        Self { inner: Arc::new(RwLock::new(HashMap::new())) }
     }
 
     /// Register (or replace) a whole model record.
     pub fn register(&self, record: ModelRecord) {
-        self.inner
-            .write()
-            .unwrap()
-            .insert(record.name.clone(), record);
+        self.inner.write().unwrap().insert(record.name.clone(), record);
     }
 
     /// Register a single version under an existing (or new) model.
     pub fn register_version(&self, model: &str, version: ModelVersion) {
         let mut inner = self.inner.write().unwrap();
-        let record = inner
-            .entry(model.to_string())
-            .or_insert_with(|| ModelRecord::new(model));
+        let record = inner.entry(model.to_string()).or_insert_with(|| ModelRecord::new(model));
         record.add_version(version);
     }
 
@@ -279,9 +264,7 @@ impl ControlPlane {
                 .or_else(|| record.latest_version())?,
         };
 
-        let adapter = routing_key
-            .and_then(|k| record.resolve_adapter(k))
-            .map(String::from);
+        let adapter = routing_key.and_then(|k| record.resolve_adapter(k)).map(String::from);
 
         Some(ResolvedModel {
             model_name: record.name.clone(),
@@ -308,11 +291,8 @@ mod tests {
     use super::*;
 
     fn version(v: &str, at: u64) -> ModelVersion {
-        ModelVersion::new(
-            v,
-            WeightLocation::Local(PathBuf::from(format!("/models/{v}"))),
-        )
-        .with_created_at(at)
+        ModelVersion::new(v, WeightLocation::Local(PathBuf::from(format!("/models/{v}"))))
+            .with_created_at(at)
     }
 
     #[test]
@@ -431,18 +411,13 @@ mod tests {
         };
         cp.register_version(
             "m",
-            version("v1", 100)
-                .with_profile(profile.clone())
-                .with_aliases(vec!["latest".into()]),
+            version("v1", 100).with_profile(profile.clone()).with_aliases(vec!["latest".into()]),
         );
         let r = cp.resolve("m", Some("latest"), None).unwrap();
         assert_eq!(r.runtime_profile.device, EngineDevice::Cuda(0));
         assert_eq!(r.runtime_profile.max_concurrency, 8);
         assert_eq!(r.runtime_profile.quant_method, QuantMethod::Gguf);
-        assert_eq!(
-            r.weight_location,
-            WeightLocation::Local(PathBuf::from("/models/v1"))
-        );
+        assert_eq!(r.weight_location, WeightLocation::Local(PathBuf::from("/models/v1")));
         assert_eq!(r.runtime_profile.expected_adapters, vec!["math-adapter"]);
     }
 

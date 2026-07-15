@@ -173,10 +173,7 @@ pub struct PerRouteCircuitBreakerMiddleware {
 
 impl PerRouteCircuitBreakerMiddleware {
     pub fn new(config: CircuitBreakerConfig) -> Self {
-        Self {
-            config,
-            breakers: std::sync::RwLock::new(std::collections::HashMap::new()),
-        }
+        Self { config, breakers: std::sync::RwLock::new(std::collections::HashMap::new()) }
     }
 
     fn get_breaker(&self, path: &str) -> CircuitBreaker {
@@ -227,8 +224,7 @@ impl<B: Send + Sync + 'static> Middleware<B> for PerRouteCircuitBreakerMiddlewar
 fn circuit_open_response() -> Response<ResponseBody> {
     let body = r#"{"error":"service unavailable — circuit breaker open"}"#;
     let mut resp = json_text_response(StatusCode::SERVICE_UNAVAILABLE, body);
-    resp.headers_mut()
-        .insert("retry-after", "30".parse().unwrap());
+    resp.headers_mut().insert("retry-after", "30".parse().unwrap());
     resp
 }
 
@@ -258,10 +254,7 @@ impl<B: Send + 'static> Middleware<B> for TimeoutMiddleware {
 }
 
 fn timeout_response(timeout: Duration) -> Response<ResponseBody> {
-    let body = format!(
-        r#"{{"error":"request timed out after {}ms"}}"#,
-        timeout.as_millis()
-    );
+    let body = format!(r#"{{"error":"request timed out after {}ms"}}"#, timeout.as_millis());
     json_text_response(StatusCode::GATEWAY_TIMEOUT, &body)
 }
 
@@ -296,11 +289,7 @@ impl RetryPolicy {
         let capped = delay_ms.min(self.max_delay.as_millis() as u64);
         if self.jitter {
             let jitter_range = capped / 5;
-            let jitter = if jitter_range > 0 {
-                rand::random::<u64>() % jitter_range
-            } else {
-                0
-            };
+            let jitter = if jitter_range > 0 { rand::random::<u64>() % jitter_range } else { 0 };
             Duration::from_millis(capped + jitter)
         } else {
             Duration::from_millis(capped)
@@ -326,10 +315,7 @@ pub struct BulkheadConfig {
 
 impl Default for BulkheadConfig {
     fn default() -> Self {
-        Self {
-            max_concurrent: 10,
-            max_wait: Duration::from_secs(1),
-        }
+        Self { max_concurrent: 10, max_wait: Duration::from_secs(1) }
     }
 }
 
@@ -341,10 +327,7 @@ pub struct Bulkhead {
 
 impl Bulkhead {
     pub fn new(config: BulkheadConfig) -> Self {
-        Self {
-            semaphore: Arc::new(Semaphore::new(config.max_concurrent as usize)),
-            config,
-        }
+        Self { semaphore: Arc::new(Semaphore::new(config.max_concurrent as usize)), config }
     }
 }
 
@@ -361,11 +344,9 @@ impl BulkheadMiddleware {
 #[async_trait]
 impl<B: Send + 'static> Middleware<B> for BulkheadMiddleware {
     async fn handle(&self, req: Request<B>, next: Next<'_, B>) -> Result<Response<ResponseBody>> {
-        let permit = tokio::time::timeout(
-            self.bulkhead.config.max_wait,
-            self.bulkhead.semaphore.acquire(),
-        )
-        .await;
+        let permit =
+            tokio::time::timeout(self.bulkhead.config.max_wait, self.bulkhead.semaphore.acquire())
+                .await;
 
         match permit {
             Ok(Ok(permit)) => {
@@ -402,10 +383,7 @@ pub struct FallbackEntry {
 
 impl FallbackPolicy {
     pub fn new() -> Self {
-        Self {
-            fallbacks: Arc::new(HashMap::new()),
-            default_fallback: None,
-        }
+        Self { fallbacks: Arc::new(HashMap::new()), default_fallback: None }
     }
 
     pub fn add(mut self, path_prefix: &str, entry: FallbackEntry) -> Self {
@@ -599,20 +577,13 @@ mod tests {
     fn five_hundred_handler() -> HandlerFn<TestBody> {
         Arc::new(|_req: Request<TestBody>| {
             Box::pin(async {
-                Ok(json_response(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    r#"{"error":"server error"}"#,
-                ))
+                Ok(json_response(StatusCode::INTERNAL_SERVER_ERROR, r#"{"error":"server error"}"#))
             })
         })
     }
 
     fn test_req(method: hyper::Method, uri: &str) -> Request<TestBody> {
-        Request::builder()
-            .method(method)
-            .uri(uri)
-            .body(TestBody::new(Bytes::new()))
-            .unwrap()
+        Request::builder().method(method).uri(uri).body(TestBody::new(Bytes::new())).unwrap()
     }
 
     // -----------------------------------------------------------------------
@@ -820,10 +791,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_bulkhead_passes_normal_requests() {
-        let config = BulkheadConfig {
-            max_concurrent: 10,
-            max_wait: Duration::from_secs(1),
-        };
+        let config = BulkheadConfig { max_concurrent: 10, max_wait: Duration::from_secs(1) };
         let bulkhead = Bulkhead::new(config);
         let mw = BulkheadMiddleware::new(bulkhead);
         let mut chain = crate::middleware::MiddlewareChain::new(ok_handler());
@@ -834,10 +802,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_bulkhead_rejects_when_full() {
-        let config = BulkheadConfig {
-            max_concurrent: 1,
-            max_wait: Duration::from_millis(50),
-        };
+        let config = BulkheadConfig { max_concurrent: 1, max_wait: Duration::from_millis(50) };
         let bulkhead = Bulkhead::new(config);
         let mw = BulkheadMiddleware::new(bulkhead);
 
@@ -942,23 +907,13 @@ mod tests {
         let mut chain = crate::middleware::MiddlewareChain::new(five_hundred_handler());
         chain.add(mw);
 
-        let resp = chain
-            .run(test_req(hyper::Method::GET, "/api/data"))
-            .await
-            .unwrap();
-        assert!(
-            String::from_utf8_lossy(&resp.into_body().collect().await.unwrap().to_bytes())
-                .contains(r#""api"#)
-        );
+        let resp = chain.run(test_req(hyper::Method::GET, "/api/data")).await.unwrap();
+        assert!(String::from_utf8_lossy(&resp.into_body().collect().await.unwrap().to_bytes())
+            .contains(r#""api"#));
 
-        let resp = chain
-            .run(test_req(hyper::Method::GET, "/users/123"))
-            .await
-            .unwrap();
-        assert!(
-            String::from_utf8_lossy(&resp.into_body().collect().await.unwrap().to_bytes())
-                .contains(r#""users"#)
-        );
+        let resp = chain.run(test_req(hyper::Method::GET, "/users/123")).await.unwrap();
+        assert!(String::from_utf8_lossy(&resp.into_body().collect().await.unwrap().to_bytes())
+            .contains(r#""users"#));
     }
 
     #[tokio::test]
@@ -967,10 +922,7 @@ mod tests {
         let mw = FallbackMiddleware::new(policy);
         let mut chain = crate::middleware::MiddlewareChain::new(five_hundred_handler());
         chain.add(mw);
-        let resp = chain
-            .run(test_req(hyper::Method::GET, "/no-fallback"))
-            .await
-            .unwrap();
+        let resp = chain.run(test_req(hyper::Method::GET, "/no-fallback")).await.unwrap();
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
@@ -984,10 +936,7 @@ mod tests {
         let mw = FallbackMiddleware::new(policy);
         let mut chain = crate::middleware::MiddlewareChain::new(error_handler());
         chain.add(mw);
-        let resp = chain
-            .run(test_req(hyper::Method::GET, "/anything"))
-            .await
-            .unwrap();
+        let resp = chain.run(test_req(hyper::Method::GET, "/anything")).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
@@ -997,11 +946,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_chaos_disabled_passes_through() {
-        let config = ChaosConfig {
-            enabled: false,
-            error_p: 1.0,
-            ..Default::default()
-        };
+        let config = ChaosConfig { enabled: false, error_p: 1.0, ..Default::default() };
         let mw = ChaosMiddleware::new(config);
         let mut chain = crate::middleware::MiddlewareChain::new(ok_handler());
         chain.add(mw);
@@ -1050,10 +995,7 @@ mod tests {
     #[tokio::test]
     async fn test_timeout_and_bulkhead_together() {
         let timeout_mw = TimeoutMiddleware::new(Duration::from_secs(5));
-        let bulkhead = Bulkhead::new(BulkheadConfig {
-            max_concurrent: 5,
-            ..Default::default()
-        });
+        let bulkhead = Bulkhead::new(BulkheadConfig { max_concurrent: 5, ..Default::default() });
         let bulkhead_mw = BulkheadMiddleware::new(bulkhead);
 
         let mut chain = crate::middleware::MiddlewareChain::new(ok_handler());
@@ -1093,10 +1035,8 @@ mod tests {
 
         let resp = chain.run(test_req(hyper::Method::GET, "/")).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        assert!(
-            String::from_utf8_lossy(&resp.into_body().collect().await.unwrap().to_bytes())
-                .contains(r#""fallback"#)
-        );
+        assert!(String::from_utf8_lossy(&resp.into_body().collect().await.unwrap().to_bytes())
+            .contains(r#""fallback"#));
     }
 
     // -----------------------------------------------------------------------
@@ -1332,10 +1272,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_bulkhead_zero_concurrent() {
-        let config = BulkheadConfig {
-            max_concurrent: 0,
-            max_wait: Duration::from_millis(10),
-        };
+        let config = BulkheadConfig { max_concurrent: 0, max_wait: Duration::from_millis(10) };
         let bulkhead = Bulkhead::new(config);
         let mw = BulkheadMiddleware::new(bulkhead);
         let mut chain = crate::middleware::MiddlewareChain::new(ok_handler());
@@ -1346,10 +1283,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_bulkhead_release_on_error() {
-        let config = BulkheadConfig {
-            max_concurrent: 1,
-            max_wait: Duration::from_millis(50),
-        };
+        let config = BulkheadConfig { max_concurrent: 1, max_wait: Duration::from_millis(50) };
         let bulkhead = Bulkhead::new(config);
         let mw = BulkheadMiddleware::new(bulkhead);
 
@@ -1386,10 +1320,7 @@ mod tests {
         let mw = FallbackMiddleware::new(policy);
         let mut chain = crate::middleware::MiddlewareChain::new(five_hundred_handler());
         chain.add(mw);
-        let resp = chain
-            .run(test_req(hyper::Method::GET, "/anything"))
-            .await
-            .unwrap();
+        let resp = chain.run(test_req(hyper::Method::GET, "/anything")).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
@@ -1406,10 +1337,7 @@ mod tests {
         let mw = FallbackMiddleware::new(policy);
         let mut chain = crate::middleware::MiddlewareChain::new(five_hundred_handler());
         chain.add(mw);
-        let resp = chain
-            .run(test_req(hyper::Method::GET, "/api/data"))
-            .await
-            .unwrap();
+        let resp = chain.run(test_req(hyper::Method::GET, "/api/data")).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(resp.headers()["content-type"], "application/xml");
         let body = resp.into_body().collect().await.unwrap().to_bytes();
@@ -1459,10 +1387,8 @@ mod tests {
     #[tokio::test]
     async fn test_timeout_bulkhead_circuit_breaker_combined() {
         let timeout_mw = TimeoutMiddleware::new(Duration::from_secs(5));
-        let bulkhead = Bulkhead::new(BulkheadConfig {
-            max_concurrent: 2,
-            max_wait: Duration::from_secs(1),
-        });
+        let bulkhead =
+            Bulkhead::new(BulkheadConfig { max_concurrent: 2, max_wait: Duration::from_secs(1) });
         let bulkhead_mw = BulkheadMiddleware::new(bulkhead);
         let breaker = CircuitBreaker::new(CircuitBreakerConfig {
             failure_threshold: 5,
@@ -1512,10 +1438,7 @@ mod tests {
     #[tokio::test]
     async fn test_bulkhead_timeout_interaction() {
         // A slow handler that would be blocked by bulkhead, but timeout should fire first
-        let config = BulkheadConfig {
-            max_concurrent: 1,
-            max_wait: Duration::from_millis(100),
-        };
+        let config = BulkheadConfig { max_concurrent: 1, max_wait: Duration::from_millis(100) };
         let bulkhead = Bulkhead::new(config);
         let bulkhead_mw = BulkheadMiddleware::new(bulkhead);
         let timeout_mw = TimeoutMiddleware::new(Duration::from_millis(200));

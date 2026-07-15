@@ -74,11 +74,7 @@ struct BlockMeta {
 
 impl BlockMeta {
     const fn new() -> Self {
-        Self {
-            ref_count: 0,
-            pinned: false,
-            hash: 0,
-        }
+        Self { ref_count: 0, pinned: false, hash: 0 }
     }
 }
 
@@ -105,14 +101,7 @@ impl KvBlockPool {
         let capacity = capacity.clamp(1, MAX_BLOCKS);
         let metas = vec![BlockMeta::new(); capacity];
         let free: Vec<BlockId> = (0..capacity as BlockId).rev().collect();
-        Self {
-            metas,
-            free,
-            clock_hand: 0,
-            eviction_count: 0,
-            allocated_count: 0,
-            cached_count: 0,
-        }
+        Self { metas, free, clock_hand: 0, eviction_count: 0, allocated_count: 0, cached_count: 0 }
     }
 
     /// Total number of blocks the pool manages.
@@ -327,11 +316,7 @@ pub struct Sequence {
 impl Sequence {
     /// Create a new empty sequence.
     pub fn new(id: u64) -> Self {
-        Self {
-            id,
-            blocks: Vec::new(),
-            num_tokens: 0,
-        }
+        Self { id, blocks: Vec::new(), num_tokens: 0 }
     }
 
     /// Opaque sequence identifier.

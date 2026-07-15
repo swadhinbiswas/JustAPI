@@ -73,9 +73,7 @@ pub struct DynamicGrpcService {
 
 impl DynamicGrpcService {
     pub fn new(handler: GrpcHandler) -> Self {
-        Self {
-            handler: std::sync::Arc::new(handler),
-        }
+        Self { handler: std::sync::Arc::new(handler) }
     }
 }
 

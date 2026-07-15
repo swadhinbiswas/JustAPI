@@ -11,6 +11,32 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
 use crate::ResponseBody;
 
+/// A static-file mount: serves files from `dir` under `prefix`, with an
+/// optional SPA fallback (e.g. `index.html`) for unmatched paths.
+#[derive(Clone)]
+pub struct StaticMount {
+    pub prefix: String,
+    pub dir: StaticDir,
+    /// When set, unmatched paths fall back to this file (relative to `dir`).
+    pub fallback: Option<String>,
+}
+
+impl StaticMount {
+    /// Resolve a request path against this mount. Returns `None` if the path
+    /// is not under `prefix`.
+    pub fn resolve(&self, uri_path: &str) -> Option<PathBuf> {
+        let rel = if self.prefix == "/" {
+            uri_path.to_string()
+        } else {
+            if !uri_path.starts_with(&self.prefix) {
+                return None;
+            }
+            uri_path[self.prefix.len()..].to_string()
+        };
+        self.dir.resolve(&rel)
+    }
+}
+
 /// Serve static files from a root directory.
 #[derive(Clone)]
 pub struct StaticDir {
@@ -19,9 +45,12 @@ pub struct StaticDir {
 
 impl StaticDir {
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self {
-            root: Arc::new(root.into()),
-        }
+        Self { root: Arc::new(root.into()) }
+    }
+
+    /// Return the configured root directory as a `PathBuf`.
+    pub fn root(&self) -> PathBuf {
+        (*self.root).clone()
     }
 
     /// Resolve a URI path to a file path, preventing directory traversal.
@@ -78,13 +107,10 @@ impl StaticDir {
             );
             let mut resp = Response::new(body);
             *resp.status_mut() = StatusCode::OK;
-            resp.headers_mut()
-                .insert("content-type", content_type.parse().unwrap());
-            resp.headers_mut()
-                .insert("content-length", total_len.to_string().parse().unwrap());
+            resp.headers_mut().insert("content-type", content_type.parse().unwrap());
+            resp.headers_mut().insert("content-length", total_len.to_string().parse().unwrap());
             resp.headers_mut().insert("etag", etag.parse().unwrap());
-            resp.headers_mut()
-                .insert("cache-control", "public, max-age=3600".parse().unwrap());
+            resp.headers_mut().insert("cache-control", "public, max-age=3600".parse().unwrap());
             return Ok(resp);
         }
 
@@ -96,13 +122,10 @@ impl StaticDir {
 
         let mut resp = Response::new(body);
         *resp.status_mut() = StatusCode::OK;
-        resp.headers_mut()
-            .insert("content-type", content_type.parse().unwrap());
-        resp.headers_mut()
-            .insert("content-length", total_len.to_string().parse().unwrap());
+        resp.headers_mut().insert("content-type", content_type.parse().unwrap());
+        resp.headers_mut().insert("content-length", total_len.to_string().parse().unwrap());
         resp.headers_mut().insert("etag", etag.parse().unwrap());
-        resp.headers_mut()
-            .insert("cache-control", "public, max-age=3600".parse().unwrap());
+        resp.headers_mut().insert("cache-control", "public, max-age=3600".parse().unwrap());
 
         Ok(resp)
     }
@@ -152,9 +175,7 @@ impl StaticDir {
         if let Some(range_header) = req.headers().get("range") {
             if let Ok(range_str) = range_header.to_str() {
                 if let Some(range) = parse_range(range_str, total_len) {
-                    return self
-                        .serve_range(&path, &etag, content_type, total_len, range)
-                        .await;
+                    return self.serve_range(&path, &etag, content_type, total_len, range).await;
                 }
             }
         }
@@ -169,15 +190,11 @@ impl StaticDir {
             );
             let mut resp = Response::new(body);
             *resp.status_mut() = StatusCode::OK;
-            resp.headers_mut()
-                .insert("content-type", content_type.parse().unwrap());
-            resp.headers_mut()
-                .insert("content-length", total_len.to_string().parse().unwrap());
+            resp.headers_mut().insert("content-type", content_type.parse().unwrap());
+            resp.headers_mut().insert("content-length", total_len.to_string().parse().unwrap());
             resp.headers_mut().insert("etag", etag.parse().unwrap());
-            resp.headers_mut()
-                .insert("cache-control", "public, max-age=3600".parse().unwrap());
-            resp.headers_mut()
-                .insert("accept-ranges", "bytes".parse().unwrap());
+            resp.headers_mut().insert("cache-control", "public, max-age=3600".parse().unwrap());
+            resp.headers_mut().insert("accept-ranges", "bytes".parse().unwrap());
             return Ok(resp);
         }
 
@@ -189,15 +206,11 @@ impl StaticDir {
 
         let mut resp = Response::new(body);
         *resp.status_mut() = StatusCode::OK;
-        resp.headers_mut()
-            .insert("content-type", content_type.parse().unwrap());
-        resp.headers_mut()
-            .insert("content-length", total_len.to_string().parse().unwrap());
+        resp.headers_mut().insert("content-type", content_type.parse().unwrap());
+        resp.headers_mut().insert("content-length", total_len.to_string().parse().unwrap());
         resp.headers_mut().insert("etag", etag.parse().unwrap());
-        resp.headers_mut()
-            .insert("cache-control", "public, max-age=3600".parse().unwrap());
-        resp.headers_mut()
-            .insert("accept-ranges", "bytes".parse().unwrap());
+        resp.headers_mut().insert("cache-control", "public, max-age=3600".parse().unwrap());
+        resp.headers_mut().insert("accept-ranges", "bytes".parse().unwrap());
 
         Ok(resp)
     }
@@ -310,10 +323,7 @@ fn parse_range(range_str: &str, total_len: u64) -> Option<ByteRange> {
 }
 
 fn not_found() -> Result<Response<ResponseBody>> {
-    Ok(crate::json_response(
-        StatusCode::NOT_FOUND,
-        r#"{"error":"not found"}"#,
-    ))
+    Ok(crate::json_response(StatusCode::NOT_FOUND, r#"{"error":"not found"}"#))
 }
 
 fn guess_content_type(path: &Path) -> &'static str {
@@ -346,14 +356,8 @@ mod tests {
     #[test]
     fn test_resolve_basic() {
         let dir = StaticDir::new("/tmp/static");
-        assert_eq!(
-            dir.resolve("/index.html"),
-            Some(PathBuf::from("/tmp/static/index.html"))
-        );
-        assert_eq!(
-            dir.resolve("css/style.css"),
-            Some(PathBuf::from("/tmp/static/css/style.css"))
-        );
+        assert_eq!(dir.resolve("/index.html"), Some(PathBuf::from("/tmp/static/index.html")));
+        assert_eq!(dir.resolve("css/style.css"), Some(PathBuf::from("/tmp/static/css/style.css")));
     }
 
     #[test]
@@ -372,24 +376,15 @@ mod tests {
 
     #[test]
     fn test_guess_content_type() {
-        assert_eq!(
-            guess_content_type(Path::new("index.html")),
-            "text/html; charset=utf-8"
-        );
-        assert_eq!(
-            guess_content_type(Path::new("style.css")),
-            "text/css; charset=utf-8"
-        );
+        assert_eq!(guess_content_type(Path::new("index.html")), "text/html; charset=utf-8");
+        assert_eq!(guess_content_type(Path::new("style.css")), "text/css; charset=utf-8");
         assert_eq!(
             guess_content_type(Path::new("app.js")),
             "application/javascript; charset=utf-8"
         );
         assert_eq!(guess_content_type(Path::new("image.png")), "image/png");
         assert_eq!(guess_content_type(Path::new("font.woff2")), "font/woff2");
-        assert_eq!(
-            guess_content_type(Path::new("unknown.xyz")),
-            "application/octet-stream"
-        );
+        assert_eq!(guess_content_type(Path::new("unknown.xyz")), "application/octet-stream");
     }
 
     // --- parse_range tests ---

@@ -28,11 +28,7 @@ impl DagNode {
     #[new]
     #[pyo3(signature = (name, handler, dependencies=None))]
     fn new(name: String, handler: Py<PyAny>, dependencies: Option<Vec<String>>) -> Self {
-        Self {
-            name,
-            handler,
-            dependencies: dependencies.unwrap_or_default(),
-        }
+        Self { name, handler, dependencies: dependencies.unwrap_or_default() }
     }
 }
 
@@ -84,16 +80,12 @@ impl Dag {
         let handle = tokio::runtime::Handle::try_current();
         match handle {
             Ok(rt) => {
-                rt.spawn(run_dag_internal(
-                    nodes, state, notify, cancel, loop_py, fut_py,
-                ));
+                rt.spawn(run_dag_internal(nodes, state, notify, cancel, loop_py, fut_py));
             }
             Err(_) => {
                 std::thread::spawn(move || {
                     let rt = tokio::runtime::Runtime::new().unwrap();
-                    rt.block_on(run_dag_internal(
-                        nodes, state, notify, cancel, loop_py, fut_py,
-                    ));
+                    rt.block_on(run_dag_internal(nodes, state, notify, cancel, loop_py, fut_py));
                 });
             }
         }
@@ -124,10 +116,7 @@ async fn run_dag_internal(
         let mut ready = Vec::new();
         for node_name in &pending {
             let node = &nodes[node_name];
-            let can_run = node
-                .dependencies
-                .iter()
-                .all(|d| state_guard.contains_key(d));
+            let can_run = node.dependencies.iter().all(|d| state_guard.contains_key(d));
             if can_run {
                 ready.push(node_name.clone());
             }

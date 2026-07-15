@@ -13,6 +13,9 @@ jsonwebtoken = "9"
 serde_json = "1"
 http = "1"
 serde_urlencoded = "0.7"
+bytes = "1"
+http-body-util = "0.1"
+tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
 
 [[bin]]
 name = "fuzz_router"
@@ -24,6 +27,13 @@ bench = false
 [[bin]]
 name = "fuzz_file_paths"
 path = "fuzz_targets/fuzz_file_paths.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_multipart"
+path = "fuzz_targets/fuzz_multipart.rs"
 test = false
 doc = false
 bench = false

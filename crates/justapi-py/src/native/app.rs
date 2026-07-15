@@ -1,25 +1,53 @@
-use std::sync::Arc;
 use hyper::Method;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
 
+use jsonschema::Validator;
+use pyo3::conversion::IntoPyObject;
 use pyo3::prelude::*;
+use pyo3::types::{PyAnyMethods, PyDict, PyList, PyString, PyTuple};
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
+/// Await a SIGTERM (Unix only). Returns when the process receives the signal.
+#[cfg(unix)]
+async fn term_signal() {
+    use tokio::signal::unix::{signal, SignalKind};
+    match signal(SignalKind::terminate()) {
+        Ok(mut sig) => {
+            sig.recv().await;
+        }
+        Err(e) => {
+            // If we can't install the handler, just block forever so shutdown
+            // still happens via Ctrl+C. Don't crash the server over it.
+            tracing::warn!("Failed to install SIGTERM handler: {}", e);
+            std::future::pending::<()>().await;
+        }
+    }
+}
+
+use crate::request::Conn;
 use crate::websocket::{WebSocket, WsMessage};
 use futures::{SinkExt, StreamExt};
+use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 
 use justapi_core::router::Router;
 
 use crate::database::Database;
 
-use super::types::*;
 use super::handlers::*;
+use super::types::*;
 
 #[pyclass(name = "_JustAPIApp")]
 pub struct JustAPIApp {
     pub router: Router<usize>,
     pub handlers: Vec<Py<PyAny>>,
+    pub native: Vec<bool>,
     pub schemas: Vec<Option<Py<PyAny>>>,
     pub schema_jsons: Vec<Option<String>>,
+    /// JSON Schemas (resolved at registration) used by the native fast path to
+    /// validate a request's *query string* in Rust, with no GIL/Python hop.
+    pub query_schema_jsons: Vec<Option<String>>,
     pub batch_configs: Vec<Option<(usize, u64)>>,
     pub plugins: Vec<Py<PyAny>>,
     pub database: Option<Database>,
@@ -30,6 +58,142 @@ pub struct JustAPIApp {
     pub gateway_config: Option<String>,
     pub circuit_breaker_config: Option<(usize, u64)>,
     pub coalesce_headers: Option<Vec<String>>,
+    /// Per-route OpenAPI metadata, keyed by `(method, path)`.
+    pub route_meta:
+        std::collections::HashMap<(hyper::Method, String), justapi_core::openapi::RouteMeta>,
+    /// Named routes for `url_for` resolution, keyed by name -> path template.
+    pub named_routes: std::collections::HashMap<String, String>,
+    /// Static frontend mounts (served as low-priority routes with SPA fallback).
+    pub frontend_mounts: Vec<justapi_core::static_files::StaticMount>,
+    /// Native MCP tool registry (agent surface). Stored in Rust; invoked as
+    /// Python callables via PyO3. See `register_tool` / `list_tools` /
+    /// `call_tool`.
+    pub tools: Vec<PyTool>,
+    /// Agent session state store. Keyed by session id; values are arbitrary
+    /// JSON. Exposed to Python via `app.create_session` / `get_session` / etc.
+    /// and to handlers via the `Session` dependency.
+    pub sessions: Mutex<HashMap<String, serde_json::Value>>,
+}
+
+/// A registered MCP tool: metadata plus its Python handler.
+pub struct PyTool {
+    pub name: String,
+    pub description: String,
+    pub schema: String,
+    pub handler: Py<PyAny>,
+}
+
+// ---------------------------------------------------------------------------
+// Streaming structured-output validation
+// ---------------------------------------------------------------------------
+//
+// Each streamed item (a JSON value) is validated against a JSON Schema before
+// it is forwarded to the client. Compiled `Validator`s are cached per schema
+// string so a long stream does not recompile the schema on every item.
+
+fn schema_validator_cache() -> &'static Mutex<HashMap<String, Validator>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, Validator>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Validate a single JSON value (`value_json`) against a JSON Schema
+/// (`schema_json`). Returns a list of human-readable error strings; an empty
+/// list means the value is valid. The compiled schema is cached per unique
+/// schema string.
+#[pyfunction]
+pub fn validate_value(schema_json: String, value_json: String) -> PyResult<Vec<String>> {
+    let schema_value: serde_json::Value = serde_json::from_str(&schema_json)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("invalid schema: {e}")))?;
+    let value: serde_json::Value = serde_json::from_str(&value_json)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("invalid JSON value: {e}")))?;
+
+    let validator = {
+        let mut cache = schema_validator_cache().lock().unwrap();
+        if let Some(v) = cache.get(&schema_json) {
+            v.clone()
+        } else {
+            let v = jsonschema::options().build(&schema_value).map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!("schema error: {e}"))
+            })?;
+            cache.insert(schema_json.clone(), v.clone());
+            v
+        }
+    };
+
+    let mut errors = Vec::new();
+    for err in validator.iter_errors(&value) {
+        errors.push(err.to_string());
+    }
+    Ok(errors)
+}
+
+/// A streaming response that validates each yielded JSON object against a schema
+/// before forwarding it. Yielded items must be JSON-serialisable Python objects.
+/// Emitted bytes are NDJSON (one object per line) or a JSON array, per `mode`.
+#[pyclass(name = "ValidatedStreamResponse", subclass)]
+pub struct ValidatedStreamResponse {
+    pub generator: Py<PyAny>,
+    pub schema_json: String,
+    pub mode: String,
+    pub status: u16,
+    pub headers: Vec<(Vec<u8>, Vec<u8>)>,
+}
+
+#[pymethods]
+impl ValidatedStreamResponse {
+    #[new]
+    #[pyo3(signature = (generator, schema_json, mode="ndjson", status=200, headers=None))]
+    pub fn new(
+        generator: Py<PyAny>,
+        schema_json: String,
+        mode: &str,
+        status: u16,
+        headers: Option<Vec<(Vec<u8>, Vec<u8>)>>,
+    ) -> PyResult<Self> {
+        // Validate the schema compiles up front.
+        let _: serde_json::Value = serde_json::from_str(&schema_json).map_err(|e| {
+            pyo3::exceptions::PyValueError::new_err(format!("invalid tool schema: {e}"))
+        })?;
+        let content_type = match mode {
+            "array" => b"application/json".to_vec(),
+            _ => b"application/x-ndjson".to_vec(),
+        };
+        let headers = headers.unwrap_or_else(|| vec![(b"content-type".to_vec(), content_type)]);
+        Ok(Self { generator, schema_json, mode: mode.to_string(), status, headers })
+    }
+}
+
+/// Convert a parsed JSON value into a Python object (used to build tool-call
+/// kwargs from a JSON-encoded arguments string).
+fn json_value_to_py<'py>(py: Python<'py>, v: &serde_json::Value) -> PyResult<Bound<'py, PyAny>> {
+    match v {
+        serde_json::Value::Null => Ok(py.None().into_bound(py)),
+        serde_json::Value::Bool(b) => Ok((*b).into_pyobject(py)?.as_any().clone()),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Ok(i.into_pyobject(py)?.as_any().clone())
+            } else if let Some(u) = n.as_u64() {
+                Ok(u.into_pyobject(py)?.as_any().clone())
+            } else {
+                Ok(n.as_f64().unwrap_or(0.0).into_pyobject(py)?.as_any().clone())
+            }
+        }
+        serde_json::Value::String(s) => Ok(s.clone().into_pyobject(py)?.as_any().clone()),
+        serde_json::Value::Array(a) => {
+            let list = PyList::empty(py);
+            for item in a {
+                list.append(json_value_to_py(py, item)?)?;
+            }
+            Ok(list.as_any().clone())
+        }
+        serde_json::Value::Object(o) => {
+            let d = PyDict::new(py);
+            for (k, val) in o {
+                d.set_item(k, json_value_to_py(py, val)?)?;
+            }
+            Ok(d.as_any().clone())
+        }
+    }
 }
 
 #[pymethods]
@@ -39,8 +203,10 @@ impl JustAPIApp {
         Self {
             router: Router::new(),
             handlers: Vec::new(),
+            native: Vec::new(),
             schemas: Vec::new(),
             schema_jsons: Vec::new(),
+            query_schema_jsons: Vec::new(),
             batch_configs: Vec::new(),
             plugins: Vec::new(),
             database: None,
@@ -51,7 +217,67 @@ impl JustAPIApp {
             gateway_config: None,
             circuit_breaker_config: None,
             coalesce_headers: None,
+            route_meta: std::collections::HashMap::new(),
+            named_routes: std::collections::HashMap::new(),
+            frontend_mounts: Vec::new(),
+            tools: Vec::new(),
+            sessions: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Store OpenAPI metadata for a route (keyed by `method` + `path`).
+    #[allow(clippy::too_many_arguments)]
+    fn store_meta(
+        &mut self,
+        py: Python<'_>,
+        method: String,
+        path: String,
+        body_schema: Option<Py<PyAny>>,
+        response_schema_json: Option<Option<String>>,
+        tags: Option<Vec<String>>,
+        summary: Option<String>,
+        description: Option<String>,
+        deprecated: Option<bool>,
+        status_code: Option<u16>,
+        responses: Option<String>,
+        operation_id: Option<String>,
+        openapi_extra: Option<String>,
+        experimental: bool,
+        include_in_schema: Option<bool>,
+    ) {
+        use justapi_core::openapi::RouteMeta;
+
+        let method_enum =
+            hyper::Method::from_bytes(method.as_bytes()).unwrap_or(hyper::Method::GET);
+        let request_body_schema = resolve_schema_json(py, body_schema)
+            .ok()
+            .flatten()
+            .as_deref()
+            .and_then(|s| serde_json::from_str(s).ok());
+        let response_schema =
+            response_schema_json.flatten().as_deref().and_then(|s| serde_json::from_str(s).ok());
+        let responses_val = responses.as_deref().and_then(|s| serde_json::from_str(s).ok());
+        let openapi_extra_val = openapi_extra.as_deref().and_then(|s| serde_json::from_str(s).ok());
+
+        self.route_meta.insert(
+            (method_enum.clone(), path.clone()),
+            RouteMeta {
+                method: method_enum,
+                path,
+                summary,
+                description,
+                tags: tags.unwrap_or_default(),
+                request_body_schema,
+                response_schema,
+                deprecated: deprecated.unwrap_or(false),
+                experimental,
+                status_code,
+                responses: responses_val,
+                operation_id,
+                openapi_extra: openapi_extra_val,
+                include_in_schema: include_in_schema.unwrap_or(true),
+            },
+        );
     }
 
     #[pyo3(name = "enable_gateway")]
@@ -92,19 +318,199 @@ impl JustAPIApp {
         Ok(())
     }
 
-    fn get(&mut self, path: &str, handler: Py<PyAny>) -> PyResult<()> {
+    /// Register a native MCP tool. `schema_json` is a JSON Schema (string)
+    /// describing the tool's input. The `handler` is a Python callable invoked
+    /// with the tool arguments as keyword arguments.
+    #[pyo3(name = "register_tool")]
+    fn register_tool(
+        &mut self,
+        name: String,
+        description: String,
+        schema_json: String,
+        handler: Py<PyAny>,
+    ) -> PyResult<()> {
+        // Validate the schema parses as JSON up front.
+        let _: serde_json::Value = serde_json::from_str(&schema_json).map_err(|e| {
+            pyo3::exceptions::PyValueError::new_err(format!("invalid tool schema: {e}"))
+        })?;
+        // Refuse duplicate tool names.
+        if self.tools.iter().any(|t| t.name == name) {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "tool '{name}' is already registered"
+            )));
+        }
+        self.tools.push(PyTool { name, description, schema: schema_json, handler });
+        Ok(())
+    }
+
+    /// Return the registered tools in MCP `tools/list` shape (list of dicts with
+    /// `name`, `description`, `inputSchema`).
+    #[pyo3(name = "list_tools")]
+    fn list_tools(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let json_mod = PyModule::import(py, "json")?;
+        let loads = json_mod.getattr("loads")?;
+        let out = PyList::empty(py);
+        for t in &self.tools {
+            let schema: Py<PyAny> = loads.call1((t.schema.clone(),))?.into();
+            let d = PyDict::new(py);
+            d.set_item("name", t.name.clone())?;
+            d.set_item("description", t.description.clone())?;
+            d.set_item("inputSchema", schema)?;
+            out.append(d)?;
+        }
+        Ok(out.into())
+    }
+
+    /// Invoke a registered tool by name with a JSON-encoded arguments object.
+    /// Returns the tool handler's return value (a coroutine if the handler is
+    /// async — the Python caller is responsible for awaiting it).
+    #[pyo3(name = "call_tool")]
+    fn call_tool(&self, py: Python<'_>, name: String, args_json: String) -> PyResult<Py<PyAny>> {
+        let tool = self.tools.iter().find(|t| t.name == name).ok_or_else(|| {
+            pyo3::exceptions::PyKeyError::new_err(format!("unknown tool '{name}'"))
+        })?;
+        let value: serde_json::Value = serde_json::from_str(&args_json).map_err(|e| {
+            pyo3::exceptions::PyValueError::new_err(format!("invalid tool args: {e}"))
+        })?;
+        let kwargs = PyDict::new(py);
+        if let serde_json::Value::Object(map) = value {
+            for (k, v) in map {
+                kwargs.set_item(k, json_value_to_py(py, &v)?)?;
+            }
+        }
+        let args = PyTuple::empty(py);
+        let result = tool.handler.bind(py).call(args, Some(&kwargs))?;
+        Ok(result.into())
+    }
+
+    // --- Agent session state -----------------------------------------------
+
+    /// Create a new session, optionally seeded with `initial_json` (a JSON
+    /// object). Returns the new session id.
+    #[pyo3(name = "create_session")]
+    fn create_session_rs(
+        &self,
+        id: Option<String>,
+        initial_json: Option<String>,
+    ) -> PyResult<String> {
+        let value: serde_json::Value = match initial_json {
+            Some(s) => serde_json::from_str(&s).map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!("invalid session JSON: {e}"))
+            })?,
+            None => serde_json::Value::Object(serde_json::Map::new()),
+        };
+        let id = id.unwrap_or_else(|| Uuid::new_v4().simple().to_string());
+        self.sessions.lock().unwrap().insert(id.clone(), value);
+        Ok(id)
+    }
+
+    /// Return a session's JSON value as a string, or `None` if unknown.
+    #[pyo3(name = "get_session")]
+    fn get_session_rs(&self, id: String) -> Option<String> {
+        self.sessions.lock().unwrap().get(&id).map(|v| v.to_string())
+    }
+
+    /// Overwrite a session's value with `json`. Returns `false` if unknown.
+    #[pyo3(name = "set_session")]
+    fn set_session_rs(&self, id: String, json: String) -> PyResult<bool> {
+        let value: serde_json::Value = serde_json::from_str(&json).map_err(|e| {
+            pyo3::exceptions::PyValueError::new_err(format!("invalid session JSON: {e}"))
+        })?;
+        let mut store = self.sessions.lock().unwrap();
+        match store.entry(id) {
+            std::collections::hash_map::Entry::Occupied(mut e) => {
+                e.insert(value);
+                Ok(true)
+            }
+            std::collections::hash_map::Entry::Vacant(_) => Ok(false),
+        }
+    }
+
+    /// Merge `json` into an existing session (shallow merge of top-level
+    /// object keys). Returns `false` if unknown.
+    #[pyo3(name = "update_session")]
+    fn update_session_rs(&self, id: String, json: String) -> PyResult<bool> {
+        let incoming: serde_json::Value = serde_json::from_str(&json).map_err(|e| {
+            pyo3::exceptions::PyValueError::new_err(format!("invalid session JSON: {e}"))
+        })?;
+        let mut store = self.sessions.lock().unwrap();
+        match store.get_mut(&id) {
+            None => Ok(false),
+            Some(existing) => {
+                if let serde_json::Value::Object(inc) = &incoming {
+                    if let serde_json::Value::Object(ex) = existing {
+                        for (k, v) in inc {
+                            ex.insert(k.clone(), v.clone());
+                        }
+                        return Ok(true);
+                    }
+                }
+                *existing = incoming;
+                Ok(true)
+            }
+        }
+    }
+
+    /// Delete a session. Returns `true` if it existed.
+    #[pyo3(name = "delete_session")]
+    fn delete_session_rs(&self, id: String) -> bool {
+        self.sessions.lock().unwrap().remove(&id).is_some()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (path, handler, query_schema=None, tags=None, summary=None, description=None, deprecated=None, status_code=None, responses=None, operation_id=None, openapi_extra=None, include_in_schema=None, name=None, native=None))]
+    fn get(
+        &mut self,
+        py: Python<'_>,
+        path: &str,
+        handler: Py<PyAny>,
+        query_schema: Option<Py<PyAny>>,
+        tags: Option<Vec<String>>,
+        summary: Option<String>,
+        description: Option<String>,
+        deprecated: Option<bool>,
+        status_code: Option<u16>,
+        responses: Option<String>,
+        operation_id: Option<String>,
+        openapi_extra: Option<String>,
+        include_in_schema: Option<bool>,
+        name: Option<String>,
+        native: Option<bool>,
+    ) -> PyResult<()> {
         let id = self.handlers.len();
         self.handlers.push(handler);
+        self.native.push(native.unwrap_or(false));
         self.schemas.push(None);
         self.schema_jsons.push(None);
+        self.query_schema_jsons.push(resolve_schema_json(py, query_schema)?);
         self.batch_configs.push(None);
+        self.store_meta(
+            py,
+            "GET".to_string(),
+            path.to_string(),
+            None,
+            None,
+            tags,
+            summary,
+            description,
+            deprecated,
+            status_code,
+            responses,
+            operation_id,
+            openapi_extra,
+            false,
+            include_in_schema,
+        );
+        if let Some(ref n) = name {
+            self.named_routes.insert(n.clone(), path.to_string());
+        }
         self.router
             .insert(Method::GET, path, id)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (path, handler, body_schema=None, schema=None, batch_size=None, batch_window_ms=None))]
+    #[pyo3(signature = (path, handler, body_schema=None, schema=None, query_schema=None, batch_size=None, batch_window_ms=None, tags=None, summary=None, description=None, deprecated=None, status_code=None, responses=None, operation_id=None, openapi_extra=None, include_in_schema=None, name=None, native=None))]
     fn post(
         &mut self,
         py: Python<'_>,
@@ -112,22 +518,55 @@ impl JustAPIApp {
         handler: Py<PyAny>,
         body_schema: Option<Py<PyAny>>,
         schema: Option<Py<PyAny>>,
+        query_schema: Option<Py<PyAny>>,
         batch_size: Option<usize>,
         batch_window_ms: Option<u64>,
+        tags: Option<Vec<String>>,
+        summary: Option<String>,
+        description: Option<String>,
+        deprecated: Option<bool>,
+        status_code: Option<u16>,
+        responses: Option<String>,
+        operation_id: Option<String>,
+        openapi_extra: Option<String>,
+        include_in_schema: Option<bool>,
+        name: Option<String>,
+        native: Option<bool>,
     ) -> PyResult<()> {
         let id = self.handlers.len();
         self.handlers.push(handler);
-        self.schemas.push(body_schema);
+        self.native.push(native.unwrap_or(false));
+        self.schemas.push(body_schema.as_ref().map(|b| b.clone_ref(py)));
         self.schema_jsons.push(resolve_schema_json(py, schema)?);
-        self.batch_configs
-            .push(batch_size.map(|s| (s, batch_window_ms.unwrap_or(10))));
+        self.query_schema_jsons.push(resolve_schema_json(py, query_schema)?);
+        self.batch_configs.push(batch_size.map(|s| (s, batch_window_ms.unwrap_or(10))));
+        self.store_meta(
+            py,
+            "POST".to_string(),
+            path.to_string(),
+            body_schema,
+            self.schema_jsons.last().cloned(),
+            tags,
+            summary,
+            description,
+            deprecated,
+            status_code,
+            responses,
+            operation_id,
+            openapi_extra,
+            false,
+            include_in_schema,
+        );
+        if let Some(ref n) = name {
+            self.named_routes.insert(n.clone(), path.to_string());
+        }
         self.router
             .insert(Method::POST, path, id)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (path, handler, body_schema=None, schema=None, batch_size=None, batch_window_ms=None))]
+    #[pyo3(signature = (path, handler, body_schema=None, schema=None, query_schema=None, batch_size=None, batch_window_ms=None, tags=None, summary=None, description=None, deprecated=None, status_code=None, responses=None, operation_id=None, openapi_extra=None, include_in_schema=None, name=None, native=None))]
     fn put(
         &mut self,
         py: Python<'_>,
@@ -135,22 +574,55 @@ impl JustAPIApp {
         handler: Py<PyAny>,
         body_schema: Option<Py<PyAny>>,
         schema: Option<Py<PyAny>>,
+        query_schema: Option<Py<PyAny>>,
         batch_size: Option<usize>,
         batch_window_ms: Option<u64>,
+        tags: Option<Vec<String>>,
+        summary: Option<String>,
+        description: Option<String>,
+        deprecated: Option<bool>,
+        status_code: Option<u16>,
+        responses: Option<String>,
+        operation_id: Option<String>,
+        openapi_extra: Option<String>,
+        include_in_schema: Option<bool>,
+        name: Option<String>,
+        native: Option<bool>,
     ) -> PyResult<()> {
         let id = self.handlers.len();
         self.handlers.push(handler);
-        self.schemas.push(body_schema);
+        self.native.push(native.unwrap_or(false));
+        self.schemas.push(body_schema.as_ref().map(|b| b.clone_ref(py)));
         self.schema_jsons.push(resolve_schema_json(py, schema)?);
-        self.batch_configs
-            .push(batch_size.map(|s| (s, batch_window_ms.unwrap_or(10))));
+        self.query_schema_jsons.push(resolve_schema_json(py, query_schema)?);
+        self.batch_configs.push(batch_size.map(|s| (s, batch_window_ms.unwrap_or(10))));
+        self.store_meta(
+            py,
+            "PUT".to_string(),
+            path.to_string(),
+            body_schema,
+            self.schema_jsons.last().cloned(),
+            tags,
+            summary,
+            description,
+            deprecated,
+            status_code,
+            responses,
+            operation_id,
+            openapi_extra,
+            false,
+            include_in_schema,
+        );
+        if let Some(ref n) = name {
+            self.named_routes.insert(n.clone(), path.to_string());
+        }
         self.router
             .insert(Method::PUT, path, id)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (path, handler, body_schema=None, schema=None, batch_size=None, batch_window_ms=None))]
+    #[pyo3(signature = (path, handler, body_schema=None, schema=None, query_schema=None, batch_size=None, batch_window_ms=None, tags=None, summary=None, description=None, deprecated=None, status_code=None, responses=None, operation_id=None, openapi_extra=None, include_in_schema=None, name=None, native=None))]
     fn patch(
         &mut self,
         py: Python<'_>,
@@ -158,26 +630,100 @@ impl JustAPIApp {
         handler: Py<PyAny>,
         body_schema: Option<Py<PyAny>>,
         schema: Option<Py<PyAny>>,
+        query_schema: Option<Py<PyAny>>,
         batch_size: Option<usize>,
         batch_window_ms: Option<u64>,
+        tags: Option<Vec<String>>,
+        summary: Option<String>,
+        description: Option<String>,
+        deprecated: Option<bool>,
+        status_code: Option<u16>,
+        responses: Option<String>,
+        operation_id: Option<String>,
+        openapi_extra: Option<String>,
+        include_in_schema: Option<bool>,
+        name: Option<String>,
+        native: Option<bool>,
     ) -> PyResult<()> {
         let id = self.handlers.len();
         self.handlers.push(handler);
-        self.schemas.push(body_schema);
+        self.native.push(native.unwrap_or(false));
+        self.schemas.push(body_schema.as_ref().map(|b| b.clone_ref(py)));
         self.schema_jsons.push(resolve_schema_json(py, schema)?);
-        self.batch_configs
-            .push(batch_size.map(|s| (s, batch_window_ms.unwrap_or(10))));
+        self.query_schema_jsons.push(resolve_schema_json(py, query_schema)?);
+        self.batch_configs.push(batch_size.map(|s| (s, batch_window_ms.unwrap_or(10))));
+        self.store_meta(
+            py,
+            "PATCH".to_string(),
+            path.to_string(),
+            body_schema,
+            self.schema_jsons.last().cloned(),
+            tags,
+            summary,
+            description,
+            deprecated,
+            status_code,
+            responses,
+            operation_id,
+            openapi_extra,
+            false,
+            include_in_schema,
+        );
+        if let Some(ref n) = name {
+            self.named_routes.insert(n.clone(), path.to_string());
+        }
         self.router
             .insert(Method::PATCH, path, id)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
     }
 
-    fn delete(&mut self, path: &str, handler: Py<PyAny>) -> PyResult<()> {
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (path, handler, query_schema=None, tags=None, summary=None, description=None, deprecated=None, status_code=None, responses=None, operation_id=None, openapi_extra=None, include_in_schema=None, name=None, native=None))]
+    fn delete(
+        &mut self,
+        py: Python<'_>,
+        path: &str,
+        handler: Py<PyAny>,
+        query_schema: Option<Py<PyAny>>,
+        tags: Option<Vec<String>>,
+        summary: Option<String>,
+        description: Option<String>,
+        deprecated: Option<bool>,
+        status_code: Option<u16>,
+        responses: Option<String>,
+        operation_id: Option<String>,
+        openapi_extra: Option<String>,
+        include_in_schema: Option<bool>,
+        name: Option<String>,
+        native: Option<bool>,
+    ) -> PyResult<()> {
         let id = self.handlers.len();
         self.handlers.push(handler);
+        self.native.push(native.unwrap_or(false));
         self.schemas.push(None);
         self.schema_jsons.push(None);
+        self.query_schema_jsons.push(resolve_schema_json(py, query_schema)?);
         self.batch_configs.push(None);
+        self.store_meta(
+            py,
+            "DELETE".to_string(),
+            path.to_string(),
+            None,
+            None,
+            tags,
+            summary,
+            description,
+            deprecated,
+            status_code,
+            responses,
+            operation_id,
+            openapi_extra,
+            false,
+            include_in_schema,
+        );
+        if let Some(ref n) = name {
+            self.named_routes.insert(n.clone(), path.to_string());
+        }
         self.router
             .insert(Method::DELETE, path, id)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
@@ -186,7 +732,8 @@ impl JustAPIApp {
     /// Register a route for the HTTP QUERY method (RFC 10008): safe,
     /// idempotent, and body-carrying (like POST). The `experimental` flag
     /// is reserved for tagging the operation in generated OpenAPI specs.
-    #[pyo3(signature = (path, handler, body_schema=None, schema=None, experimental=None))]
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (path, handler, body_schema=None, schema=None, query_schema=None, experimental=None, tags=None, summary=None, description=None, deprecated=None, status_code=None, responses=None, operation_id=None, openapi_extra=None, include_in_schema=None, name=None, native=None))]
     fn query(
         &mut self,
         py: Python<'_>,
@@ -194,16 +741,206 @@ impl JustAPIApp {
         handler: Py<PyAny>,
         body_schema: Option<Py<PyAny>>,
         schema: Option<Py<PyAny>>,
+        query_schema: Option<Py<PyAny>>,
         experimental: Option<bool>,
+        tags: Option<Vec<String>>,
+        summary: Option<String>,
+        description: Option<String>,
+        deprecated: Option<bool>,
+        status_code: Option<u16>,
+        responses: Option<String>,
+        operation_id: Option<String>,
+        openapi_extra: Option<String>,
+        include_in_schema: Option<bool>,
+        name: Option<String>,
+        native: Option<bool>,
     ) -> PyResult<()> {
-        let _ = experimental;
+        let experimental = experimental.unwrap_or(false);
         let id = self.handlers.len();
         self.handlers.push(handler);
-        self.schemas.push(body_schema);
+        self.native.push(native.unwrap_or(false));
+        self.schemas.push(body_schema.as_ref().map(|b| b.clone_ref(py)));
         self.schema_jsons.push(resolve_schema_json(py, schema)?);
+        self.query_schema_jsons.push(resolve_schema_json(py, query_schema)?);
         self.batch_configs.push(None);
+        if let Some(ref n) = name {
+            self.named_routes.insert(n.clone(), path.to_string());
+        }
+        self.store_meta(
+            py,
+            justapi_core::query_method().as_str().to_string(),
+            path.to_string(),
+            body_schema,
+            self.schema_jsons.last().cloned(),
+            tags,
+            summary,
+            description,
+            deprecated,
+            status_code,
+            responses,
+            operation_id,
+            openapi_extra,
+            experimental,
+            include_in_schema,
+        );
         self.router
             .insert(justapi_core::query_method(), path, id)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (path, handler, query_schema=None, tags=None, summary=None, description=None, deprecated=None, status_code=None, responses=None, operation_id=None, openapi_extra=None, include_in_schema=None, name=None, native=None))]
+    fn head(
+        &mut self,
+        py: Python<'_>,
+        path: &str,
+        handler: Py<PyAny>,
+        query_schema: Option<Py<PyAny>>,
+        tags: Option<Vec<String>>,
+        summary: Option<String>,
+        description: Option<String>,
+        deprecated: Option<bool>,
+        status_code: Option<u16>,
+        responses: Option<String>,
+        operation_id: Option<String>,
+        openapi_extra: Option<String>,
+        include_in_schema: Option<bool>,
+        name: Option<String>,
+        native: Option<bool>,
+    ) -> PyResult<()> {
+        let id = self.handlers.len();
+        self.handlers.push(handler);
+        self.native.push(native.unwrap_or(false));
+        self.schemas.push(None);
+        self.schema_jsons.push(None);
+        self.query_schema_jsons.push(resolve_schema_json(py, query_schema)?);
+        self.batch_configs.push(None);
+        self.store_meta(
+            py,
+            "HEAD".to_string(),
+            path.to_string(),
+            None,
+            None,
+            tags,
+            summary,
+            description,
+            deprecated,
+            status_code,
+            responses,
+            operation_id,
+            openapi_extra,
+            false,
+            include_in_schema,
+        );
+        if let Some(ref n) = name {
+            self.named_routes.insert(n.clone(), path.to_string());
+        }
+        self.router
+            .insert(Method::HEAD, path, id)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (path, handler, query_schema=None, tags=None, summary=None, description=None, deprecated=None, status_code=None, responses=None, operation_id=None, openapi_extra=None, include_in_schema=None, name=None, native=None))]
+    fn options(
+        &mut self,
+        py: Python<'_>,
+        path: &str,
+        handler: Py<PyAny>,
+        query_schema: Option<Py<PyAny>>,
+        tags: Option<Vec<String>>,
+        summary: Option<String>,
+        description: Option<String>,
+        deprecated: Option<bool>,
+        status_code: Option<u16>,
+        responses: Option<String>,
+        operation_id: Option<String>,
+        openapi_extra: Option<String>,
+        include_in_schema: Option<bool>,
+        name: Option<String>,
+        native: Option<bool>,
+    ) -> PyResult<()> {
+        let id = self.handlers.len();
+        self.handlers.push(handler);
+        self.native.push(native.unwrap_or(false));
+        self.schemas.push(None);
+        self.schema_jsons.push(None);
+        self.query_schema_jsons.push(resolve_schema_json(py, query_schema)?);
+        self.batch_configs.push(None);
+        self.store_meta(
+            py,
+            "OPTIONS".to_string(),
+            path.to_string(),
+            None,
+            None,
+            tags,
+            summary,
+            description,
+            deprecated,
+            status_code,
+            responses,
+            operation_id,
+            openapi_extra,
+            false,
+            include_in_schema,
+        );
+        if let Some(ref n) = name {
+            self.named_routes.insert(n.clone(), path.to_string());
+        }
+        self.router
+            .insert(Method::OPTIONS, path, id)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (path, handler, query_schema=None, tags=None, summary=None, description=None, deprecated=None, status_code=None, responses=None, operation_id=None, openapi_extra=None, include_in_schema=None, name=None, native=None))]
+    fn trace(
+        &mut self,
+        py: Python<'_>,
+        path: &str,
+        handler: Py<PyAny>,
+        query_schema: Option<Py<PyAny>>,
+        tags: Option<Vec<String>>,
+        summary: Option<String>,
+        description: Option<String>,
+        deprecated: Option<bool>,
+        status_code: Option<u16>,
+        responses: Option<String>,
+        operation_id: Option<String>,
+        openapi_extra: Option<String>,
+        include_in_schema: Option<bool>,
+        name: Option<String>,
+        native: Option<bool>,
+    ) -> PyResult<()> {
+        let id = self.handlers.len();
+        self.handlers.push(handler);
+        self.native.push(native.unwrap_or(false));
+        self.schemas.push(None);
+        self.schema_jsons.push(None);
+        self.query_schema_jsons.push(resolve_schema_json(py, query_schema)?);
+        self.batch_configs.push(None);
+        self.store_meta(
+            py,
+            "TRACE".to_string(),
+            path.to_string(),
+            None,
+            None,
+            tags,
+            summary,
+            description,
+            deprecated,
+            status_code,
+            responses,
+            operation_id,
+            openapi_extra,
+            false,
+            include_in_schema,
+        );
+        if let Some(ref n) = name {
+            self.named_routes.insert(n.clone(), path.to_string());
+        }
+        self.router
+            .insert(Method::TRACE, path, id)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
     }
 
@@ -252,42 +989,140 @@ impl JustAPIApp {
         Ok(())
     }
 
+    /// Register a static frontend (SPA) served from `directory` under `path`.
+    /// `fallback` is an optional file (e.g. "index.html") served for unknown
+    /// routes; `None` disables SPA fallback. When `check_dir` is true the
+    /// directory must already exist.
+    #[pyo3(signature = (path, directory, fallback=None, check_dir=true))]
+    fn frontend(
+        &mut self,
+        path: String,
+        directory: String,
+        fallback: Option<String>,
+        check_dir: bool,
+    ) -> PyResult<()> {
+        if check_dir && !std::path::Path::new(&directory).is_dir() {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "frontend directory does not exist or is not a directory: {}",
+                directory
+            )));
+        }
+        let prefix = if path.is_empty() { "/".to_string() } else { path };
+        let dir = justapi_core::static_files::StaticDir::new(directory);
+        self.frontend_mounts.push(justapi_core::static_files::StaticMount {
+            prefix,
+            dir,
+            fallback,
+        });
+        Ok(())
+    }
+
+    /// Build a URL path for a named route, substituting `{param}` placeholders
+    /// from the provided keyword arguments. Mirrors FastAPI/Starlette
+    /// `request.url_for(name, **params)`.
+    #[pyo3(signature = (name, **kwargs))]
+    fn url_for<'py>(
+        &self,
+        name: &str,
+        kwargs: Option<&Bound<'py, PyDict>>,
+        py: Python<'py>,
+    ) -> PyResult<Py<PyAny>> {
+        let template = self.named_routes.get(name).ok_or_else(|| {
+            pyo3::exceptions::PyKeyError::new_err(format!("No route named {name:?} is registered"))
+        })?;
+        let mut params: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        if let Some(d) = kwargs {
+            for (k, v) in d.iter() {
+                let key = k.str()?.to_string_lossy().to_string();
+                let val = match v.extract::<String>() {
+                    Ok(s) => s,
+                    Err(_) => v.str()?.to_string_lossy().to_string(),
+                };
+                params.insert(key, val);
+            }
+        }
+        let mut out = String::new();
+        let mut chars = template.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '{' {
+                let mut key = String::new();
+                for cc in chars.by_ref() {
+                    if cc == '}' {
+                        break;
+                    }
+                    key.push(cc);
+                }
+                match params.get(&key) {
+                    Some(v) => out.push_str(v),
+                    None => {
+                        out.push('{');
+                        out.push_str(&key);
+                        out.push('}');
+                    }
+                }
+            } else {
+                out.push(c);
+            }
+        }
+        Ok(PyString::new(py, &out).into_any().unbind())
+    }
+
     /// Start the server and begin accepting requests.
-    fn run(&mut self, py: Python<'_>, addr: &str) -> PyResult<()> {
+    fn run(slf: Py<Self>, py: Python<'_>, addr: &str) -> PyResult<()> {
+        let mut app = slf.borrow_mut(py);
         let addr: std::net::SocketAddr = addr.parse().map_err(|e| {
             pyo3::exceptions::PyValueError::new_err(format!("Invalid address: {}", e))
         })?;
 
+        // Initialize the dedicated GIL pool once (detects GIL vs free-threaded
+        // mode automatically; see gil_pool.rs / DECISIONS.md ADR-049).
+        crate::gil_pool::init(py, None);
+
         // Build OpenAPI spec from registered routes before taking ownership.
         let openapi_spec = {
             use justapi_core::openapi::*;
-            let routes: Vec<(hyper::Method, String)> = self.router.list_routes().to_vec();
+            let routes: Vec<(hyper::Method, String)> = app.router.list_routes().to_vec();
+            // HEAD is auto-registered for GET routes; only surface an explicit
+            // HEAD operation when no GET exists for the same path (FastAPI
+            // does not list the implicit HEAD).
+            let get_paths: std::collections::HashSet<&String> =
+                routes.iter().filter(|(m, _)| *m == hyper::Method::GET).map(|(_, p)| p).collect();
             let mut registry = OpenApiRegistry::new();
             for (method, path) in &routes {
-                let _path_params: Vec<String> = path
-                    .split('/')
-                    .filter(|s| s.starts_with('{') && s.ends_with('}'))
-                    .map(|s| s[1..s.len() - 1].to_string())
-                    .collect();
-                let is_body_method = matches!(
-                    *method,
-                    hyper::Method::POST | hyper::Method::PUT | hyper::Method::PATCH
-                );
-                registry.register(RouteMeta {
-                    method: method.clone(),
-                    path: path.clone(),
-                    summary: None,
-                    description: None,
-                    tags: vec![],
-                    request_body_schema: if is_body_method {
-                        Some(serde_json::json!({}))
-                    } else {
-                        None
-                    },
-                    response_schema: Some(serde_json::json!({})),
-                    deprecated: false,
-                    experimental: false,
-                });
+                if *method == hyper::Method::HEAD && get_paths.contains(path) {
+                    continue;
+                }
+                let meta =
+                    app.route_meta.get(&(method.clone(), path.clone())).cloned().unwrap_or_else(
+                        || {
+                            let is_body_method = matches!(
+                                *method,
+                                hyper::Method::POST | hyper::Method::PUT | hyper::Method::PATCH
+                            ) || *method == justapi_core::query_method();
+                            RouteMeta {
+                                method: method.clone(),
+                                path: path.clone(),
+                                summary: None,
+                                description: None,
+                                tags: vec![],
+                                request_body_schema: if is_body_method {
+                                    Some(serde_json::json!({}))
+                                } else {
+                                    None
+                                },
+                                response_schema: Some(serde_json::json!({})),
+                                deprecated: false,
+                                experimental: *method == justapi_core::query_method(),
+                                status_code: None,
+                                responses: None,
+                                operation_id: None,
+                                openapi_extra: None,
+                                include_in_schema: true,
+                            }
+                        },
+                    );
+                registry.register(meta);
             }
             if routes.is_empty() {
                 None
@@ -299,20 +1134,58 @@ impl JustAPIApp {
             }
         };
 
-        let router = Arc::new(std::mem::take(&mut self.router));
-        let handlers = Arc::new(std::mem::take(&mut self.handlers));
-        let schemas = Arc::new(std::mem::take(&mut self.schemas));
-        let schema_jsons = Arc::new(std::mem::take(&mut self.schema_jsons));
-        let batch_configs_arc = Arc::new(std::mem::take(&mut self.batch_configs));
-        let database_config = self.database.take().map(|d| d.to_config());
-        let plugins = std::mem::take(&mut self.plugins);
-        let grpc_addr = self.grpc_addr.take();
-        let grpc_handlers = Arc::new(std::mem::take(&mut self.grpc_handlers));
-        let ws_routes = std::mem::take(&mut self.ws_routes);
-        let wasm_bytes = self.wasm_bytes.take();
-        let gateway_config_path = self.gateway_config.take();
-        let cb_config = self.circuit_breaker_config.take();
-        let coalesce_headers = self.coalesce_headers.take();
+        let router = Arc::new(std::mem::take(&mut app.router));
+        let handlers = Arc::new(std::mem::take(&mut app.handlers));
+        // Per-handler flag: does this route need a Python `Request` object?
+        // 0-param, dependency-free handlers skip building it (mirrors Robyn's
+        // `number_of_params == 0 -> call0()` fast path).
+        let needs_request: Vec<bool> = handlers
+            .iter()
+            .map(|h| {
+                h.bind(py)
+                    .getattr("_needs_request")
+                    .and_then(|v| v.extract::<bool>())
+                    .unwrap_or(true)
+            })
+            .collect();
+        let needs_request = Arc::new(needs_request);
+        // Per-handler flag: is this route served by the native Rust fast path
+        // (schema-backed, response = validated request body, no Python call)?
+        let native: Vec<bool> = std::mem::take(&mut app.native);
+        let native = Arc::new(native);
+        let schemas = Arc::new(std::mem::take(&mut app.schemas));
+        let schema_jsons = Arc::new(std::mem::take(&mut app.schema_jsons));
+        let query_schema_jsons = Arc::new(std::mem::take(&mut app.query_schema_jsons));
+        // Precompile each schema once (per route) so validation on the hot path
+        // reuses the compiled validator instead of re-parsing/re-compiling the
+        // schema JSON on every request. A compile failure (shouldn't happen for
+        // a schema already accepted at registration) leaves `None`, and the
+        // route falls back to the raw-schema-string validation path.
+        let schema_validators: Vec<Option<justapi_core::validate::CompiledValidator>> =
+            vec![None; schema_jsons.len()];
+        let schema_validators = Arc::new(schema_validators);
+        let batch_configs_arc = Arc::new(std::mem::take(&mut app.batch_configs));
+        let database_config = app.database.take().map(|d| d.to_config());
+        let plugins = std::mem::take(&mut app.plugins);
+        let grpc_addr = app.grpc_addr.take();
+        let grpc_handlers = Arc::new(std::mem::take(&mut app.grpc_handlers));
+        let ws_routes = std::mem::take(&mut app.ws_routes);
+        let wasm_bytes = app.wasm_bytes.take();
+        let gateway_config_path = app.gateway_config.take();
+        let cb_config = app.circuit_breaker_config.take();
+        let coalesce_headers = app.coalesce_headers.take();
+        let frontend_mounts = std::mem::take(&mut app.frontend_mounts);
+
+        // The app object is surfaced on `Request.app`; capture it before
+        // releasing the borrow (the server loop runs without the GIL held).
+        let app_py: Option<Py<PyAny>> = Some(slf.clone_ref(py).into_bound(py).into_any().unbind());
+        drop(app);
+        // Clone the app handle now (GIL held) so it can be moved into the
+        // detached server loop, which runs without a GIL token.
+        let app_py_http1: Option<Py<PyAny>> = app_py.as_ref().map(|a| a.clone_ref(py));
+        let app_py_ws: Arc<Option<Py<PyAny>>> =
+            Arc::new(app_py_http1.as_ref().map(|a| a.clone_ref(py)));
+        let _ = app_py;
 
         let shutdown = CancellationToken::new();
         let shutdown_signal = shutdown.clone();
@@ -375,6 +1248,10 @@ impl JustAPIApp {
                                                     req.body.to_vec(),
                                                     db_url_str2.as_deref().map(|s| s.to_string()),
                                                     None,
+                                                    "http".to_string(),
+                                                    None,
+                                                    None,
+                                                    "1.1".to_string(),
                                                 )).unwrap();
                                                 py_list.append(r).unwrap();
                                             }
@@ -443,17 +1320,43 @@ impl JustAPIApp {
                     handlers,
                     schemas,
                     schema_jsons,
+                    query_schema_jsons.clone(),
                     batchers,
                     db_pool.clone(),
                     db_url_str,
+                    "http".to_string(),
+                    app_py_http1,
+                    needs_request.clone(),
+                    native.clone(),
+                    schema_validators.clone(),
                 );
 
-                // Install Ctrl+C signal handler to trigger graceful shutdown.
+                // Install signal handlers to trigger graceful shutdown.
+                // Ctrl+C is universal; on Unix we also handle SIGTERM so the
+                // process can be cleanly stopped by container orchestrators
+                // (Docker/k8s) and process managers.
                 let signal_token = shutdown.clone();
                 tokio::spawn(async move {
-                    tokio::signal::ctrl_c().await.ok();
-                    tracing::info!("Ctrl+C received, initiating graceful shutdown");
-                    signal_token.cancel();
+                    #[cfg(unix)]
+                    {
+                        let term = term_signal();
+                        tokio::select! {
+                            _ = tokio::signal::ctrl_c() => {
+                                tracing::info!("Ctrl+C received, initiating graceful shutdown");
+                                signal_token.cancel();
+                            }
+                            _ = term => {
+                                tracing::info!("SIGTERM received, initiating graceful shutdown");
+                                signal_token.cancel();
+                            }
+                        }
+                    }
+                    #[cfg(not(unix))]
+                    {
+                        tokio::signal::ctrl_c().await.ok();
+                        tracing::info!("Ctrl+C received, initiating graceful shutdown");
+                        signal_token.cancel();
+                    }
                 });
 
                 let mut server = justapi_core::Server::new(addr)
@@ -521,6 +1424,14 @@ impl JustAPIApp {
                     server = server.add_gateway(gateway_state);
                 }
 
+                for mount in &frontend_mounts {
+                    // NOTE: core's static API currently supports a single
+                    // directory mount (`with_static_dir`); per-mount prefix and
+                    // fallback routing from `frontend_mounts` is not yet wired
+                    // through. This keeps the last mount as the served dir.
+                    server = server.with_static_dir(mount.dir.root());
+                }
+
                 if let (Some(gaddr), true) = (grpc_addr, !grpc_handlers.is_empty()) {
                     let g_handlers = grpc_handlers.clone();
                     let grpc_h = Box::new(move |uri: http::Uri, body: Vec<u8>| {
@@ -562,6 +1473,7 @@ impl JustAPIApp {
                     let ws_routes_arc = Arc::new(ws_routes);
                     let ws_handler: justapi_core::server::WsHandler = Arc::new(move |path, mut read, mut write| {
                         let ws_routes = ws_routes_arc.clone();
+                        let app_py_ws = app_py_ws.clone();
                         Box::pin(async move {
                             let (out_tx, mut out_rx) =
                                 tokio::sync::mpsc::unbounded_channel::<WsMessage>();
@@ -582,7 +1494,7 @@ impl JustAPIApp {
                                         }
                                         Ok(tokio_tungstenite::tungstenite::Message::Close(_))
                                         | Err(_) => {
-                                            let _ = in_tx.send(WsMessage::Close);
+                                            let _ = in_tx.send(WsMessage::Close(None, None));
                                             break;
                                         }
                                         _ => {}
@@ -602,14 +1514,22 @@ impl JustAPIApp {
                                                 b.clone(),
                                             )
                                         }
-                                        WsMessage::Close => {
-                                            tokio_tungstenite::tungstenite::Message::Close(None)
+                                        WsMessage::Close(code, reason) => {
+                                            tokio_tungstenite::tungstenite::Message::Close(
+                                                code.map(|c| CloseFrame {
+                                                    code: c.into(),
+                                                    reason: reason
+                                                        .clone()
+                                                        .unwrap_or_default()
+                                                        .into(),
+                                                }),
+                                            )
                                         }
                                     };
                                     if write.send(frame).await.is_err() {
                                         break;
                                     }
-                                    if matches!(msg, WsMessage::Close) {
+                                    if matches!(msg, WsMessage::Close(..)) {
                                         break;
                                     }
                                 }
@@ -619,10 +1539,45 @@ impl JustAPIApp {
                             // Invoke the Python handler on the daemon event loop.
                             Python::attach(|py| {
                                 if let Some(h) = ws_routes.get(&path) {
-                                    match h
-                                        .bind(py)
-                                        .call1((WebSocket::new(incoming, out_tx),))
+                                    let conn = Conn {
+                                        method: "GET".to_string(),
+                                        path: path.clone(),
+                                        path_params_raw: vec![],
+                                        query_string_raw: vec![],
+                                        headers_raw: vec![],
+                                        scheme: "ws".to_string(),
+                                        client: None,
+                                        app: app_py_ws.as_ref().as_ref().map(|a| a.clone_ref(py)),
+                                        http_version: "1.1".to_string(),
+                                        state: PyDict::new(py).unbind(),
+                                    };
+                                    let rust_ws = match Py::new(
+                                        py,
+                                        WebSocket::new(incoming, out_tx, conn),
+                                    ) {
+                                        Ok(w) => w,
+                                        Err(e) => {
+                                            tracing::error!(
+                                                "Failed to build Rust WebSocket: {}",
+                                                e
+                                            );
+                                            return;
+                                        }
+                                    };
+                                    let ws_obj = match PyModule::import(py, "justapi.websockets")
+                                        .and_then(|m| m.getattr("WebSocket"))
+                                        .and_then(|cls| cls.call1((rust_ws,)))
                                     {
+                                        Ok(obj) => obj,
+                                        Err(e) => {
+                                            tracing::error!(
+                                                "Failed to build Python WebSocket wrapper: {}",
+                                                e
+                                            );
+                                            return;
+                                        }
+                                    };
+                                    match h.bind(py).call1((ws_obj,)) {
                                         Ok(coro) => {
                                             let helper = get_helper(py);
                                             if let Err(e) =

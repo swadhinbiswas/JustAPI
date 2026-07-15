@@ -48,6 +48,8 @@ pub struct PathItem {
     pub head: Option<Operation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub options: Option<Operation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace: Option<Operation>,
     /// The HTTP QUERY method (RFC 10008) — safe, idempotent, body-carrying.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub query: Option<Operation>,
@@ -67,12 +69,13 @@ impl PathItem {
             Method::PATCH => self.patch = Some(op),
             Method::HEAD => self.head = Some(op),
             Method::OPTIONS => self.options = Some(op),
+            Method::TRACE => self.trace = Some(op),
             _ => {}
         }
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Operation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
@@ -92,6 +95,11 @@ pub struct Operation {
     pub responses: BTreeMap<String, Response>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deprecated: Option<bool>,
+    /// Extra top-level fields merged into the Operation object (OpenAPI
+    /// `openapi_extra`). Serialized flat alongside the typed fields.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(flatten)]
+    pub extensions: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -152,9 +160,7 @@ pub enum Schema {
 
 impl Schema {
     pub fn ref_path(path: &str) -> Self {
-        Self::Ref {
-            ref_path: path.to_string(),
-        }
+        Self::Ref { ref_path: path.to_string() }
     }
 
     pub fn object(obj: SchemaObject) -> Self {
@@ -236,45 +242,27 @@ pub struct SchemaObject {
 
 impl SchemaObject {
     pub fn string() -> Self {
-        Self {
-            schema_type: Some("string".to_string()),
-            ..Default::default()
-        }
+        Self { schema_type: Some("string".to_string()), ..Default::default() }
     }
 
     pub fn integer() -> Self {
-        Self {
-            schema_type: Some("integer".to_string()),
-            ..Default::default()
-        }
+        Self { schema_type: Some("integer".to_string()), ..Default::default() }
     }
 
     pub fn number() -> Self {
-        Self {
-            schema_type: Some("number".to_string()),
-            ..Default::default()
-        }
+        Self { schema_type: Some("number".to_string()), ..Default::default() }
     }
 
     pub fn boolean() -> Self {
-        Self {
-            schema_type: Some("boolean".to_string()),
-            ..Default::default()
-        }
+        Self { schema_type: Some("boolean".to_string()), ..Default::default() }
     }
 
     pub fn object() -> Self {
-        Self {
-            schema_type: Some("object".to_string()),
-            ..Default::default()
-        }
+        Self { schema_type: Some("object".to_string()), ..Default::default() }
     }
 
     pub fn array() -> Self {
-        Self {
-            schema_type: Some("array".to_string()),
-            ..Default::default()
-        }
+        Self { schema_type: Some("array".to_string()), ..Default::default() }
     }
 
     pub fn with_items(mut self, items: Schema) -> Self {
@@ -283,9 +271,7 @@ impl SchemaObject {
     }
 
     pub fn with_property(mut self, name: &str, prop: Schema) -> Self {
-        self.properties
-            .get_or_insert_with(BTreeMap::new)
-            .insert(name.to_string(), prop);
+        self.properties.get_or_insert_with(BTreeMap::new).insert(name.to_string(), prop);
         self
     }
 
@@ -347,18 +333,14 @@ impl OpenApiBuilder {
     }
 
     pub fn server(mut self, url: &str, description: Option<&str>) -> Self {
-        self.servers.push(Server {
-            url: url.to_string(),
-            description: description.map(|s| s.to_string()),
-        });
+        self.servers
+            .push(Server { url: url.to_string(), description: description.map(|s| s.to_string()) });
         self
     }
 
     pub fn tag(mut self, name: &str, description: Option<&str>) -> Self {
-        self.tags.push(Tag {
-            name: name.to_string(),
-            description: description.map(|s| s.to_string()),
-        });
+        self.tags
+            .push(Tag { name: name.to_string(), description: description.map(|s| s.to_string()) });
         self
     }
 
@@ -377,6 +359,7 @@ impl OpenApiBuilder {
             patch: None,
             head: None,
             options: None,
+            trace: None,
             query: None,
         });
         entry.insert(&method, op);
@@ -387,22 +370,12 @@ impl OpenApiBuilder {
         let components = if self.schemas.is_empty() {
             None
         } else {
-            Some(Components {
-                schemas: Some(self.schemas),
-            })
+            Some(Components { schemas: Some(self.schemas) })
         };
 
-        let tags = if self.tags.is_empty() {
-            None
-        } else {
-            Some(self.tags)
-        };
+        let tags = if self.tags.is_empty() { None } else { Some(self.tags) };
 
-        let servers = if self.servers.is_empty() {
-            None
-        } else {
-            Some(self.servers)
-        };
+        let servers = if self.servers.is_empty() { None } else { Some(self.servers) };
 
         OpenApiDocument {
             openapi: "3.1.0".to_string(),
@@ -432,6 +405,21 @@ pub struct RouteMeta {
     /// When true, the generated operation is tagged `experimental`
     /// (used for recently-standardized methods such as HTTP QUERY).
     pub experimental: bool,
+    /// Default success status code for the operation (e.g. 201). When `None`
+    /// the generated OpenAPI uses `200`.
+    pub status_code: Option<u16>,
+    /// Additional responses to merge into the OpenAPI `responses` object
+    /// (keyed by status code). Raw JSON as provided by the user.
+    pub responses: Option<serde_json::Value>,
+    /// Custom operation ID. When `None`, one is auto-generated from the
+    /// method + path.
+    pub operation_id: Option<String>,
+    /// Arbitrary extra fields merged into the generated Operation object
+    /// (OpenAPI `openapi_extra`).
+    pub openapi_extra: Option<serde_json::Value>,
+    /// When false, the operation is excluded from the generated OpenAPI spec
+    /// (FastAPI `include_in_schema=False`).
+    pub include_in_schema: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -454,17 +442,15 @@ impl OpenApiRegistry {
             .tag("default", Some("Default endpoint group"));
 
         for route in &self.routes {
+            let auto_operation_id = format!(
+                "{}_{}",
+                route.method.as_str().to_lowercase(),
+                route.path.replace(['/', '{', '}', ':'], "_").trim_matches('_')
+            );
             let mut op = Operation {
                 summary: route.summary.clone(),
                 description: route.description.clone(),
-                operation_id: Some(format!(
-                    "{}_{}",
-                    route.method.as_str().to_lowercase(),
-                    route
-                        .path
-                        .replace(['/', '{', '}', ':'], "_")
-                        .trim_matches('_')
-                )),
+                operation_id: route.operation_id.clone().or(Some(auto_operation_id)),
                 tags: {
                     let mut tags = route.tags.clone();
                     if route.experimental && !tags.iter().any(|t| t == "experimental") {
@@ -476,7 +462,13 @@ impl OpenApiRegistry {
                 request_body: None,
                 responses: BTreeMap::new(),
                 deprecated: if route.deprecated { Some(true) } else { None },
+                extensions: BTreeMap::new(),
             };
+
+            // Skip routes excluded from the schema (FastAPI include_in_schema=False).
+            if !route.include_in_schema {
+                continue;
+            }
 
             let mut path_params = Vec::new();
             for segment in route.path.split('/') {
@@ -504,22 +496,14 @@ impl OpenApiRegistry {
                 let body_schema = route.request_body_schema.as_ref().map(json_value_to_schema);
 
                 let mut content = BTreeMap::new();
-                content.insert(
-                    "application/json".to_string(),
-                    MediaType {
-                        schema: body_schema,
-                    },
-                );
-                op.request_body = Some(RequestBody {
-                    description: None,
-                    content,
-                    required: true,
-                });
+                content.insert("application/json".to_string(), MediaType { schema: body_schema });
+                op.request_body = Some(RequestBody { description: None, content, required: true });
             }
 
             let mut responses = BTreeMap::new();
+            let success_code = route.status_code.unwrap_or(200).to_string();
             responses.insert(
-                "200".to_string(),
+                success_code.clone(),
                 Response {
                     description: "Successful response".to_string(),
                     content: Some({
@@ -536,19 +520,37 @@ impl OpenApiRegistry {
             );
             responses.insert(
                 "400".to_string(),
-                Response {
-                    description: "Bad request".to_string(),
-                    content: None,
-                },
+                Response { description: "Bad request".to_string(), content: None },
             );
             responses.insert(
                 "500".to_string(),
-                Response {
-                    description: "Internal server error".to_string(),
-                    content: None,
-                },
+                Response { description: "Internal server error".to_string(), content: None },
             );
             op.responses = responses;
+
+            // Merge user-provided `responses` into the generated Operation.
+            if let Some(resp) = &route.responses {
+                if let Some(map) = resp.as_object() {
+                    for (code, val) in map {
+                        if let Ok(parsed) = serde_json::from_value::<Response>(val.clone()) {
+                            op.responses.insert(code.clone(), parsed);
+                        }
+                    }
+                }
+            }
+
+            // Merge `openapi_extra` into the Operation extensions (flattened
+            // top-level fields, mirroring FastAPI's `openapi_extra`).
+            if let Some(extra) = &route.openapi_extra {
+                if let Some(map) = extra.as_object() {
+                    for (key, val) in map {
+                        if key == "responses" || key == "operationId" {
+                            continue;
+                        }
+                        op.extensions.insert(key.clone(), val.clone());
+                    }
+                }
+            }
 
             builder = builder.operation(route.method.clone(), &route.path, op);
         }
@@ -707,14 +709,12 @@ mod tests {
                         let mut m = BTreeMap::new();
                         m.insert(
                             "200".to_string(),
-                            Response {
-                                description: "User found".to_string(),
-                                content: None,
-                            },
+                            Response { description: "User found".to_string(), content: None },
                         );
                         m
                     },
                     deprecated: None,
+                    extensions: Default::default(),
                 },
             )
             .build();
@@ -749,6 +749,11 @@ mod tests {
             response_schema: Some(response_schema),
             deprecated: false,
             experimental: false,
+            status_code: None,
+            responses: None,
+            operation_id: None,
+            openapi_extra: None,
+            include_in_schema: true,
         });
 
         let doc = registry.generate("Test", "1.0.0");
@@ -775,13 +780,16 @@ mod tests {
             response_schema: None,
             deprecated: false,
             experimental: false,
+            status_code: None,
+            responses: None,
+            operation_id: None,
+            openapi_extra: None,
+            include_in_schema: true,
         });
 
         let doc = registry.generate("Test", "1.0.0");
         let json = serde_json::to_value(&doc).unwrap();
-        let params = json
-            .pointer("/paths/~1users~1{id}~1posts~1{postId}/get/parameters")
-            .unwrap();
+        let params = json.pointer("/paths/~1users~1{id}~1posts~1{postId}/get/parameters").unwrap();
         assert_eq!(params.as_array().unwrap().len(), 2);
         assert_eq!(params[0]["name"], "id");
         assert_eq!(params[1]["name"], "postId");
@@ -805,9 +813,7 @@ mod tests {
                             let mut c = std::collections::BTreeMap::new();
                             c.insert(
                                 "application/x-www-form-urlencoded".to_string(),
-                                MediaType {
-                                    schema: Some(Schema::string()),
-                                },
+                                MediaType { schema: Some(Schema::string()) },
                             );
                             c
                         },
@@ -817,21 +823,17 @@ mod tests {
                         let mut m = std::collections::BTreeMap::new();
                         m.insert(
                             "200".to_string(),
-                            Response {
-                                description: "ok".to_string(),
-                                content: None,
-                            },
+                            Response { description: "ok".to_string(), content: None },
                         );
                         m
                     },
                     deprecated: None,
+                    extensions: Default::default(),
                 },
             )
             .build();
         let json = serde_json::to_value(&doc).unwrap();
-        let op = json
-            .pointer("/paths/~1search/query")
-            .expect("query op present");
+        let op = json.pointer("/paths/~1search/query").expect("query op present");
         assert_eq!(op["summary"], "Search");
         assert!(op.get("requestBody").is_some());
     }
@@ -849,13 +851,16 @@ mod tests {
             response_schema: None,
             deprecated: false,
             experimental: true,
+            status_code: None,
+            responses: None,
+            operation_id: None,
+            openapi_extra: None,
+            include_in_schema: true,
         });
 
         let doc = registry.generate("Test", "1.0.0");
         let json = serde_json::to_value(&doc).unwrap();
-        let op = json
-            .pointer("/paths/~1search/query")
-            .expect("query op present");
+        let op = json.pointer("/paths/~1search/query").expect("query op present");
         let tags = op["tags"].as_array().expect("tags array");
         assert!(tags.iter().any(|t| t == "experimental"));
         // QUERY carries a request body per RFC 10008.
@@ -875,13 +880,16 @@ mod tests {
             response_schema: None,
             deprecated: false,
             experimental: false,
+            status_code: None,
+            responses: None,
+            operation_id: None,
+            openapi_extra: None,
+            include_in_schema: true,
         });
 
         let doc = registry.generate("Test", "1.0.0");
         let json = serde_json::to_value(&doc).unwrap();
-        let op = json
-            .pointer("/paths/~1search/query")
-            .expect("query op present");
+        let op = json.pointer("/paths/~1search/query").expect("query op present");
         let tags = op["tags"].as_array().expect("tags array");
         assert!(tags.iter().all(|t| t != "experimental"));
     }
@@ -907,9 +915,7 @@ mod tests {
         let json = serde_json::to_value(&schema).unwrap();
         if let Some(obj) = json.as_object() {
             assert_eq!(
-                obj.get("properties")
-                    .and_then(|p| p.get("name"))
-                    .and_then(|n| n.get("type")),
+                obj.get("properties").and_then(|p| p.get("name")).and_then(|n| n.get("type")),
                 Some(&serde_json::json!("string"))
             );
         }
@@ -933,14 +939,12 @@ mod tests {
                         let mut m = BTreeMap::new();
                         m.insert(
                             "200".to_string(),
-                            Response {
-                                description: "OK".to_string(),
-                                content: None,
-                            },
+                            Response { description: "OK".to_string(), content: None },
                         );
                         m
                     },
                     deprecated: None,
+                    extensions: Default::default(),
                 },
             )
             .build();

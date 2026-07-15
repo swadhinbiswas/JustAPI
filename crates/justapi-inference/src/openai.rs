@@ -317,17 +317,11 @@ pub fn prompt_from_messages(messages: &[ChatMessage]) -> String {
 }
 
 fn now_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
 fn short_id() -> String {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
     format!("{:x}", nanos % 0xfffffffffffffff)
 }
 
@@ -484,11 +478,7 @@ pub async fn chat_completion(
         model,
         choices: vec![ChatCompletionChoice {
             index: 0,
-            message: ChatMessageOut {
-                role: "assistant".into(),
-                content,
-                finish_reason: None,
-            },
+            message: ChatMessageOut { role: "assistant".into(), content, finish_reason: None },
             finish_reason: finish.into(),
         }],
         usage: Usage {
@@ -597,11 +587,7 @@ pub async fn completion(
         object: "text_completion",
         created: now_secs(),
         model,
-        choices: vec![CompletionChoice {
-            text,
-            index: 0,
-            finish_reason: finish.into(),
-        }],
+        choices: vec![CompletionChoice { text, index: 0, finish_reason: finish.into() }],
         usage: Usage {
             prompt_tokens,
             completion_tokens,
@@ -623,11 +609,7 @@ pub fn embeddings(engine: &Engine, req: EmbeddingRequest) -> Result<EmbeddingRes
             total_tokens += tokens.len();
             // Deterministic pseudo-embedding: normalize token ids.
             let embedding: Vec<f32> = tokens.iter().map(|&t| (t as f32) / 1000.0 - 0.5).collect();
-            EmbeddingObject {
-                object: "embedding",
-                index: i,
-                embedding,
-            }
+            EmbeddingObject { object: "embedding", index: i, embedding }
         })
         .collect();
 
@@ -635,11 +617,7 @@ pub fn embeddings(engine: &Engine, req: EmbeddingRequest) -> Result<EmbeddingRes
         object: "list",
         data,
         model: req.model,
-        usage: Usage {
-            prompt_tokens: total_tokens,
-            completion_tokens: 0,
-            total_tokens,
-        },
+        usage: Usage { prompt_tokens: total_tokens, completion_tokens: 0, total_tokens },
     })
 }
 
@@ -682,11 +660,7 @@ pub async fn scheduled_chat_completion(
         model,
         choices: vec![ChatCompletionChoice {
             index: 0,
-            message: ChatMessageOut {
-                role: "assistant".into(),
-                content,
-                finish_reason: None,
-            },
+            message: ChatMessageOut { role: "assistant".into(), content, finish_reason: None },
             finish_reason: finish.into(),
         }],
         usage: Usage {
@@ -813,11 +787,7 @@ pub async fn scheduled_completion(
         object: "text_completion",
         created: now_secs(),
         model,
-        choices: vec![CompletionChoice {
-            text,
-            index: 0,
-            finish_reason: finish.into(),
-        }],
+        choices: vec![CompletionChoice { text, index: 0, finish_reason: finish.into() }],
         usage: Usage {
             prompt_tokens,
             completion_tokens,
@@ -909,10 +879,7 @@ pub fn model_list(engine: &Engine) -> ModelList {
             parent: None,
         })
         .collect();
-    ModelList {
-        object: "list",
-        data,
-    }
+    ModelList { object: "list", data }
 }
 
 // ---------------------------------------------------------------------------
@@ -1047,16 +1014,8 @@ mod tests {
     #[test]
     fn prompt_from_messages_flattened() {
         let prompt = prompt_from_messages(&[
-            ChatMessage {
-                role: "system".into(),
-                content: "be nice".into(),
-                name: None,
-            },
-            ChatMessage {
-                role: "user".into(),
-                content: "hi".into(),
-                name: None,
-            },
+            ChatMessage { role: "system".into(), content: "be nice".into(), name: None },
+            ChatMessage { role: "user".into(), content: "hi".into(), name: None },
         ]);
         assert!(prompt.contains("system: be nice"));
         assert!(prompt.contains("user: hi"));

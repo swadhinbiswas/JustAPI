@@ -46,10 +46,7 @@ impl Default for AlertingConfig {
 
 impl AlertingConfig {
     pub fn new(webhook_url: &str, _channel: AlertChannel) -> Self {
-        Self {
-            webhook_url: Some(webhook_url.to_string()),
-            ..Default::default()
-        }
+        Self { webhook_url: Some(webhook_url.to_string()), ..Default::default() }
     }
 
     /// Send an alert. When a webhook_url is configured, dispatches to the
@@ -126,15 +123,9 @@ fn build_pagerduty_payload(app: &str, severity: &AlertSeverity, message: &str) -
 fn build_generic_payload(app: &str, severity: &AlertSeverity, message: &str) -> String {
     let mut m = serde_json::Map::new();
     m.insert("app".into(), serde_json::Value::String(app.into()));
-    m.insert(
-        "severity".into(),
-        serde_json::Value::String(severity.to_string()),
-    );
+    m.insert("severity".into(), serde_json::Value::String(severity.to_string()));
     m.insert("message".into(), serde_json::Value::String(message.into()));
-    m.insert(
-        "timestamp".into(),
-        serde_json::Value::Number(unix_timestamp().into()),
-    );
+    m.insert("timestamp".into(), serde_json::Value::Number(unix_timestamp().into()));
     serde_json::to_string(&m).unwrap_or_else(|_| "{}".to_string())
 }
 
@@ -146,14 +137,9 @@ async fn post_webhook(url: &str, body: &str) -> anyhow::Result<()> {
     let uri: hyper::http::Uri = url.parse()?;
     let scheme = uri.scheme_str().unwrap_or("http");
     if scheme != "http" {
-        return Err(anyhow::anyhow!(
-            "webhook URL scheme '{}' not supported (use HTTP)",
-            scheme
-        ));
+        return Err(anyhow::anyhow!("webhook URL scheme '{}' not supported (use HTTP)", scheme));
     }
-    let host = uri
-        .host()
-        .ok_or_else(|| anyhow::anyhow!("webhook URL missing host"))?;
+    let host = uri.host().ok_or_else(|| anyhow::anyhow!("webhook URL missing host"))?;
     let port = uri.port_u16().unwrap_or(80);
     let path = uri.path_and_query().map(|pq| pq.as_str()).unwrap_or("/");
 

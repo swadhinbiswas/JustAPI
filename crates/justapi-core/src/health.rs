@@ -80,10 +80,7 @@ impl HealthRegistry {
         let mut components = Vec::with_capacity(self.checks.len());
         for check in &self.checks {
             let status = (check.func)().await;
-            components.push(ComponentStatus {
-                name: check.name,
-                status,
-            });
+            components.push(ComponentStatus { name: check.name, status });
         }
         HealthReport { components }
     }
@@ -107,9 +104,10 @@ impl HealthRegistry {
             .status(status_code)
             .header("content-type", "application/json")
             .header("content-length", body.len().to_string())
-            .body(UnsyncBoxBody::new(Full::new(Bytes::from(body)).map_err(
-                |e: std::convert::Infallible| -> anyhow::Error { match e {} },
-            )))
+            .body(UnsyncBoxBody::new(
+                Full::new(Bytes::from(body))
+                    .map_err(|e: std::convert::Infallible| -> anyhow::Error { match e {} }),
+            ))
             .unwrap()
     }
 }
@@ -270,10 +268,7 @@ mod tests {
     #[tokio::test]
     async fn test_all_healthy() {
         let mut registry = HealthRegistry::new();
-        registry.register(TestCheck {
-            name: "test1",
-            result: HealthStatus::Healthy,
-        });
+        registry.register(TestCheck { name: "test1", result: HealthStatus::Healthy });
         registry.register(AlwaysHealthy { name: "always" });
         let report = registry.check_all().await;
         assert_eq!(report.overall(), OverallHealth::Healthy);

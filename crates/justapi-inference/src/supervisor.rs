@@ -37,11 +37,7 @@ pub struct LiveReplica {
 #[derive(Debug, Clone)]
 pub enum SupervisorAction {
     /// Start a new replica for `model` @ `version`.
-    StartReplica {
-        id: String,
-        model: String,
-        version: String,
-    },
+    StartReplica { id: String, model: String, version: String },
     /// Terminate the replica with `id`.
     StopReplica { id: String },
 }
@@ -129,10 +125,7 @@ impl Supervisor {
 
         // Scale up: register not-yet-healthy replicas and emit start intents.
         while self.live.len() < desired && self.live.len() < self.config.max_replicas {
-            let id = format!(
-                "{}-{}-{}",
-                self.config.model, self.config.version, self.next_index
-            );
+            let id = format!("{}-{}-{}", self.config.model, self.config.version, self.next_index);
             self.next_index += 1;
             self.live.push(LiveReplica {
                 id: id.clone(),
@@ -238,12 +231,7 @@ mod tests {
     }
 
     fn metrics(kv: f32, ttft: f32, q: usize) -> LlmMetrics {
-        LlmMetrics {
-            tokens_per_sec: 50.0,
-            ttft_ms: ttft,
-            queue_depth: q,
-            kv_pressure_pct: kv,
-        }
+        LlmMetrics { tokens_per_sec: 50.0, ttft_ms: ttft, queue_depth: q, kv_pressure_pct: kv }
     }
 
     #[test]
@@ -297,9 +285,7 @@ mod tests {
         // Either we already scaled up via the cooldown window or this emits starts.
         assert!(s.desired() >= 2);
         if !actions.is_empty() {
-            assert!(actions
-                .iter()
-                .all(|a| matches!(a, SupervisorAction::StartReplica { .. })));
+            assert!(actions.iter().all(|a| matches!(a, SupervisorAction::StartReplica { .. })));
         }
         assert!(s.live_count() >= 2);
     }
