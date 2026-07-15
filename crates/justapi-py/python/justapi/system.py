@@ -310,7 +310,7 @@ def _help_handler_factory(app):
                     if (name and d.get("name") == name) or (path and d.get("path") == path):
                         return JSONResponse(d)
                 return JSONResponse(
-                    {"error": f"route name={name!r} path={path!r} not found"},
+                    {"detail": f"route name={name!r} path={path!r} not found"},
                     status_code=404,
                 )
         return JSONResponse(build_help(app))
@@ -322,7 +322,7 @@ def _help_handler_factory(app):
         for d in collect_routes(app):
             if d.get("name") == name or d.get("path") == name:
                 return JSONResponse(d)
-        return JSONResponse({"error": f"route {name!r} not found"}, status_code=404)
+        return JSONResponse({"detail": f"route {name!r} not found"}, status_code=404)
 
     async def tools_handler(request=None):
         return JSONResponse({"tools": app.list_tools(), "count": len(app.list_tools())})
@@ -332,11 +332,11 @@ def _help_handler_factory(app):
         name = body.get("name")
         arguments = body.get("arguments", {})
         if not name:
-            return JSONResponse({"error": "missing 'name'"}, status_code=400)
+            return JSONResponse({"detail": "missing 'name'"}, status_code=400)
         try:
             result = app.call_tool(name, arguments)
         except (KeyError, Exception) as e:  # noqa: B014 - call_tool raises KeyError for unknown
-            return JSONResponse({"error": str(e)}, status_code=404)
+            return JSONResponse({"detail": str(e)}, status_code=404)
         if inspect.iscoroutine(result):
             result = await result
         return JSONResponse(

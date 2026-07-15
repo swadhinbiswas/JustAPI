@@ -82,21 +82,12 @@ pub(crate) fn call_python_handler(
                 if let Ok(error_list) = errors.extract::<Vec<String>>() {
                     if !error_list.is_empty() {
                         let error_body = serde_json::json!({
-                            "type": "https://justapi.dev/errors/validation",
-                            "title": "Validation Error",
-                            "status": 422,
-                            "detail": error_list.join("; "),
-                            "errors": error_list.iter().map(|e| {
-                                serde_json::json!({"message": e})
-                            }).collect::<Vec<_>>(),
+                            "detail": error_list.join("; ")
                         })
                         .to_string();
                         return NativeResponse {
                             status: 422,
-                            headers: vec![(
-                                b"content-type".to_vec(),
-                                b"application/problem+json".to_vec(),
-                            )],
+                            headers: vec![(b"content-type".to_vec(), b"application/json".to_vec())],
                             body: NativeBody::Bytes(error_body.into_bytes()),
                         };
                     }
@@ -243,7 +234,7 @@ pub(crate) fn call_python_handler(
             NativeResponse {
                 status: 500,
                 headers: vec![(b"content-type".to_vec(), b"application/json".to_vec())],
-                body: NativeBody::Bytes(b"{\"error\":\"internal server error\"}".to_vec()),
+                body: NativeBody::Bytes(b"{\"detail\":\"Internal Server Error\"}".to_vec()),
             }
         }
     }
@@ -479,22 +470,10 @@ pub(crate) fn try_native_fast_path(
             body: NativeBody::Bytes(body.to_vec()),
         }),
         Err(verr) => {
-            let error_body = serde_json::json!({
-                "type": "https://justapi.dev/errors/validation",
-                "title": "Validation Error",
-                "status": 422,
-                "detail": verr.to_string(),
-                "errors": verr.errors.iter().map(|e| {
-                    serde_json::json!({
-                        "field": e.field,
-                        "message": e.message,
-                    })
-                }).collect::<Vec<_>>(),
-            })
-            .to_string();
+            let error_body = serde_json::json!({ "detail": verr.to_string() }).to_string();
             Some(NativeResponse {
                 status: 422,
-                headers: vec![(b"content-type".to_vec(), b"application/problem+json".to_vec())],
+                headers: vec![(b"content-type".to_vec(), b"application/json".to_vec())],
                 body: NativeBody::Bytes(error_body.into_bytes()),
             })
         }
@@ -526,10 +505,7 @@ pub(crate) fn try_native_fast_path_query(
     let pairs: Vec<(String, String)> = match serde_urlencoded::from_bytes(query) {
         Ok(p) => p,
         Err(_) => {
-            return Some(validation_error_response(
-                "Query string is not valid form encoding",
-                Vec::new(),
-            ))
+            return Some(validation_error_response("Query string is not valid form encoding"))
         }
     };
     let mut obj = serde_json::Map::new();
@@ -548,29 +524,17 @@ pub(crate) fn try_native_fast_path_query(
             headers: vec![(b"content-type".to_vec(), b"application/json".to_vec())],
             body: NativeBody::Bytes(query_json),
         }),
-        Err(verr) => Some(validation_error_response(
-            &verr.to_string(),
-            verr.errors.iter().map(|e| (e.field.clone(), e.message.clone())).collect(),
-        )),
+        Err(verr) => Some(validation_error_response(&verr.to_string())),
     }
 }
 
-/// Build a 422 `application/problem+json` response for a validation failure,
-/// mirroring the shape returned by the body fast path.
-fn validation_error_response(detail: &str, errors: Vec<(String, String)>) -> NativeResponse {
-    let error_body = serde_json::json!({
-        "type": "https://justapi.dev/errors/validation",
-        "title": "Validation Error",
-        "status": 422,
-        "detail": detail,
-        "errors": errors.into_iter().map(|(field, message)| {
-            serde_json::json!({ "field": field, "message": message })
-        }).collect::<Vec<_>>(),
-    })
-    .to_string();
+/// Build a 422 response for a validation failure using the canonical
+/// `{"detail": ...}` envelope.
+fn validation_error_response(detail: &str) -> NativeResponse {
+    let error_body = serde_json::json!({ "detail": detail }).to_string();
     NativeResponse {
         status: 422,
-        headers: vec![(b"content-type".to_vec(), b"application/problem+json".to_vec())],
+        headers: vec![(b"content-type".to_vec(), b"application/json".to_vec())],
         body: NativeBody::Bytes(error_body.into_bytes()),
     }
 }
@@ -675,7 +639,7 @@ where
             {
                 return Ok(json_response(
                     StatusCode::BAD_REQUEST,
-                    r#"{"error":"QUERY requires a Content-Type header"}"#,
+                    r#"{"detail":"QUERY requires a Content-Type header"}"#,
                 ));
             }
 
@@ -701,12 +665,12 @@ where
                         if msg.contains("exceeds maximum size") {
                             return Ok(json_response(
                                 StatusCode::PAYLOAD_TOO_LARGE,
-                                r#"{"error":"payload too large"}"#,
+                                r#"{"detail":"payload too large"}"#,
                             ));
                         }
                         return Ok(json_response(
                             StatusCode::BAD_REQUEST,
-                            r#"{"error":"invalid multipart body"}"#,
+                            r#"{"detail":"invalid multipart body"}"#,
                         ));
                     }
                 }
@@ -724,11 +688,11 @@ where
                 Err(justapi_core::router::RouterError::MethodNotAllowed) => {
                     return Ok(json_response(
                         StatusCode::METHOD_NOT_ALLOWED,
-                        r#"{"error":"method not allowed"}"#,
+                        r#"{"detail":"method not allowed"}"#,
                     ))
                 }
                 Err(justapi_core::router::RouterError::NotFound) => {
-                    return Ok(json_response(StatusCode::NOT_FOUND, r#"{"error":"not found"}"#))
+                    return Ok(json_response(StatusCode::NOT_FOUND, r#"{"detail":"not found"}"#))
                 }
             };
 
@@ -782,29 +746,7 @@ where
                     None => justapi_core::validate::validate_json_schema(&body_bytes, schema_json),
                 };
                 if let Err(verr) = verr {
-                    let error_body = serde_json::json!({
-                        "type": "https://justapi.dev/errors/validation",
-                        "title": "Validation Error",
-                        "status": 422,
-                        "detail": verr.to_string(),
-                        "errors": verr.errors.iter().map(|e| {
-                            serde_json::json!({
-                                "field": e.field,
-                                "message": e.message,
-                            })
-                        }).collect::<Vec<_>>(),
-                    })
-                    .to_string();
-                    let mut resp = Response::new(ResponseBody::new(
-                        http_body_util::Full::new(Bytes::from(error_body))
-                            .map_err(|e: std::convert::Infallible| -> anyhow::Error { match e {} }),
-                    ));
-                    *resp.status_mut() = StatusCode::UNPROCESSABLE_ENTITY;
-                    resp.headers_mut().insert(
-                        http::header::CONTENT_TYPE,
-                        http::HeaderValue::from_static("application/problem+json"),
-                    );
-                    return Ok(resp);
+                    return Ok(justapi_core::validation_response(&verr.to_string()));
                 }
             }
 
@@ -818,7 +760,7 @@ where
                             tracing::error!("Failed to begin transaction: {}", e);
                             return Ok(json_response(
                                 StatusCode::INTERNAL_SERVER_ERROR,
-                                r#"{"error":"database error"}"#,
+                                r#"{"detail":"database error"}"#,
                             ));
                         }
                     }
@@ -955,7 +897,7 @@ where
             {
                 return Ok(json_response(
                     StatusCode::BAD_REQUEST,
-                    r#"{"error":"QUERY requires a Content-Type header"}"#,
+                    r#"{"detail":"QUERY requires a Content-Type header"}"#,
                 ));
             }
 
@@ -994,12 +936,12 @@ where
                         if msg.contains("exceeds maximum size") {
                             return Ok(json_response(
                                 StatusCode::PAYLOAD_TOO_LARGE,
-                                r#"{"error":"payload too large"}"#,
+                                r#"{"detail":"payload too large"}"#,
                             ));
                         }
                         return Ok(json_response(
                             StatusCode::BAD_REQUEST,
-                            r#"{"error":"invalid multipart body"}"#,
+                            r#"{"detail":"invalid multipart body"}"#,
                         ));
                     }
                 }
@@ -1012,13 +954,13 @@ where
                 Err(justapi_core::router::RouterError::MethodNotAllowed) => {
                     return Ok(justapi_core::json_response(
                         hyper::StatusCode::METHOD_NOT_ALLOWED,
-                        r#"{"error":"method not allowed"}"#,
+                        r#"{"detail":"method not allowed"}"#,
                     ))
                 }
                 Err(justapi_core::router::RouterError::NotFound) => {
                     return Ok(justapi_core::json_response(
                         hyper::StatusCode::NOT_FOUND,
-                        r#"{"error":"not found"}"#,
+                        r#"{"detail":"not found"}"#,
                     ))
                 }
             };
@@ -1056,29 +998,7 @@ where
                     None => justapi_core::validate::validate_json_schema(&body_bytes, schema_json),
                 };
                 if let Err(verr) = verr {
-                    let error_body = serde_json::json!({
-                        "type": "https://justapi.dev/errors/validation",
-                        "title": "Validation Error",
-                        "status": 422,
-                        "detail": verr.to_string(),
-                        "errors": verr.errors.iter().map(|e| {
-                            serde_json::json!({
-                                "field": e.field,
-                                "message": e.message,
-                            })
-                        }).collect::<Vec<_>>(),
-                    })
-                    .to_string();
-                    let mut resp = hyper::Response::new(justapi_core::ResponseBody::new(
-                        http_body_util::Full::new(hyper::body::Bytes::from(error_body))
-                            .map_err(|e: std::convert::Infallible| -> anyhow::Error { match e {} }),
-                    ));
-                    *resp.status_mut() = hyper::StatusCode::UNPROCESSABLE_ENTITY;
-                    resp.headers_mut().insert(
-                        http::header::CONTENT_TYPE,
-                        http::HeaderValue::from_static("application/problem+json"),
-                    );
-                    return Ok(resp);
+                    return Ok(justapi_core::validation_response(&verr.to_string()));
                 }
             }
 
@@ -1095,7 +1015,7 @@ where
                             tracing::error!("Failed to begin transaction: {}", e);
                             return Ok(justapi_core::json_response(
                                 hyper::StatusCode::INTERNAL_SERVER_ERROR,
-                                r#"{"error":"database error"}"#,
+                                r#"{"detail":"database error"}"#,
                             ));
                         }
                     }
