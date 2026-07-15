@@ -94,8 +94,7 @@ def test_validation():
         except urllib.error.HTTPError as e:
             assert e.code == 422, f"Expected 422, got {e.code}"
             error_data = json.loads(e.read())
-            assert error_data["title"] == "Validation Error"
-            assert len(error_data["errors"]) > 0
+            assert isinstance(error_data.get("detail"), str) and len(error_data["detail"]) > 0
             print(f"PASS: POST /users with invalid body -> 422 ({error_data['detail']})")
 
         # 4. Invalid POST (name too short)

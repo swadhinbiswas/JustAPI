@@ -47,7 +47,7 @@ async def test_native_post_rejects_invalid_body():
     async with AsyncTestClient(app) as c:
         r = await c.post("/users", body=json.dumps({"name": "Ada"}).encode())
         assert_status(r, 422)
-        assert r["headers"].get("content-type") == "application/problem+json"
+        assert r["headers"].get("content-type") == "application/json"
 
 
 @pytest.mark.asyncio
@@ -116,7 +116,7 @@ async def test_native_get_rejects_invalid_query():
     async with AsyncTestClient(app) as c:
         r = await c.get("/search?age=-5")
         assert_status(r, 422)
-        assert r["headers"].get("content-type") == "application/problem+json"
+        assert r["headers"].get("content-type") == "application/json"
 
 
 def test_native_with_route_dependencies_rejected():

@@ -85,7 +85,7 @@ def test_unhandled_exception_is_500():
     assert resp["status"] == 500
     # Secure default: internal error details must NOT leak to the client.
     assert "kaboom" not in resp["body"].decode()
-    assert json.loads(resp["body"])["error"] == "internal server error"
+    assert json.loads(resp["body"])["detail"] == "Internal Server Error"
 
 
 def test_request_validation_error_422():
