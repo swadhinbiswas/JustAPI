@@ -1746,3 +1746,63 @@ committed). PLAN.md Phase 53 status updated to "reverted — dead code removed".
 
 
 
+
+## ADR-050 — 2026-07-15 — Secure-by-default CORS + opt-in security headers
+
+**Context:** The production-readiness audit (MED#9) flagged two security
+defaults. (1) `Cors::new()`/`Default` were `permissive()` → emitted
+`Access-Control-Allow-Origin: *` for every request, and the credential branch
+could reflect `*` with `Access-Control-Allow-Credentials: true` (an invalid but
+leaky combination). (2) `SecurityHeaders` was only opt-in and always emitted HSTS
+even on plaintext.
+
+**Decision:**
+- `Cors::new()` and `Default` now start with an **empty** `allow_origins` (no
+  ACAO emitted) — fail-closed. Explicit `allow_origin(...)` / `allow_origins(...)`
+  is required to enable CORS. `permissive()` still exists for dev.
+- The `*` + `allow_credentials` bug is fixed: when the matched origin is `*`,
+  credentials are force-disabled and the concrete request origin is reflected
+  instead of `*`.
+- `SecurityHeaders` gains `without_hsts()`; `Default` keeps HSTS but the Python
+  `enable_secure_headers()` applies the **non-HSTS** default (plaintext server).
+  HSTS is only added on explicit `enable_secure_headers(with_hsts=True)`.
+- Security headers are **not** auto-applied to every app: forcing a CSP
+  (`default-src 'self'`) by default would break CDN-loaded UIs such as the
+  `/docs` Swagger UI added in the same audit. They are a one-call opt-in.
+
+**Rationale:** secure defaults must not leak cross-origin or pin plaintext to
+HTTPS; but forcing CSP by default is a breaking change for legitimate apps.
+**Evidence:** `cargo test --workspace` (CORS unit tests updated to configure an
+origin), `clippy -D warnings`, `cargo fmt --check` all clean; live server
+verified that `enable_secure_headers()` emits `X-Content-Type-Options`,
+`X-Frame-Options: DENY`, `Content-Security-Policy`, `X-XSS-Protection` and
+**no** `Strict-Transport-Security`.
+
+## ADR-051 — 2026-07-15 — Real metrics + genuine readiness for Python apps
+
+**Context:** The Python app's builtin `/metrics` returned a static
+`justapi_up 1` string and `/ready` returned a static `{"status":"ready"}`, so
+Kubernetes probes and Prometheus scrapes saw no real signal. The Rust
+`Server` already collects `Metrics` and runs a `HealthRegistry`, but for Python
+apps routing is handled by the Python handler, which bypassed those builtins.
+
+**Decision:**
+- The live `Metrics` and `Arc<HealthRegistry>` are captured from the `Server`
+  just before `server.run()` (via `slf` + `Python::attach`, because the
+  `PyRefMut` borrow is `!Send` and cannot cross the detached thread) and stored
+  on the `_JustAPIApp`.
+- `/metrics` now calls `Metrics::prometheus()` → real Prometheus exposition
+  (request counters, status breakdown, latency histogram, bytes, connections).
+- `/ready` now consults the `HealthRegistry`: returns 200 with a component
+  report when healthy/degraded, 503 when any registered check is unhealthy.
+- Added `JustAPIApp.register_health_check(name, callable)` (Rust
+  `PyHealthCheck` wrapping a Python callable, invoked under the GIL) so users can
+  wire DB/dependency probes into readiness.
+
+**Rationale:** observability and liveness/readiness are core production
+requirements; a static 200 / stub defeats autoscaling and alerting.
+**Evidence:** live server shows `/metrics` reporting `justapi_requests_total`
+incrementing on real traffic; `/ready` returns 200 healthy with a component
+report, and 503 (with report) when a registered check returns falsy.
+`cargo test --workspace` and `pytest` (minus two pre-existing, unrelated
+failures in `test_websocket`/`test_openapi_parity`) pass.
