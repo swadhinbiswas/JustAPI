@@ -1806,3 +1806,61 @@ incrementing on real traffic; `/ready` returns 200 healthy with a component
 report, and 503 (with report) when a registered check returns falsy.
 `cargo test --workspace` and `pytest` (minus two pre-existing, unrelated
 failures in `test_websocket`/`test_openapi_parity`) pass.
+
+## ADR-052 — 2026-07-15 — Single error-response contract (`{"detail": ...}`)
+
+**Context:** The production-readiness audit (MED#9) flagged three inconsistent
+error shapes across the codebase: `{"error": "..."}` (native + core handlers,
+resilience, panic, static files), `{"detail": ...}` (Python `HTTPException` /
+`RequestValidationError`), and an RFC-7807 envelope
+(`{"type","title","status","detail","errors"}` with `application/problem+json`)
+emitted by the Rust JSON-Schema validation paths. Clients had no single shape
+to parse.
+
+**Decision:** Adopt **`{"detail": ...}`** (FastAPI-compatible) as the single
+error envelope for every non-2xx response. The numeric status lives in the HTTP
+status line; `detail` carries the human-readable message. `content-type` is
+always `application/json` (the `application/problem+json` RFC-7807 variant is
+dropped). Applied across:
+- `justapi_core::error_response(status, detail)` / `validation_response(detail)`
+  helpers added in `lib.rs`; all core error sites (server, resilience, panic,
+  static files) routed through them.
+- `justapi-py` native handlers: generic 500 → `{"detail":"Internal Server Error"}`;
+  all `{"error":...}` string bodies → `{"detail":...}`; the RFC-7807 validation
+  blocks collapsed to `{"detail": <message>}`.
+- Python `system.py` error routes → `{"detail":...}`.
+- Sensitive internals are never placed in `detail` for 5xx (matches the secure
+  generic-500 policy from the prior audit).
+
+**Rationale:** one parseable contract; `detail` keeps FastAPI client
+compatibility; RFC-7807's extra keys added no consumer value here and broke
+uniformity. **Evidence:** `cargo test --workspace` (core integration test
+updated) and `pytest` (validation / test-client / native-fastpath tests updated
+for `detail` + `application/json`) pass. The two remaining `pytest` failures
+(`test_websocket`, `test_openapi_parity`) are pre-existing and unrelated
+(fail on the prior save-point too).
+
+## ADR-053 — 2026-07-15 — Panic model: abort + supervisor restart, not catch_unwind
+
+**Context:** MED#9 noted that `panic = "abort"` means one bad request can kill
+the process. Two mitigations were considered: (a) switch to `panic = "unwind"`
++ `catch_unwind` around the handler, or (b) audit/remove hot-path `.unwrap()`.
+
+**Decision:** Keep **`panic = "abort"`** (ADR-048 / `gil_pool.rs` SAFETY note).
+A `catch_unwind` boundary at the GIL FFI boundary is **undefined behaviour**
+(pyo3 C code holding the GIL cannot be unwound safely) and was measured as a
+**~3x throughput regression** on the GIL path — both documented in
+`gil_pool.rs`. The production model is therefore **crash-fast + supervisor
+restart** (Docker/k8s/systemd), which is the correct availability trade for a
+Rust HTTP server. The actionable mitigation is the **hot-path unwrap audit**:
+- Fixed a per-request abort: `router.fallback().unwrap()` in `server/mod.rs`
+  now returns 404 when no fallback is registered (a 404 would otherwise abort
+  the whole process).
+- Reviewed request-path `.unwrap()`/`.expect()` in `server/` and `native/`; the
+  remainder are init-time (route registration) or logically-guaranteed (e.g.
+  `content_type.unwrap()` only reached when `is_multipart` is true), so they
+  cannot be triggered by attacker input. A genuine logic bug still aborts and is
+  restarted by the supervisor — by design.
+
+**Evidence:** `cargo build --workspace` and all gates green; the core 404 path
+returns 200/404 normally and no longer panics on unmatched routes.
