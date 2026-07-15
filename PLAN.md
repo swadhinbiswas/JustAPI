@@ -1104,3 +1104,12 @@ Status of the P0 sprint driven by the MED#9 audit verdict (see BENCHMARKS.md
 - [ ] **Panic isolation** (P1/P2): `panic = "abort"` means one bad request can
       kill the process; a GIL-path `catch_unwind` around handlers + an unwrap
       audit on the hot path (server/ + native/) is still TODO.
+
+- [x] **Error contract** (ADR-052): single `{"detail": ...}` envelope across
+      core + Python (Rust validation RFC-7807 + `{"error":...}` collapsed;
+      `application/json` everywhere). `error_response`/`validation_response`
+      helpers added in `justapi_core::lib.rs`.
+- [x] **Panic model** (ADR-053): kept `panic = "abort"` + supervisor restart
+      (catch_unwind at the GIL FFI boundary is UB + ~3x regression per
+      `gil_pool.rs`); fixed the per-request `router.fallback().unwrap()` abort
+      and audited remaining hot-path unwraps.
