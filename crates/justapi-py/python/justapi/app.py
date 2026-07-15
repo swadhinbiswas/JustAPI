@@ -8,7 +8,7 @@ from ._justapi import _JustAPIApp, TokenStreamResponse, ValidatedStreamResponse
 from .exceptions import WebSocketException
 from .websockets import WebSocket
 from .system import register_system_routes, build_help, build_openapi
-from .responses import PlainTextResponse
+from .responses import PlainTextResponse, HTMLResponse, JSONResponse
 
 _PY_TYPE_TO_JSON = {
     str: "string",
@@ -34,17 +34,55 @@ def _builtin_live():
     return {"status": "alive"}
 
 
-def _builtin_ready():
-    return {"status": "ready"}
+def _builtin_ready(self):
+    ready, report = self._app.health_ready()
+    try:
+        payload = json.loads(report)
+    except (ValueError, TypeError):
+        payload = {"status": "ready" if ready else "not_ready"}
+    if not ready:
+        return JSONResponse(payload, status_code=503)
+    return JSONResponse(payload)
 
 
-def _builtin_metrics():
-    body = (
-        "# HELP justapi_up 1 if the server process is up.\n"
-        "# TYPE justapi_up gauge\n"
-        "justapi_up 1\n"
-    )
+def _builtin_metrics(self):
+    body = self._app.metrics_prometheus()
     return PlainTextResponse(body)
+
+
+def _builtin_openapi(app):
+    """Serve the generated OpenAPI 3.1 document for the Python app."""
+    return JSONResponse(build_openapi(app))
+
+
+def _builtin_docs(app):
+    """Serve Swagger UI (interactive API documentation) for the Python app."""
+    html = (
+        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n"
+        "  <meta charset=\"UTF-8\">\n  <title>API Docs — Swagger UI</title>\n"
+        "  <link rel=\"stylesheet\" href=\"https://unpkg.com/swagger-ui-dist/swagger-ui.css\">\n"
+        "</head>\n<body>\n  <div id=\"swagger-ui\"></div>\n"
+        "  <script src=\"https://unpkg.com/swagger-ui-dist/swagger-ui-bundle.js\"></script>\n"
+        "  <script>\n"
+        "    window.onload = () => {\n"
+        "      window.ui = SwaggerUIBundle({ url: '/openapi.json', dom_id: '#swagger-ui' });\n"
+        "    };\n"
+        "  </script>\n</body>\n</html>\n"
+    )
+    return HTMLResponse(html)
+
+
+def _builtin_redoc(app):
+    """Serve ReDoc (alternative API documentation) for the Python app."""
+    html = (
+        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n"
+        "  <meta charset=\"UTF-8\">\n  <title>API Docs — ReDoc</title>\n"
+        "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
+        "</head>\n<body>\n  <redoc spec-url='/openapi.json'></redoc>\n"
+        "  <script src=\"https://unpkg.com/redoc/bundles/redoc.standalone.js\"></script>\n"
+        "</body>\n</html>\n"
+    )
+    return HTMLResponse(html)
 
 
 def _model_json_schema(ann):
@@ -160,8 +198,16 @@ class JustAPIApp:
         # Built-in probe/metrics endpoints for the Python app.
         self.get("/health", _builtin_health, include_in_schema=False, name="builtin_health")
         self.get("/live", _builtin_live, include_in_schema=False, name="builtin_live")
-        self.get("/ready", _builtin_ready, include_in_schema=False, name="builtin_ready")
-        self.get("/metrics", _builtin_metrics, include_in_schema=False, name="builtin_metrics")
+        self.get("/ready", lambda: _builtin_ready(self), include_in_schema=False, name="builtin_ready")
+        self.get("/metrics", lambda: _builtin_metrics(self), include_in_schema=False, name="builtin_metrics")
+        # Interactive API documentation for the Python app. The core server's
+        # /docs, /redoc, /openapi.json live only in the default router, which the
+        # Python app replaces via with_handler(); these builtin routes restore
+        # that DX so the README's "automatic interactive API documentation"
+        # claim holds for Python apps too.
+        self.get("/openapi.json", lambda: _builtin_openapi(self), include_in_schema=False, name="builtin_openapi")
+        self.get("/docs", lambda: _builtin_docs(self), include_in_schema=False, name="builtin_docs")
+        self.get("/redoc", lambda: _builtin_redoc(self), include_in_schema=False, name="builtin_redoc")
 
     def _record(self, method, path, handler, *, body_schema=None, schema=None,
                  experimental=False, **kw):
@@ -805,6 +851,33 @@ class JustAPIApp:
         distinct representations of the same resource are not collapsed together.
         """
         self._app.enable_request_coalescing(headers)
+
+    def enable_secure_headers(self, with_hsts: bool = False):
+        """
+        Apply safe HTTP security headers to every response:
+        ``X-Content-Type-Options: nosniff``, ``X-Frame-Options: DENY``,
+        ``Content-Security-Policy: default-src 'self'``, and
+        ``X-XSS-Protection: 0``.
+
+        HSTS is omitted by default because the Python server terminates
+        connections in plaintext. Pass ``with_hsts=True`` only when you
+        terminate TLS in-process. Note that the default CSP (``'self'``) will
+        block third-party/CDN resources — relax it via the Rust
+        ``SecurityHeaders`` builder if your frontend needs them.
+        """
+        self._app.enable_secure_headers(with_hsts)
+
+    def register_health_check(self, name: str, check: typing.Callable[[], bool]):
+        """
+        Register a dependency readiness probe used by the ``/ready`` endpoint.
+
+        ``check`` is a zero-argument callable invoked synchronously under the
+        GIL. Returning truthy (or raising nothing) means the dependency is
+        healthy; returning falsy or raising marks it unhealthy and makes
+        ``/ready`` return 503. The ``name`` identifies the component in the
+        readiness report.
+        """
+        self._app.register_health_check(name, check)
 
     def set_grpc_addr(self, addr: str):
         self._app.set_grpc_addr(addr)

@@ -58,6 +58,23 @@ pub struct JustAPIApp {
     pub gateway_config: Option<String>,
     pub circuit_breaker_config: Option<(usize, u64)>,
     pub coalesce_headers: Option<Vec<String>>,
+    /// When true, apply safe (non-HSTS) security headers to every response by
+    /// default. Off by default because forcing a CSP would break apps that load
+    /// external resources (e.g. CDN-hosted docs UIs). Call
+    /// `enable_secure_headers()` to opt in.
+    pub secure_headers: bool,
+    /// Explicit security-headers config (e.g. with HSTS). When `secure_headers`
+    /// is true but this is `None`, the safe non-HSTS default is used.
+    pub secure_headers_config: Option<justapi_core::middleware::SecurityHeaders>,
+    /// Live metrics collector, populated just before the server starts so the
+    /// Python `/metrics` builtin can export real Prometheus data.
+    pub metrics: Option<justapi_core::metrics::Metrics>,
+    /// Health registry, populated just before the server starts so the Python
+    /// `/ready` builtin reflects registered dependency checks.
+    pub health_registry: Option<std::sync::Arc<justapi_core::health::HealthRegistry>>,
+    /// Health checks registered from Python via `register_health_check`, applied
+    /// to the server's registry at startup.
+    pub health_checks: Vec<(String, Py<PyAny>)>,
     /// Per-route OpenAPI metadata, keyed by `(method, path)`.
     pub route_meta:
         std::collections::HashMap<(hyper::Method, String), justapi_core::openapi::RouteMeta>,
@@ -81,6 +98,53 @@ pub struct PyTool {
     pub description: String,
     pub schema: String,
     pub handler: Py<PyAny>,
+}
+
+// ---------------------------------------------------------------------------
+// Python-registered health checks
+// ---------------------------------------------------------------------------
+
+/// A `HealthCheck` backed by a Python callable. The callable is invoked
+/// synchronously under the GIL; a truthy return means healthy, a falsy return
+/// or an exception means unhealthy (with the detail captured in the report).
+struct PyHealthCheck {
+    name: &'static str,
+    check: Py<PyAny>,
+}
+
+impl justapi_core::health::HealthCheck for PyHealthCheck {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn check(
+        &self,
+    ) -> impl std::future::Future<Output = justapi_core::health::HealthStatus> + Send {
+        let name = self.name;
+        let check = Python::attach(|py| self.check.clone_ref(py));
+        async move {
+            Python::attach(|py| {
+                let check = check.clone_ref(py);
+                match check.bind(py).call0() {
+                    Ok(v) => match v.is_truthy() {
+                        Ok(true) => justapi_core::health::HealthStatus::Healthy,
+                        Ok(false) => justapi_core::health::HealthStatus::Unhealthy(format!(
+                            "health check '{}' reported unhealthy",
+                            name
+                        )),
+                        Err(e) => justapi_core::health::HealthStatus::Unhealthy(format!(
+                            "health check '{}' eval error: {}",
+                            name, e
+                        )),
+                    },
+                    Err(e) => justapi_core::health::HealthStatus::Unhealthy(format!(
+                        "health check '{}' raised: {}",
+                        name, e
+                    )),
+                }
+            })
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -217,6 +281,11 @@ impl JustAPIApp {
             gateway_config: None,
             circuit_breaker_config: None,
             coalesce_headers: None,
+            secure_headers: false,
+            secure_headers_config: None,
+            metrics: None,
+            health_registry: None,
+            health_checks: Vec::new(),
             route_meta: std::collections::HashMap::new(),
             named_routes: std::collections::HashMap::new(),
             frontend_mounts: Vec::new(),
@@ -297,6 +366,66 @@ impl JustAPIApp {
     #[pyo3(name = "enable_request_coalescing")]
     fn enable_request_coalescing(&mut self, headers: Option<Vec<String>>) {
         self.coalesce_headers = Some(headers.unwrap_or_default());
+    }
+
+    /// Apply safe security headers (`X-Content-Type-Options`, `X-Frame-Options`,
+    /// `Content-Security-Policy`, `X-XSS-Protection`) to every response. HSTS is
+    /// intentionally omitted because the Python server runs over plaintext by
+    /// default; set `with_hsts=True` only when terminating TLS in-process.
+    #[pyo3(name = "enable_secure_headers")]
+    fn enable_secure_headers(&mut self, with_hsts: Option<bool>) {
+        self.secure_headers = true;
+        if with_hsts.unwrap_or(false) {
+            // HSTS included only on explicit opt-in for a TLS-terminating deploy.
+            self.secure_headers_config =
+                Some(justapi_core::middleware::SecurityHeaders::default().with_hsts_preload());
+        }
+    }
+
+    /// Register a Python callable as a readiness probe. The callable is invoked
+    /// synchronously under the GIL; a truthy return (or no exception) means the
+    /// dependency is healthy. Used by the `/ready` builtin via the health
+    /// registry. `name` identifies the component in the readiness report.
+    #[pyo3(name = "register_health_check")]
+    fn register_health_check(&mut self, name: String, check: Py<PyAny>) {
+        self.health_checks.push((name, check));
+    }
+
+    /// Return the live Prometheus exposition for the running server. Used by the
+    /// Python `/metrics` builtin so it exports real data instead of a stub.
+    #[pyo3(name = "metrics_prometheus")]
+    fn metrics_prometheus(&self) -> String {
+        match &self.metrics {
+            Some(m) => m.prometheus(),
+            None => "# metrics not yet initialised\n".to_string(),
+        }
+    }
+
+    /// Returns `(ready, report_json)` for the running server's health registry.
+    /// `ready` is true unless a registered dependency check is unhealthy. The
+    /// Python `/ready` builtin uses this to give real readiness (not a static
+    /// 200). When no dependencies are registered the app is always ready.
+    #[pyo3(name = "health_ready")]
+    fn health_ready(&self) -> (bool, String) {
+        match &self.health_registry {
+            Some(reg) => {
+                let rt = tokio::runtime::Builder::new_current_thread().enable_all().build();
+                match rt {
+                    Ok(rt) => {
+                        let report = rt.block_on(reg.check_all());
+                        let ready = !matches!(
+                            report.overall(),
+                            justapi_core::health::OverallHealth::Unhealthy
+                        );
+                        let json = serde_json::to_string(&report)
+                            .unwrap_or_else(|_| "{\"status\":\"unknown\"}".to_string());
+                        (ready, json)
+                    }
+                    Err(_) => (true, "{\"status\":\"ready\"}".to_string()),
+                }
+            }
+            None => (true, "{\"status\":\"ready\"}".to_string()),
+        }
     }
 
     fn load_wasm_middleware(&mut self, path: &str) -> PyResult<()> {
@@ -1174,6 +1303,9 @@ impl JustAPIApp {
         let gateway_config_path = app.gateway_config.take();
         let cb_config = app.circuit_breaker_config.take();
         let coalesce_headers = app.coalesce_headers.take();
+        let health_checks = std::mem::take(&mut app.health_checks);
+        let secure_headers = app.secure_headers;
+        let secure_headers_config = app.secure_headers_config.take();
         let frontend_mounts = std::mem::take(&mut app.frontend_mounts);
 
         // The app object is surfaced on `Request.app`; capture it before
@@ -1362,6 +1494,16 @@ impl JustAPIApp {
                 let mut server = justapi_core::Server::new(addr)
                     .with_handler(handler)
                     .with_shutdown(shutdown_signal);
+                if !health_checks.is_empty() {
+                    let mut reg = justapi_core::health::HealthRegistry::new();
+                    for (name, check) in health_checks {
+                        reg.register(PyHealthCheck {
+                            name: Box::leak(name.into_boxed_str()),
+                            check,
+                        });
+                    }
+                    server = server.with_health_registry(reg);
+                }
                 if let Some(ref spec) = openapi_spec {
                     server = server.with_openapi_spec(spec.clone());
                 }
@@ -1413,6 +1555,12 @@ impl JustAPIApp {
                         }
                     );
                     server = server.add_middleware(coalescer);
+                }
+
+                if secure_headers {
+                    let sh = secure_headers_config
+                        .unwrap_or_else(|| justapi_core::middleware::SecurityHeaders::default().without_hsts());
+                    server = server.add_security_headers(sh);
                 }
 
                 if let Some(path) = gateway_config_path {
@@ -1602,6 +1750,17 @@ impl JustAPIApp {
                     server = server.with_ws(ws_handler);
                 }
 
+                // Publish the live metrics collector onto the app object so the
+                // Python `/metrics` builtin exports real data. `app` is a
+                // `!Send` borrow, so we mutate through the owning `Py<Self>`
+                // via `Python::attach` rather than capturing `app` here.
+                let live_metrics = server.metrics().clone();
+                let live_health = server.health_registry_arc();
+                Python::attach(move |py| {
+                    let mut a = slf.borrow_mut(py);
+                    a.metrics = Some(live_metrics);
+                    a.health_registry = Some(live_health);
+                });
                 server.run().await
             })
         });

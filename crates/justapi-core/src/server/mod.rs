@@ -287,6 +287,13 @@ pub struct Server {
     #[cfg(feature = "ws")]
     ws_handler: Option<WsHandler>,
     router: Option<Router<Handler>>,
+    /// Tracks whether a custom handler (via `with_handler`) was installed, so we
+    /// can refuse to also install the default router (which would silently
+    /// discard the custom handler — see `with_default_routes`).
+    custom_handler_set: bool,
+    /// Tracks whether the default router (via `with_default_routes`) was
+    /// installed, so we can refuse a later `with_handler` (same footgun).
+    default_routes_set: bool,
     openapi_spec: Option<Arc<String>>,
 }
 
@@ -323,6 +330,8 @@ impl Server {
             #[cfg(feature = "ws")]
             ws_handler: Some(default_ws_echo()),
             router: Some(router),
+            custom_handler_set: false,
+            default_routes_set: false,
             openapi_spec: None,
         }
     }
@@ -344,13 +353,32 @@ impl Server {
 
     /// Set a custom fallback handler (used by the ASGI shim).
     pub fn with_handler(mut self, handler: crate::middleware::HandlerFn) -> Self {
+        // A custom handler and the built-in default router are mutually
+        // exclusive: installing the default router after a custom handler would
+        // silently discard every user route (the router-derived handler wins in
+        // `run`). Fail loudly instead of losing routes without explanation.
+        if self.default_routes_set {
+            panic!(
+                "with_handler() called after with_default_routes(): the default router would \
+                 silently discard your custom handler. Choose one path — custom handler OR \
+                 default routes — not both."
+            );
+        }
         // If the user specifies a custom handler, it replaces the entire router behavior.
         self.router = None;
         self.chain.set_handler(handler);
+        self.custom_handler_set = true;
         self
     }
 
     pub fn with_default_routes(mut self) -> Self {
+        if self.custom_handler_set {
+            panic!(
+                "with_default_routes() called after with_handler(): it would silently discard \
+                 your custom handler and every user route. Choose one path — default routes OR \
+                 a custom handler — not both."
+            );
+        }
         let mut router = self.router.unwrap_or_default();
         router
             .insert(
@@ -376,6 +404,7 @@ impl Server {
             body: r#"{"error":"not found"}"#,
         });
         self.router = Some(router);
+        self.default_routes_set = true;
         self
     }
 
@@ -670,6 +699,12 @@ impl Server {
 
     pub fn health_registry(&self) -> &HealthRegistry {
         &self.health_registry
+    }
+
+    /// Return a cloned `Arc` handle to the health registry so other owners
+    /// (e.g. the Python binding layer) can run checks independently.
+    pub fn health_registry_arc(&self) -> std::sync::Arc<HealthRegistry> {
+        std::sync::Arc::clone(&self.health_registry)
     }
 
     pub fn with_health_registry(mut self, registry: HealthRegistry) -> Self {
