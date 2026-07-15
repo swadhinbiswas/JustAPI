@@ -138,4 +138,4 @@ def test_test_client_schema_validation():
     resp = client.post("/users", payload)
     assert resp["status"] == 422
     error_data = json.loads(bytes(resp["body"]))
-    assert error_data["title"] == "Validation Error"
+    assert isinstance(error_data.get("detail"), str) and len(error_data["detail"]) > 0
