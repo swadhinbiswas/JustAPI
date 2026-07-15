@@ -175,7 +175,11 @@ impl Cors {
 
     pub fn new() -> Self {
         Self {
-            allow_origins: vec!["*".to_string()],
+            // Secure-by-default: no `Access-Control-Allow-Origin` is emitted
+            // until the caller configures explicit origins via `allow_origin`.
+            // Browsers then enforce same-origin. Use `permissive()` for the old
+            // open `*` behavior.
+            allow_origins: Vec::new(),
             allow_methods: "GET, POST, PUT, DELETE, PATCH, OPTIONS".to_string(),
             allow_headers: "Content-Type, Authorization".to_string(),
             expose_headers: Vec::new(),
@@ -223,7 +227,8 @@ impl Cors {
 
 impl Default for Cors {
     fn default() -> Self {
-        Self::permissive()
+        // Secure-by-default: same-origin only until configured.
+        Self::new()
     }
 }
 
@@ -238,8 +243,20 @@ impl<B: Send + 'static> Middleware<B> for Cors {
 
         let allow_all = self.allow_origins.iter().any(|a| a == "*");
 
+        // When credentials are allowed, the wildcard "*" must NOT be echoed:
+        // browsers reject `Access-Control-Allow-Origin: *` together with
+        // `Access-Control-Allow-Credentials: true`, and echoing "*" with
+        // credentials would be insecure. Reflect the concrete request origin
+        // instead (only when one is present).
         let matched_origin = if allow_all {
-            "*".to_string()
+            if self.allow_credentials {
+                match req_origin {
+                    Some(o) => o.to_string(),
+                    None => return next.run(req).await,
+                }
+            } else {
+                "*".to_string()
+            }
         } else if let Some(origin) = req_origin {
             if origin_matches(origin, &self.allow_origins) {
                 origin.to_string()
@@ -303,6 +320,7 @@ pub struct SecurityHeaders {
     csp_directives: Vec<String>,
     include_xfo: bool,
     include_csp: bool,
+    include_hsts: bool,
     include_hsts_preload: bool,
 }
 
@@ -313,6 +331,7 @@ impl Default for SecurityHeaders {
             csp_directives: vec!["default-src 'self'".to_string()],
             include_xfo: true,
             include_csp: true,
+            include_hsts: true,
             include_hsts_preload: false,
         }
     }
@@ -339,6 +358,14 @@ impl SecurityHeaders {
         self.include_csp = false;
         self
     }
+
+    /// Omit `Strict-Transport-Security`. Use for plaintext (non-TLS) deployments:
+    /// emitting HSTS over HTTP is both useless and can pin a dev environment to
+    /// HTTPS that it cannot serve.
+    pub fn without_hsts(mut self) -> Self {
+        self.include_hsts = false;
+        self
+    }
 }
 
 #[async_trait]
@@ -358,7 +385,9 @@ impl<B: Send + 'static> Middleware<B> for SecurityHeaders {
         } else {
             self.hsts.clone()
         };
-        headers.insert("strict-transport-security", hsts_val.parse().unwrap());
+        if self.include_hsts {
+            headers.insert("strict-transport-security", hsts_val.parse().unwrap());
+        }
 
         if self.include_csp {
             let csp = self.csp_directives.join("; ");
@@ -1250,7 +1279,7 @@ mod tests {
             Box::pin(async { Ok(json_response(StatusCode::OK, "ok")) })
         });
         let mut chain = MiddlewareChain::new(handler);
-        chain.add(Cors::new().allow_credentials());
+        chain.add(Cors::new().allow_origin("https://example.com").allow_credentials());
         let req = test_req_with_header(Method::GET, "/hello", "origin", "https://example.com");
         let resp = chain.run(req).await.unwrap();
         assert_eq!(resp.headers()["access-control-allow-credentials"], "true");
@@ -1262,7 +1291,7 @@ mod tests {
             Box::pin(async { Ok(json_response(StatusCode::OK, "ok")) })
         });
         let mut chain = MiddlewareChain::new(handler);
-        chain.add(Cors::new().expose_headers(&["x-custom-header", "x-trace-id"]));
+        chain.add(Cors::new().allow_origin("https://example.com").expose_headers(&["x-custom-header", "x-trace-id"]));
         let req = test_req_with_header(Method::GET, "/hello", "origin", "https://example.com");
         let resp = chain.run(req).await.unwrap();
         assert_eq!(resp.headers()["access-control-expose-headers"], "x-custom-header, x-trace-id");
