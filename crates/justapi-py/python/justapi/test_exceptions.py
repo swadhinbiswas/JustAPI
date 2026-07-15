@@ -83,7 +83,9 @@ def test_unhandled_exception_is_500():
 
     resp = JustAPITestClient(app).get("/explode")
     assert resp["status"] == 500
-    assert "kaboom" in resp["body"].decode()
+    # Secure default: internal error details must NOT leak to the client.
+    assert "kaboom" not in resp["body"].decode()
+    assert json.loads(resp["body"])["error"] == "internal server error"
 
 
 def test_request_validation_error_422():
