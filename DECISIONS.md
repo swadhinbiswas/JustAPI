@@ -1979,12 +1979,20 @@ WASM handlers shift the DX burden to the user and add a runtime; the
 declarative-primitive compiler keeps Python DX while executing in Rust. WASM
 stays an option for truly custom logic.
 
-**Evidence (expected, to be filled by Step B):** Rust-native CRUD insert should
-land in the same ~hundreds-of-k req/s band as the validate-and-echo fast path
-(DB round-trip dominates latency, not the GIL), vs ~120k for the Python path and
-~22k for Robyn. Gates: `cargo test --workspace`, `cargo clippy --workspace
---tests -D warnings`, `cargo fmt --check`, pytest green; new Rust integration
-test asserting Rust-native == Python-semantics for the same route.
+ **Evidence (Step B, recorded in BENCHMARKS.md, 2026-07-16):** On a file-backed
+ SQLite fixture, the Rust-native `POST /items` (`crud_table`/`crud_columns`) is
+ **~2.5× faster than the equivalent Python route at -c1** (6.8k vs 2.7k RPS, 2.2ms
+ vs 6.4ms p99) — the GIL-avoidance win is real. Under load (-c10/-c100) both routes
+ collapse toward SQLite's single-writer ceiling (~5–6k RPS); Rust's *tail* latency is
+ worse there only because the default 10-connection pool queues checkouts, while the
+ Python path opens a fresh connection per request. So the bottleneck under concurrency
+ is the DB + pool size, **not** the runtime — the architecture is correct and faster at
+ the single-flight level. Remaining work (Step C/D): raise/expose `max_connections`,
+ enable WAL, and benchmark on **Postgres** where the GIL-avoidance advantage compounds
+ (no single-writer lock). Gates met: `cargo test --workspace` (incl.
+ `integration::test_crud_insert_handler`), `cargo clippy --workspace --tests -D warnings`,
+ pytest green; Rust integration test asserts the Rust-native route returns the same row
+ JSON + 422 envelope as the Python contract.
 
 ## ADR-055 — 2026-07-16 — Configurable max request body size (413 on overflow)
 

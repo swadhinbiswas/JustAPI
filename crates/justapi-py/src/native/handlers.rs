@@ -593,6 +593,7 @@ pub(crate) fn make_native_handler<B>(
     app: Option<Py<PyAny>>,
     needs_request: Arc<Vec<bool>>,
     native: Arc<Vec<bool>>,
+    crud_specs: Arc<Vec<Option<(String, Vec<String>)>>>,
     schema_validators: Arc<Vec<Option<justapi_core::validate::CompiledValidator>>>,
     max_body_size: usize,
 ) -> justapi_core::middleware::HandlerFn<B>
@@ -626,6 +627,7 @@ where
         .to_string();
         let needs_request_clone = needs_request.clone();
         let native_clone = native.clone();
+        let crud_specs_clone = crud_specs.clone();
         let schema_validators_clone = schema_validators.clone();
         Box::pin(async move {
             let method = req.method().clone();
@@ -720,6 +722,23 @@ where
                 };
                 let res = batcher.execute(breq).await.map_err(|e| anyhow::anyhow!("{}", e))?;
                 return Ok(nr_to_response(res));
+            }
+
+            // Rust-native CRUD insert (ADR-056 Step B): validate body + run
+            // INSERT ... RETURNING entirely in Rust, no GIL/Python hop. The body
+            // was already read (and size-limited) above, so we feed the bytes
+            // straight into the core handler.
+            if let Some(Some((table, columns))) = crud_specs_clone.get(handler_id) {
+                if let Some(ref pool) = *db_pool {
+                    return justapi_core::server::crud_insert_bytes(
+                        pool,
+                        table,
+                        columns,
+                        None,
+                        &body_bytes,
+                    )
+                    .await;
+                }
             }
 
             // Native fast path: validate the body in Rust and echo it back as the

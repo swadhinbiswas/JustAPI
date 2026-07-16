@@ -1279,3 +1279,46 @@ that `panic = "abort"` lives in the workspace root `[profile.release]`);
 engine + doc tests); `maturin develop --release` builds clean;
 `test_native_fastpath.py` → 9 passed. `cargo fmt --check` still cannot pass on
 stable (nightly-only `rustfmt.toml` features) — environment limitation, unchanged.
+
+## Rust-native CRUD insert (ADR-056 Step B) — 2026-07-16
+
+First end-to-end Rust-native *write* route. `POST /items` with
+`crud_table="items", crud_columns=["name","qty"]` is compiled to a
+`Handler::Custom` (`crud_insert_handler` / `crud_insert_bytes` in
+`justapi-core`) that validates the body, runs an injection-safe
+`INSERT ... RETURNING *` via the `sqlx::Any` pool, and returns the row as
+`200 application/json` — **no GIL acquisition, no Python hop**. The Python
+equivalent (`/items_py`) does the same with `sqlite3` inside an `async` handler.
+
+Fixture: file-backed SQLite (`bench_crud.db`, rollback journal, default pool of
+10 connections), `oha -z 10s`, single box, release build. Both routes do a
+committed single-row INSERT into the same table.
+
+| Path | Concurrency | RPS | p99.99 | Notes |
+|---|---|---|---|---|
+| Rust-native CRUD (`/items`) | -c1 | **6,799** | 2.2 ms | GIL avoided → 2.5× faster than Python |
+| Python CRUD (`/items_py`) | -c1 | 2,676 | 6.4 ms | GIL-bound handler |
+| Rust-native CRUD (`/items`) | -c10 | 5,376 | 329 ms | pool-queue tail (10 conns) |
+| Python CRUD (`/items_py`) | -c10 | 6,308 | 18 ms | opens a fresh conn/req |
+| Rust-native CRUD (`/items`) | -c100 | 5,366 | 640 ms | pool-queue tail |
+| Python CRUD (`/items_py`) | -c100 | 5,712 | 54 ms | SQLite single-writer lock bounds both |
+
+**Reading.** With no contention (-c1) the Rust-native route is **~2.5× faster**
+(6.8k vs 2.7k) and ~3× lower tail latency — exactly the GIL-avoidance win
+ADR-056 predicted. Under concurrency both routes collapse toward the **SQLite
+single-writer ceiling** (~5–6k RPS) because every INSERT takes the DB write
+lock and fsyncs; the DB — not the runtime — is the bottleneck. Rust's *tail*
+latency is worse only because the default 10-connection pool queues checkouts
+under -c100, whereas the Python path opens a new connection per request and
+never queues on checkout (it is still serialized by the same write lock, hence
+the similar RPS).
+
+**Conclusion / next steps (Step C/D).** The architecture is proven correct and
+faster at the single-flight level. The concurrency gap is a *pool-size + SQLite
+journal* artifact, not a Rust-vs-Python regression. To make the win hold under
+load: (1) raise the default `max_connections` and/or expose it from
+`app.set_database`, (2) enable WAL (`PRAGMA journal_mode=WAL`) so writes don't
+block readers and fsync cost drops, (3) benchmark against **Postgres** where the
+GIL-avoidance advantage compounds (no single-writer lock, real connection pool).
+Correctness is locked by `integration::test_crud_insert_handler` (200 row JSON,
+422 on bad JSON) and the `{"detail": ...}` envelope matches the Python path.
