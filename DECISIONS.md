@@ -2158,3 +2158,29 @@ and runs `SELECT 1`, a `DELETE`/`INSERT`, and a `SELECT` **before any socket is
 bound**; then serves a route that queries the same pool. Against live Aiven
 Postgres: "FOOTGUN FIX VERIFIED". `cargo clippy -p justapi-py --tests -D warnings`
 clean; `cargo test --workspace --features db` green.
+
+## ADR-058 — 2026-07-17 — Track routing/gateway tests; fix streaming-error abort in test client
+
+**Context:** Two artifacts were flagged "untracked" in PLAN.md: `test_routing.py`
+(valid alias / multi-method / router-inclusion tests) and `test_gateway.json`
+(orphaned gateway config fixture). Separately, the full pytest run hit a hard
+`Fatal Python error: Aborted` from `panic = "abort"`: the in-process
+`TestClient` mock server (`justapi-core/src/testing.rs`) `panic!`s on any
+hyper connection error, and a validated stream that aborts mid-flight (e.g.
+`stream_json` rejecting an invalid item via `send_error`) surfaces that as a
+body-stream error — aborting the entire test process.
+
+**Decision / changes:**
+1. **Track the tests.** `test_routing.py` (2 tests, pass) is now committed.
+   `test_gateway.json` moved into the package test dir and exercised by a new
+   `test_gateway.py` that asserts `enable_gateway()` parses the config and
+   registers proxy routes without needing live upstreams (1 test, pass).
+2. **Test-client body-stream errors must not abort.** `testing.rs` line ~90
+   changed from `panic!(...)` to `tracing::debug!(...)` when `serve_connection`
+   returns an error. A streamed body that fails (validation abort) is expected
+   application behavior, not a harness fault; under `panic = "abort"` it killed
+   pytest. Now logged and the connection closes gracefully.
+
+**Evidence:** `pytest crates/justapi-py/python/justapi/` → 120 passed, 1 skipped
+(previously aborted). `cargo test --workspace --features db` green; clippy
+`-D warnings` clean; `cargo fmt --check` clean.

@@ -607,7 +607,7 @@ Don't duplicate that reasoning here — just reference the entry.
 - [ ] **Working tree is dirty with pure rustfmt churn.** 74 files show uncommitted line-wrap reflows (2860 deletions) from a nightly `cargo fmt`. `rustfmt.toml` uses nightly-only options (`wrap_comments`, `format_code_in_doc_comments`, `normalize_comments`, `imports_granularity`, `group_imports`) that are silently ignored on stable — so `cargo fmt --check` passes locally but a nightly CI gate would flag the whole tree. Resolve by either pinning CI to nightly + committing the format, or dropping the nightly-only options and committing the revert. Do not ship the 2860-line deletion accidentally.
 - [ ] **Python test deps not pinned.** `venv` was missing `pytest_asyncio`, `pydantic`, `jinja2`. Add a `[project.optional-dependencies]` `test` extra / `requirements-dev.txt` so the suite is reproducible.
 - [ ] **Phase 52 real run unverified.** `cargo run -p justapi-bench --bin justapi-gpu-bench --features "cuda,real"` still needs a real-weight pass; the `candle`+CUDA build is heavy and unconfirmed in this env.
-- [ ] **Untracked artifacts:** `crates/justapi-py/python/justapi/test_routing.py`, `test_gateway.json` — integrate or remove.
+- [x] **Untracked artifacts (resolved 2026-07-17).** `test_routing.py` now tracked (2 pass); `test_gateway.json` moved into the package test dir and covered by new `test_gateway.py` (1 pass). Also fixed a latent `panic = "abort"` in `justapi-core/src/testing.rs` that killed pytest on any streamed-body error (e.g. `stream_json` rejecting an invalid item). pytest suite now 120 passed / 1 skipped. See ADR-058.
 
 ## Key architecture invariants
 
