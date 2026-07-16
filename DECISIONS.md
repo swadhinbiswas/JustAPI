@@ -1645,8 +1645,11 @@ fast-path section added.
 
 ## ADR-049 — Non-native dispatch deadlocks at high concurrency (GIL/blocking-pool)
 
-**Status:** Open issue, filed separately from ADR-048. Root-caused (location
-known); fix not yet implemented.
+**Status:** ✅ Resolved. The dedicated GIL thread-pool (`crates/justapi-py/src/gil_pool.rs`)
+replaced the per-request `tokio::spawn_blocking` + `Python::attach` pattern on
+both non-native dispatch sites (`handlers.rs` calls `gil_pool::run_python`). The
+fix was implemented in a later session (WIP save-point `f47c554`); this ADR's
+_status_ line was left "open" and is corrected here.
 
 **Context:** While re-benchmarking the ADR-048 native fast path at `oha -z 5-6s
 -c 100`, the *Python* routes were found to hard-stall. This is a separate,
