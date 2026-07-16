@@ -2215,3 +2215,48 @@ the same path raises `ValueError` ("route conflict") from the `matchit` router �
 FastAPI/Starlette let the last win; this is a deliberate hard-fail, documented
 here. (2) Trailing-slash mismatch is not normalized: a route declared `/trail/`
 returns 404 for `/trail`. Consistent with the hard-fail philosophy; left as-is.
+
+## ADR-060 — 2026-07-17 — Native Rust cron/interval scheduler (UTC, in-memory)
+
+**Context:** A framework audit showed JustAPI lacked a built-in scheduler, forcing
+users to bolt on `APScheduler`/`celery` for periodic work — a gap vs. frameworks
+that ship one. The runtime's thesis (AGENTS.md §2) mandates scheduling/worker
+pools live in Rust, not Python. We implemented a native scheduler that reuses the
+**existing Rust background-task worker pool** (`crates/justapi-py/src/background.rs`
+`submit_py_task`), so periodic jobs cost nothing extra on the worker side and
+stay on the hot Rust path.
+
+**Decision / change:**
+- New `crates/justapi-py/src/scheduler.rs`: process-wide `Scheduler` (one
+  `OnceLock<Arc<SchedulerInner>>`), a non-blocking `tick_loop` running on the
+  shared tokio `Handle` polling every 250 ms. Each `Job` carries a `cron`
+  `Schedule` (6-field, UTC) **or** a `Duration` interval. `compute_next`
+  (pure, no GIL — unit-tested) advances past missed ticks. On fire, the job is
+  enqueued onto the worker pool via `submit_py_task` and `stats.fired`/`failed`
+  are updated; failures are caught (job id + `repr(func)` logged, not panicked —
+  under `panic = "abort"` a user callback must never take the runtime down).
+- **Deps:** added `cron = "0.15"` + `chrono` to `crates/justapi-py/Cargo.toml`.
+  Justification: `cron` is the de-facto Rust standard cron parser (MIT, 0 deps
+  beyond `chrono`), battle-tested; re-implementing 6-field cron math with
+  timezone handling by hand would be more code and more bug surface. `chrono`
+  ships the `DateTime<Utc>` we need for UTC-aligned fire math. This satisfies
+  AGENTS.md §4 (new dep justified in DECISIONS).
+- **Pyclass `Scheduler`** (`python/justapi/__init__.py`): `schedule(cron, func,
+  *a, **kw)`, `every(secs, func, *a, **kw)` (return job id), `start()`, `stop()`,
+  `stats()`, `jobs()`, `remove(id)`. Invalid cron raises `ValueError` at
+  registration (untrusted-spec parse handled up front, not in the tick loop).
+- `app.py`: `run()` calls `Scheduler().start()`; `maybe_start_if_jobs()` starts
+  the loop only if jobs are registered; added `app.schedule(...)`/`app.every(...)`
+  convenience delegating to the shared instance.
+- **v1 scope (deliberate):** UTC-only, in-memory (no persistence/cron-file, no
+  timezone table, no catch-up replay across restarts). Documented so users don't
+  assume durability. The pure `compute_next` unit tests lock the math without a
+  Python runtime, avoiding the `cdylib` link issue.
+
+**Evidence:** `cargo test -p justapi-py scheduler` → 6 unit tests (cron future,
+minute-boundary `0 * * * * *`, interval first-fire + advance + skip-past). Python
+`test_scheduler.py` → 2 passed: interval + `*/2 * * * * *` cron both fire within
+3.6 s, invalid cron raises, `stats()` reflects `fired`, `remove()` works. Manual
+probe: `fired == ['every','cron',...]` `count>=4`, `stats={jobs:2,fired:4,...}`.
+Full gates green (`cargo test --workspace --features db`, clippy `-D warnings`,
+`cargo fmt --check`).

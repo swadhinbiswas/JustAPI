@@ -289,3 +289,12 @@ impl BackgroundTasks {
         Ok(())
     }
 }
+
+/// Enqueue an already-bound Python callable (with args/kwargs) onto the shared
+/// Rust background-task executor. Used by the scheduler (`scheduler.rs`) so
+/// cron/interval jobs run on the same worker pool and observability as
+/// `BackgroundTasks`.
+pub(crate) fn submit_py_task(func: Py<PyAny>, args: Py<PyTuple>, kwargs: Option<Py<PyDict>>) {
+    let task = Task { func, args, kwargs };
+    runner().enqueue(task);
+}

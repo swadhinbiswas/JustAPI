@@ -1462,3 +1462,23 @@ against Aiven Postgres in `benchmarks/smoke_dbpool_prerun.py`: `app.db` is live
 **before any socket is bound** — `SELECT 1`, `DELETE`/`INSERT`, `SELECT` all
 succeed pre-`run()`, and a served route reuses the same pool. No added latency
 (same ~110 ms Aiven network bound). Gates green.
+
+### P1 follow-up 3 — native Rust scheduler (cron + interval) (2026-07-17)
+
+JustAPI now ships a built-in scheduler (ADR-060) that dispatches periodic jobs
+onto the **same Rust background-worker pool** as `BackgroundTasks` — no extra
+thread per job, no Python-side APScheduler. v1 is UTC + in-memory.
+
+| Check | Result |
+|---|---|
+| `app.every(1, cb)` fires within 3.6 s | `fired.count('every') >= 2` |
+| `Scheduler().schedule("*/2 * * * * *", cb)` (6-field UTC) fires | `fired.count('cron') >= 1` |
+| invalid cron at registration | `ValueError` raised |
+| `stats()` after run | `{'jobs':2,'fired':4,'failed':0,'running':False}` |
+| `remove(id)` | returns True then False on second call |
+
+Tick loop is non-blocking (250 ms poll on the shared tokio handle); worker-pool
+dispatch means per-fire cost ≈ one `submit_py_task` enqueue — O(1), no scheduling
+overhead added to request path. `cargo test -p justapi-py scheduler` → 6 Rust
+unit tests; `test_scheduler.py` → 2 passed. Full gates green. (No p99 request
+regression: scheduler runs off the event loop, not the request path.)

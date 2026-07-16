@@ -1248,7 +1248,40 @@ class JustAPIApp:
         return self
 
     def run(self, addr: str, max_body_size: int = 50 * 1024 * 1024):
+        # Start the native Rust scheduler (if any jobs were registered) so cron
+        # and interval jobs run for the lifetime of the server.
+        from ._justapi import Scheduler
+
+        Scheduler().start()
         self._app.run(addr, max_body_size)
+
+    def schedule(self, cron_expr, func, *args, **kwargs):
+        """Register a cron job (native Rust scheduler).
+
+        ``cron_expr`` is a standard 5-field cron expression evaluated in **UTC**.
+        The job ``func`` (plus ``*args`` / ``**kwargs``) is dispatched onto the
+        same Rust background-task worker pool as ``BackgroundTasks``, so it runs
+        with the GIL released. Jobs are in-memory (not persisted) in v1.
+
+            app.schedule("*/5 * * * *", cleanup_tmp)
+            app.schedule("0 0 * * *", daily_report, "team@example.com")
+        """
+        from ._justapi import Scheduler
+
+        return Scheduler().schedule(cron_expr, func, *args, **kwargs)
+
+    def every(self, seconds, func, *args, **kwargs):
+        """Register an interval job (native Rust scheduler).
+
+        Fires ``func`` every ``seconds`` (first fire is one interval after
+        registration). Dispatched onto the Rust background-task worker pool.
+
+            app.every(30, flush_cache)
+            app.every(3600, poll_upstream, url="https://...")
+        """
+        from ._justapi import Scheduler
+
+        return Scheduler().every(seconds, func, *args, **kwargs)
 
 
     def _wrap_sse_handler(self, func):

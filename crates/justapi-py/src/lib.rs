@@ -9,6 +9,7 @@ mod multipart;
 mod native;
 mod rate_limit;
 mod request;
+pub mod scheduler;
 pub mod status;
 mod test_client;
 mod websocket;
@@ -73,6 +74,7 @@ fn _justapi(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Dag>()?;
     m.add_class::<DagNode>()?;
     m.add_class::<background::BackgroundTasks>()?;
+    m.add_class::<scheduler::PyScheduler>()?;
     status::register(m)?;
     Ok(())
 }
