@@ -348,3 +348,174 @@ async fn test_crud_insert_handler() {
     // so assert at minimum that a well-formed-but-empty-of-columns body fails.
     assert!(status == StatusCode::OK || status == StatusCode::INTERNAL_SERVER_ERROR);
 }
+
+#[cfg(feature = "db")]
+async fn start_server_with_crud_all() -> SocketAddr {
+    use justapi_core::db::AnyPool;
+    use justapi_core::server::{crud_dispatch_bytes, CrudOp, CrudSpec};
+    use std::sync::Arc;
+
+    let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let pool = Arc::new(
+        AnyPool::connect_with(
+            "sqlite:file:crudall?mode=memory&cache=shared",
+            1,
+            justapi_core::db::DbKind::Sqlite,
+        )
+        .await
+        .unwrap(),
+    );
+    pool.execute(
+        "CREATE TABLE items (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, qty INTEGER NOT NULL)",
+    )
+    .await
+    .unwrap();
+
+    let columns = vec!["name".to_string(), "qty".to_string()];
+    let insert_spec = CrudSpec {
+        op: CrudOp::Insert,
+        table: "items".to_string(),
+        columns: columns.clone(),
+        id_column: "id".to_string(),
+    };
+    let select_spec = CrudSpec {
+        op: CrudOp::Select,
+        table: "items".to_string(),
+        columns: columns.clone(),
+        id_column: "id".to_string(),
+    };
+    let update_spec = CrudSpec {
+        op: CrudOp::Update,
+        table: "items".to_string(),
+        columns: columns.clone(),
+        id_column: "id".to_string(),
+    };
+    let delete_spec = CrudSpec {
+        op: CrudOp::Delete,
+        table: "items".to_string(),
+        columns,
+        id_column: "id".to_string(),
+    };
+
+    // Helpers that wrap `crud_dispatch_bytes` as a `HandlerFn<Incoming>`. For
+    // select/update/delete the matched path params are read from the request
+    // extensions (injected by the server before dispatching); the body is
+    // collected from the request.
+    let p0 = pool.clone();
+    let insert: justapi_core::middleware::HandlerFn =
+        Arc::new(move |req: hyper::Request<hyper::body::Incoming>| {
+            let p = p0.clone();
+            let s = insert_spec.clone();
+            Box::pin(async move {
+                let body =
+                    http_body_util::BodyExt::collect(req.into_body()).await.unwrap().to_bytes();
+                crud_dispatch_bytes(&p, &s, &[] as &[(String, String)], b"", &body, None).await
+            })
+        });
+    let p1 = pool.clone();
+    let select: justapi_core::middleware::HandlerFn =
+        Arc::new(move |req: hyper::Request<hyper::body::Incoming>| {
+            let p = p1.clone();
+            let s = select_spec.clone();
+            Box::pin(async move {
+                let path_params =
+                    req.extensions().get::<Vec<(String, String)>>().cloned().unwrap_or_default();
+                crud_dispatch_bytes(&p, &s, &path_params, b"", &[], None).await
+            })
+        });
+    let p2 = pool.clone();
+    let update: justapi_core::middleware::HandlerFn =
+        Arc::new(move |req: hyper::Request<hyper::body::Incoming>| {
+            let p = p2.clone();
+            let s = update_spec.clone();
+            Box::pin(async move {
+                let path_params =
+                    req.extensions().get::<Vec<(String, String)>>().cloned().unwrap_or_default();
+                let body =
+                    http_body_util::BodyExt::collect(req.into_body()).await.unwrap().to_bytes();
+                crud_dispatch_bytes(&p, &s, &path_params, b"", &body, None).await
+            })
+        });
+    let p3 = pool.clone();
+    let delete: justapi_core::middleware::HandlerFn =
+        Arc::new(move |req: hyper::Request<hyper::body::Incoming>| {
+            let p = p3.clone();
+            let s = delete_spec.clone();
+            Box::pin(async move {
+                let path_params =
+                    req.extensions().get::<Vec<(String, String)>>().cloned().unwrap_or_default();
+                crud_dispatch_bytes(&p, &s, &path_params, b"", &[], None).await
+            })
+        });
+
+    tokio::spawn(async move {
+        Server::new(addr)
+            .add_custom_route(Method::POST, "/items", insert)
+            .add_custom_route(Method::GET, "/items/{id}", select)
+            .add_custom_route(Method::PUT, "/items/{id}", update)
+            .add_custom_route(Method::DELETE, "/items/{id}", delete)
+            .run_on(listener)
+            .await
+            .unwrap();
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    addr
+}
+
+#[cfg(feature = "db")]
+#[tokio::test]
+async fn test_crud_all_handler() {
+    use serde_json::Value;
+
+    let addr = start_server_with_crud_all().await;
+
+    // INSERT -> 200 row JSON with generated id.
+    let (status, body) =
+        send_request(addr, Method::POST, "/items", Some(b"{\"name\":\"widget\",\"qty\":3}")).await;
+    assert_eq!(status, StatusCode::OK);
+    let row: Value = serde_json::from_slice(&body).unwrap();
+    let id = row["id"].as_i64().unwrap();
+    assert_eq!(row["name"], Value::String("widget".to_string()));
+    assert_eq!(row["qty"], Value::from(3));
+
+    // SELECT by id -> 200 with the matching rows as a JSON array.
+    let (status, body) = send_request(addr, Method::GET, &format!("/items/{}", id), None).await;
+    assert_eq!(status, StatusCode::OK);
+    let rows: Value = serde_json::from_slice(&body).unwrap();
+    let row = &rows[0];
+    assert_eq!(row["id"], Value::from(id));
+    assert_eq!(row["name"], Value::String("widget".to_string()));
+
+    // UPDATE by id -> 200 with the updated rows as a JSON array.
+    let (status, body) = send_request(
+        addr,
+        Method::PUT,
+        &format!("/items/{}", id),
+        Some(b"{\"name\":\"gadget\",\"qty\":7}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let row: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(row["name"], Value::String("gadget".to_string()));
+    assert_eq!(row["qty"], Value::from(7));
+
+    // SELECT again confirms the update persisted.
+    let (status, body) = send_request(addr, Method::GET, &format!("/items/{}", id), None).await;
+    assert_eq!(status, StatusCode::OK);
+    let rows: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(rows[0]["qty"], Value::from(7));
+
+    // DELETE by id -> 200 with the deleted row.
+    let (status, body) = send_request(addr, Method::DELETE, &format!("/items/{}", id), None).await;
+    assert_eq!(status, StatusCode::OK);
+    let row: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(row["id"], Value::from(id));
+
+    // SELECT after delete -> 200 with an empty array (no matching row).
+    let (status, body) = send_request(addr, Method::GET, &format!("/items/{}", id), None).await;
+    assert_eq!(status, StatusCode::OK);
+    let rows: Value = serde_json::from_slice(&body).unwrap();
+    assert!(rows.as_array().unwrap().is_empty());
+}

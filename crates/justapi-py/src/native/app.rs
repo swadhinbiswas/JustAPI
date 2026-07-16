@@ -43,10 +43,11 @@ pub struct JustAPIApp {
     pub router: Router<usize>,
     pub handlers: Vec<Py<PyAny>>,
     pub native: Vec<bool>,
-    /// Per-handler Rust-native CRUD spec (ADR-056 Step B). `Some` means this
-    /// route is served entirely in Rust by `crud_insert_handler`, with no GIL
-    /// hop. Indexed by handler id, in lockstep with `handlers`/`native`.
-    pub crud: Vec<Option<CrudSpec>>,
+    /// Per-handler Rust-native CRUD config (ADR-056 Step C). `Some((table,
+    /// columns, id_column))` means this route is served entirely in Rust by
+    /// `crud_dispatch_bytes`, with no GIL hop. The operation is inferred from
+    /// the request method at runtime. Indexed by handler id.
+    pub crud: Vec<Option<(String, Vec<String>, String)>>,
     pub schemas: Vec<Option<Py<PyAny>>>,
     pub schema_jsons: Vec<Option<String>>,
     /// JSON Schemas (resolved at registration) used by the native fast path to
@@ -104,22 +105,16 @@ pub struct PyTool {
     pub handler: Py<PyAny>,
 }
 
-/// Rust-native CRUD route spec (ADR-056 Step B). When a route carries this, it
-/// is served by `justapi_core::server::crud_insert_handler` — validate body in
-/// Rust, `INSERT ... RETURNING`, return the row as 200 JSON — without acquiring
-/// the GIL.
-pub struct CrudSpec {
-    pub table: String,
-    pub columns: Vec<String>,
-}
-
-/// Build a [`CrudSpec`] from the Python-side `crud_table` / `crud_columns`
-/// arguments (both required together). Returns `None` when neither is given
-/// (a normal Python/native-echo route). Errors if only one is provided.
+/// Build a Rust-native CRUD config from the Python-side `crud_table` /
+/// `crud_columns` arguments (both required together). The actual operation
+/// (insert/select/update/delete) is inferred from the request method at
+/// runtime in the handler dispatch. Returns `None` when neither is given (a
+/// normal Python/native-echo route). Errors if only one is provided, or if
+/// `crud_columns` is empty.
 pub(crate) fn make_crud_spec(
     crud_table: Option<String>,
     crud_columns: Option<Vec<String>>,
-) -> PyResult<Option<CrudSpec>> {
+) -> PyResult<Option<(String, Vec<String>, String)>> {
     match (crud_table, crud_columns) {
         (Some(table), Some(columns)) => {
             if columns.is_empty() {
@@ -127,7 +122,9 @@ pub(crate) fn make_crud_spec(
                     "crud_columns must be non-empty when crud_table is set",
                 ));
             }
-            Ok(Some(CrudSpec { table, columns }))
+            // `id` is the conventional primary-key column used for update/delete
+            // by path id; configurable later if needed.
+            Ok(Some((table, columns, "id".to_string())))
         }
         (Some(_), None) => {
             Err(pyo3::exceptions::PyValueError::new_err("crud_table requires crud_columns"))
@@ -1350,14 +1347,12 @@ impl JustAPIApp {
         // (schema-backed, response = validated request body, no Python call)?
         let native: Vec<bool> = std::mem::take(&mut app.native);
         let native = Arc::new(native);
-        // Per-handler Rust-native CRUD spec (ADR-056 Step B). Empty entries mean
-        // the route is served by the Python/native-echo path, not the Rust CRUD
-        // handler. The pool is resolved at request time from `db_pool`.
-        let crud: Vec<Option<(String, Vec<String>)>> = std::mem::take(&mut app.crud)
-            .into_iter()
-            .map(|c| c.map(|s| (s.table, s.columns)))
-            .collect();
-        let crud_specs = Arc::new(crud);
+        // Per-handler Rust-native CRUD config (ADR-056 Step C). `Some((table,
+        // columns, id_column))` means the route is served by `crud_dispatch_bytes`
+        // with the operation inferred from the request method. The pool is
+        // resolved at request time from `db_pool`.
+        let crud_specs: crate::native::handlers::CrudConfig =
+            Arc::new(std::mem::take(&mut app.crud));
         let schemas = Arc::new(std::mem::take(&mut app.schemas));
         let schema_jsons = Arc::new(std::mem::take(&mut app.schema_jsons));
         let query_schema_jsons = Arc::new(std::mem::take(&mut app.query_schema_jsons));
@@ -1410,11 +1405,18 @@ impl JustAPIApp {
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(async {
                 // Initialize database pool if configured, and build transaction-aware handler.
-                let db_pool = if let Some(ref config) = database_config {
+                    let db_pool = if let Some(ref config) = database_config {
                     let mut mgr = justapi_core::db::PoolManager::new();
                     match mgr.init("", config.clone()).await {
                         Ok(pool) => {
                             tracing::info!("Database pool initialized ({:?})", pool.kind());
+                            // Bootstrap schema if provided (single DDL statement).
+                            if let Some(sql) = &config.init_sql {
+                                if let Err(e) = pool.execute(sql).await {
+                                    tracing::error!("Database init_sql failed: {}", e);
+                                    return Err(anyhow::anyhow!("Database init_sql error: {}", e));
+                                }
+                            }
                             Some(pool)
                         }
                         Err(e) => {

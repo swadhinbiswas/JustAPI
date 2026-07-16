@@ -32,7 +32,10 @@ use tokio_util::sync::CancellationToken;
 #[cfg(feature = "db")]
 mod crud;
 #[cfg(feature = "db")]
-pub use crud::{crud_insert_bytes, crud_insert_handler, crud_select_handler};
+pub use crud::{
+    crud_dispatch_bytes, crud_handler, crud_insert_bytes, crud_insert_handler, crud_select_handler,
+    CrudOp, CrudSpec,
+};
 
 // ---------------------------------------------------------------------------
 // WebSocket handler (feature-gated on `ws`)
@@ -1548,7 +1551,16 @@ async fn execute_handler(
                     .unwrap())
             }
         }
-        Handler::Custom(f) => f(req).await,
+        Handler::Custom(f) => {
+            // Expose matched path params to custom handlers (e.g. the Rust-native
+            // CRUD handlers read `{id}` from here) via request extensions.
+            // `m.params` borrows the router, so collect into an owned Vec first.
+            let path_params: Vec<(String, String)> =
+                m.params.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+            let mut req = req;
+            req.extensions_mut().insert(path_params);
+            f(req).await
+        }
     }
 }
 
