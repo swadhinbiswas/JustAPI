@@ -866,24 +866,48 @@ class JustAPIApp:
     def use(self, plugin):
         self._app.use(plugin)
 
-    def set_database(self, db, init_sql=None, pragmas=None, wal=False):
+    def set_database(
+        self,
+        db,
+        init_sql=None,
+        pragmas=None,
+        wal=False,
+        acquire_timeout=None,
+        idle_timeout=None,
+        max_lifetime=None,
+        health_check_interval=None,
+        isolation=None,
+    ):
+        def _build(existing):
+            return Database(
+                existing.url,
+                max_connections=existing.max_connections,
+                init_sql=init_sql if init_sql is not None else existing.init_sql,
+                pragmas=pragmas if pragmas is not None else existing.pragmas,
+                acquire_timeout=acquire_timeout
+                if acquire_timeout is not None
+                else existing.acquire_timeout,
+                idle_timeout=idle_timeout if idle_timeout is not None else existing.idle_timeout,
+                max_lifetime=max_lifetime if max_lifetime is not None else existing.max_lifetime,
+                health_check_interval=health_check_interval
+                if health_check_interval is not None
+                else existing.health_check_interval,
+                isolation=isolation if isolation is not None else existing.isolation,
+            )
+
         if isinstance(db, str):
-            db = Database(db, init_sql=init_sql, pragmas=pragmas)
+            db = Database(
+                db,
+                init_sql=init_sql,
+                pragmas=pragmas,
+                acquire_timeout=acquire_timeout,
+                idle_timeout=idle_timeout,
+                max_lifetime=max_lifetime,
+                health_check_interval=health_check_interval,
+                isolation=isolation,
+            )
         else:
-            if init_sql is not None:
-                db = Database(
-                    db.url,
-                    max_connections=db.max_connections,
-                    init_sql=init_sql,
-                    pragmas=pragmas if pragmas is not None else db.pragmas,
-                )
-            elif pragmas is not None:
-                db = Database(
-                    db.url,
-                    max_connections=db.max_connections,
-                    init_sql=db.init_sql,
-                    pragmas=pragmas,
-                )
+            db = _build(db)
         if wal:
             existing = list(db.pragmas or [])
             if "journal_mode=WAL" not in existing:
@@ -893,6 +917,11 @@ class JustAPIApp:
                 max_connections=db.max_connections,
                 init_sql=db.init_sql,
                 pragmas=existing,
+                acquire_timeout=db.acquire_timeout,
+                idle_timeout=db.idle_timeout,
+                max_lifetime=db.max_lifetime,
+                health_check_interval=db.health_check_interval,
+                isolation=db.isolation,
             )
         self._app.set_database(db)
 

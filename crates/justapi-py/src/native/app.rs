@@ -1437,6 +1437,11 @@ impl JustAPIApp {
                                     }
                                 }
                             }
+                            // Optional background health-check loop.
+                            if let Some(interval) = config.health_check_interval {
+                                let mgr = std::sync::Arc::new(mgr);
+                                mgr.spawn_health_checks(interval).await;
+                            }
                             Some(pool)
                         }
                         Err(e) => {

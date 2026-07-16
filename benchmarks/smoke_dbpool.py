@@ -55,6 +55,21 @@ def test_dbpool_roundtrip():
         ok = db.health()
         return {"ok": ok}
 
+    @app.get("/stream")
+    def do_stream(req):
+        db = app.db
+        chunks = db.query_stream("SELECT id FROM dbpool_demo ORDER BY id", None, 2)
+        return {"chunks": len(chunks), "first": chunks[0] if chunks else []}
+
+    @app.get("/blob")
+    def do_blob(req):
+        db = app.db
+        from justapi import DbParam
+        db.execute("CREATE TABLE IF NOT EXISTS blobs (id SERIAL PRIMARY KEY, data BYTEA)")
+        db.execute("INSERT INTO blobs (data) VALUES (?)", [DbParam.bytes(b"\x01\x02\x03")])
+        row = db.query("SELECT data FROM blobs ORDER BY id DESC LIMIT 1")
+        return {"data": row[0]["data"]}
+
     import threading
 
     srv = threading.Thread(target=lambda: app.run("127.0.0.1:8123"), daemon=True)
@@ -73,6 +88,10 @@ def test_dbpool_roundtrip():
     txn = get("/txn")
     assert "total" in txn
     assert get("/dbhealth")
+    st = get("/stream")
+    assert "chunks" in st
+    bl = get("/blob")
+    assert "data" in bl
     print("DBPOOL SMOKE OK", get("/seed"))
 
 
