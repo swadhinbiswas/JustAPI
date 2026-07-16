@@ -37,6 +37,7 @@ from .exceptions import HTTPException, WebSocketException
 from .websockets import WebSocket, WebSocketState, WebSocketDisconnect
 from .templating import Jinja2Templates
 from .background import BackgroundTasks
+from ._justapi import Scheduler  # type: ignore[import-untyped]
 from .responses import (
     Response,
     HTMLResponse,
@@ -168,7 +169,7 @@ def pydantic_schema(model_class) -> str:
 
 __all__ = [
     "serve", "JustAPIApp", "JustAPI", "Depends", "Database", "DbPool", "DbParam", "Schema", "pydantic_schema", 
-    "JustAPITestClient", "testing", "tracing", "Jinja2Templates", "BackgroundTasks", 
+    "JustAPITestClient", "testing", "tracing", "Jinja2Templates", "BackgroundTasks", "Scheduler", 
     "TokenStreamResponse", "ValidatedStreamResponse", "WebSocket", "Dag", "DagNode", "RateLimiter", "RateLimitResult",
     "adaptive_batch", "APIRouter", "Controller", "controller", 
     "route_get", "route_post", "route_put", "route_patch", "route_delete", "route_query", 
