@@ -51,7 +51,8 @@ Selective benchmarking is a credibility risk, so we state the losses too:
   pure throughput micro-benchmarks we expect to *lose* to purpose-built minimal
   runtimes.
 
-We will add a Robyn row to this ledger once measured on the same fixture.
+A Robyn row is now recorded on this hardware (see the 2026-07-16 head-to-head
+below); the earlier fixture numbers are also kept for reference.
 
 ---
 
@@ -192,6 +193,35 @@ actually takes the Rust fast path**.
 - **Takeaway:** to actually beat Robyn-class raw throughput, opt routes into
   `native=True` + a `Schema`. Plain Python handlers are correct and stable but
   GIL-bound.
+
+### Head-to-head: JustAPI vs Robyn 0.88 (2026-07-16, same hardware)
+
+Measured on the **same dev box** as the re-run above, identical workload
+(JSON `POST` echo, `{"ok":true}`), release build, `oha -z 10s`, single-process.
+Robyn 0.88.0 (its `actix` runtime + Python handler). This is the apples-to-apples
+number that was previously only recorded on the i5-13600K fixture — here Robyn
+comes in materially lower (~22k) than the fixture's 33–40k, which widens
+JustAPI's margin on this machine.
+
+| Framework | Route mode | req/sec @ -c 100 | req/sec @ -c 200 |
+|---|---|---:|---:|
+| **JustAPI** | `native=True` + `Schema` (Rust fast path) | **485,076** | **564,909** |
+| **JustAPI** | plain Python handler (GIL pool) | 120,111 | 119,619 |
+| **Robyn 0.88** | Python handler (actix) | 22,300 | 22,066 |
+
+**Conclusion: JustAPI is faster than Robyn on this hardware on every path.**
+- The Rust native fast path is **~21× Robyn at -c 100** and **~25× at -c 200**.
+- Even JustAPI's *plain Python* handler path (GIL-bound) is **~5.4× Robyn**,
+  because the dedicated GIL thread-pool dispatches Python work without the
+  actix-threadpool round-trip Robyn uses for async Python handlers.
+- The earlier "Robyn ×1.5–2× faster" conclusion (recorded 2026-07-13 on a debug
+  build, pre-fast-path) is **fully superseded**: that run crossed the PyO3
+  boundary into a Python handler on every route; the native fast path and GIL
+  pool rewrite remove that cost.
+
+> Caveat: these are micro-benchmarks (echo). Robyn may close the gap on
+> handler-heavy workloads with large Python logic, and the native fast path only
+> applies to schema-backed validate-and-echo routes. Measure your real workload.
 
 ---
 
