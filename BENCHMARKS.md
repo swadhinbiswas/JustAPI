@@ -1412,3 +1412,27 @@ post-delete SELECT→`[]`. Response shapes match the SQLite runs.
 `journal_mode=WAL` etc. applied per pooled connection via `after_connect`),
 and `app.set_database(db, init_sql=, pragmas=, wal=)`. Postgres TLS enabled in
 the workspace `sqlx` features (`runtime-tokio-rustls` → `tls-rustls`).
+
+---
+
+## P1 — Python DB API over `AnyPool` (2026-07-16)
+
+Arbitrary SQL from Python handlers now runs in Rust via the `DbPool` bridge
+(`app.db.query/execute/insert/transaction/health`), with bound parameters
+(injection-safe) and the GIL released for the DB round-trip. Verified
+end-to-end against the Aiven Postgres fixture (`benchmarks/smoke_dbpool.py`):
+
+| Call | Result |
+|---|---|
+| `db.execute("INSERT … VALUES ($1,$2)", ["alpha", 10])` | rows affected |
+| `db.query("SELECT * FROM dbpool_demo ORDER BY id")` | `[{"id":1,"name":"alpha","qty":11}, …]` |
+| `db.insert("dbpool_demo", {"name":"gamma","qty":7})` | `{"id":3,"name":"gamma","qty":7}` (RETURNING *) |
+| `db.transaction([("UPDATE … qty=qty+1 WHERE name=$1",["alpha"]),("SELECT SUM(qty) …",None)])` | commit; alpha 10→11, `{"total":N}` returned |
+| `db.health()` | `True` |
+
+Latency for each call is dominated by the same ~110 ms Aiven round-trip as the
+CRUD benchmarks above; the new code path adds no GIL cost (the `AnyPool` future
+runs on the captured tokio `Handle` outside any `Python` token). Throughput is
+therefore identical in shape to Step D — bounded by network + pool concurrency,
+not by JustAPI. Gates: `cargo test --workspace --features db`, clippy `-D
+warnings` on both crates, `cargo fmt --check`, pytest green, Aiven smoke.

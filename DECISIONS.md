@@ -2025,10 +2025,36 @@ stays an option for truly custom logic.
   `journal_mode=WAL` applied per connection via `after_connect`; Postgres TLS
   enabled via `sqlx` `tls-rustls`. `crud_dispatch_bytes` now emits driver-correct
   placeholders (`$N` Postgres / `?` SQLite-MySQL) via `placeholder_gen`. Gates
-  met: `cargo test --workspace --features db`, `cargo clippy -D warnings`,
-  `cargo fmt --check`, pytest green. Remaining (post-Step D): a Rust-backed
-  Python DB API (`app.query`/`app.execute` over `AnyPool`) so *custom* handlers
-  can run arbitrary SQL without losing the GIL-avoidance win.
+   met: `cargo test --workspace --features db`, `cargo clippy -D warnings`,
+   `cargo fmt --check`, pytest green. Remaining (post-Step D): a Rust-backed
+   Python DB API (`app.query`/`app.execute` over `AnyPool`) so *custom* handlers
+   can run arbitrary SQL without losing the GIL-avoidance win.
+
+   **Evidence (P1 — Python DB API over `AnyPool`, 2026-07-16):** Shipped the
+   follow-up predicted at the end of Step D: a Rust-owned `DbPool` bridge exposed
+   to Python handlers so *arbitrary* SQL runs entirely in Rust with **bound
+   parameters** (injection-safe, no string interpolation) and the **GIL released
+   during the round-trip** (`py.detach` in the `run()` entrypoint; per-call the
+   `AnyPool` future runs on the tokio runtime handle captured at startup, outside
+   any `Python` token). API: `app.db.query(sql, params=None)`,
+   `app.db.execute(sql, params=None)`, `app.db.insert(table, data, columns=None)`
+   (returns the `RETURNING *` row), `app.db.transaction([(sql, params), …])`
+   (commits atomically; returns the last statement's rows or `{"rows_affected":N}`),
+   `app.db.health()`. `app.db` resolves to the `DbPool` only after `app.run()`
+   (`db_pool` field is set inside `run()` on the resolved `AnyPool`; before that it
+   is `None`). Verified end-to-end against the Aiven Postgres fixture from
+   `benchmarks/smoke_dbpool.py`: INSERT with `$1`/`$2` binds, SELECT returning row
+   dicts, RETURNING insert, and a 2-statement `transaction` committing (alpha's
+   `qty` went 10→11 across the UPDATE+SELECT) all succeeded. This keeps the
+   AGENTS.md §2 / ADR-056 thesis: the DB layer is Rust-owned and the Python GIL is
+   never held during a query. `app.db` is accessed from handlers as `app.db`
+   (Python `JustAPIApp.db` property → `self._app.db_pool()`); the Python-side
+   config is `app.set_database(Database(url), init_sql=..., pragmas=..., wal=...)`
+   (note: `app.database = ...` is a no-op — the setter is `set_database`).
+   Gates met: `cargo test --workspace --features db`, `cargo clippy -p
+   justapi-core --tests --features db -D warnings`, `cargo clippy -p justapi-py
+   --tests -D warnings`, `cargo fmt --check`, pytest green, and the Aiven
+   end-to-end smoke.
 
 ## ADR-055 — 2026-07-16 — Configurable max request body size (413 on overflow)
 
