@@ -1909,6 +1909,83 @@ tests: `static_files::tests::test_mount_resolve_prefix`,
 `test_mount_traversal_blocked_through_prefix`, and
 `integration::test_static_mount_prefix_and_spa_fallback`.
 
+## ADR-056 — 2026-07-16 — Rust-native route compiler (skip the GIL on common routes)
+
+**Context:** JustAPI already beats Robyn on raw throughput (ADR-048/055,
+head-to-head in `BENCHMARKS.md`: native fast path ~21–25× Robyn, plain Python
+path ~5.4× Robyn). But the *only* route that currently runs entirely in Rust is
+the **validate-and-echo** native fast path (`try_native_fast_path`,
+handlers.rs:449): it validates the body against a JSON schema and returns the
+bytes unchanged. That covers a single shape — "accept + validate + echo" — and
+cannot transform, query a DB, branch, or set custom status/headers. Every other
+route falls back to the Python GIL path (~120k req/s here), which is GIL-capped.
+
+The explicit goal ("faster than every existing framework, perfectly"): the only
+way to be faster than Python-in-hot-path frameworks (Robyn/Flask/FastAPI/Sanic)
+*and* match pure-Rust frameworks (Actix/Axum) is to **serve routes in Rust by
+default** and make Python the *exception* (only for logic with no Rust
+primitive). Raw echo can never beat Actix; the win is "Actix-class speed for
+every route shape expressible in Rust primitives, with Python DX for the rest."
+
+**Design — a route compiler, not "make everything native":**
+A route is *eligible* for the Rust path iff **every step** of its behavior has a
+Rust implementation in `justapi_core`. If eligible, it compiles to a
+`Handler::Custom` (Rust closure, zero Python/GIL) via the existing
+`Handler::Custom` mechanism (already used by OpenAI/DB routes). If not eligible,
+it falls back to the Python GIL path — never silently wrong. This mirrors the
+today's `native=True`+`Schema` rule (schema present → Rust echo; absent → Python
+fallback), generalized to a set of primitives.
+
+**Rust-primitive set (all already exist in `justapi_core`):**
+- Body validation against JSON schema — `validate::CompiledValidator` ✅
+- Query/param validation — `try_native_fast_path_query` ✅
+- SQL execute/select/insert/update/delete — `db/` (`AnyPool`, `Select`/`Insert`/
+  `Update`/`Delete` builders, `TransactionHandle`) ✅ (needs a row-fetch-as-JSON
+  method added to `AnyPool`; see below)
+- Serialization to JSON response — `serialize` ✅
+- Middleware already in Rust: `rate_limit`, `resilience` (circuit breaker),
+  CORS, auth/JWT, `middleware` chain ✅
+
+**Eligibility examples (promote to Rust iff all true):**
+- `POST /users` + body `Schema` + `native="crud_insert"` (table, columns) →
+  validate → `INSERT ... RETURNING` → return row JSON. ✅
+- `GET /users` + `query_schema` + `native="crud_select"` → validate query →
+  `SELECT` → return rows. ✅
+- Route with a Python `def handler` body that does arithmetic/string work /
+  calls an LLM SDK / third-party lib → ❌ falls back to Python.
+
+**Correctness contract (the real engineering risk):** a Rust-native route must
+behave *identically* to the equivalent Python route — same status codes, error
+envelope `{"detail": ...}`, transaction semantics (auto-begin/commit on writes,
+rollback on error), NULL handling, and header/content-type. Add a test that
+runs the same route in both modes and diffs responses. Silent semantic drift is
+the failure mode to prevent.
+
+**Phased plan:**
+- **Step B (prototype, this ADR):** Rust-native `POST` CRUD insert — validate
+  body → `INSERT ... RETURNING` (via new `AnyPool::query_json`) → return row as
+  200 JSON, within a transaction; 422 on validation failure; 500 on DB error.
+  Exposed as `app.post(path, schema=S, native="crud_insert", table=...,
+  columns=...)` on the Python side, compiling to `Handler::Custom`. Reuses
+  `db/`, `validate`, `serialize`. Benchmark vs Robyn + vs Python path.
+- **Step C:** GET select, PUT update, DELETE; then Rust-native middleware chain
+  (rate-limit/circuit-breaker/CORS/JWT) running without a Python hop.
+- **Step D:** Compile-time eligibility checker promoting routes automatically
+  when all steps are Rust-backed; honest benchmark ledger vs Robyn **and**
+  Actix/Axum on the same fixture.
+
+**Why not a WASM/user-Rust handler instead:** `wasm.rs` exists but user-authored
+WASM handlers shift the DX burden to the user and add a runtime; the
+declarative-primitive compiler keeps Python DX while executing in Rust. WASM
+stays an option for truly custom logic.
+
+**Evidence (expected, to be filled by Step B):** Rust-native CRUD insert should
+land in the same ~hundreds-of-k req/s band as the validate-and-echo fast path
+(DB round-trip dominates latency, not the GIL), vs ~120k for the Python path and
+~22k for Robyn. Gates: `cargo test --workspace`, `cargo clippy --workspace
+--tests -D warnings`, `cargo fmt --check`, pytest green; new Rust integration
+test asserting Rust-native == Python-semantics for the same route.
+
 ## ADR-055 — 2026-07-16 — Configurable max request body size (413 on overflow)
 
 **Context:** The request body cap was a hardcoded `50 * 1024 * 1024` (50 MiB)

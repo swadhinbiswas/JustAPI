@@ -29,6 +29,11 @@ use futures::StreamExt;
 use serde_json;
 use tokio_util::sync::CancellationToken;
 
+#[cfg(feature = "db")]
+mod crud;
+#[cfg(feature = "db")]
+pub use crud::{crud_insert_handler, crud_select_handler};
+
 // ---------------------------------------------------------------------------
 // WebSocket handler (feature-gated on `ws`)
 // ---------------------------------------------------------------------------
@@ -400,6 +405,22 @@ impl Server {
         self.router = None;
         self.chain.set_handler(handler);
         self.custom_handler_set = true;
+        self
+    }
+
+    /// Register a user-supplied [`Handler::Custom`] for `method` + `path` on the
+    /// router. Used by the Rust-native CRUD routes (ADR-056) and by tests. Panics
+    /// if called after [`Server::with_handler`], which replaces the router.
+    pub fn add_custom_route(
+        mut self,
+        method: Method,
+        path: &str,
+        handler: crate::middleware::HandlerFn,
+    ) -> Self {
+        assert!(!self.custom_handler_set, "add_custom_route() cannot be used after with_handler()");
+        let mut router = self.router.unwrap_or_default();
+        router.insert(method, path, Handler::Custom(handler)).expect("valid custom route");
+        self.router = Some(router);
         self
     }
 
@@ -1036,7 +1057,7 @@ const HEADER_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 /// Default cap on request body size. Bounding the body protects against
 /// memory-exhaustion DoS; it is configurable per-server via
 /// `Server::with_max_body_size`.
-const DEFAULT_MAX_BODY_SIZE: usize = 50 * 1024 * 1024;
+pub(crate) const DEFAULT_MAX_BODY_SIZE: usize = 50 * 1024 * 1024;
 
 /// Max wall-clock time a single request handler may run before we respond 504
 /// and abort it. Guards against stuck/slow handlers and resource exhaustion.
