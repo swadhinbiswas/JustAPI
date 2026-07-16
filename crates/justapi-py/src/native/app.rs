@@ -1572,12 +1572,8 @@ impl JustAPIApp {
                     server = server.add_gateway(gateway_state);
                 }
 
-                for mount in &frontend_mounts {
-                    // NOTE: core's static API currently supports a single
-                    // directory mount (`with_static_dir`); per-mount prefix and
-                    // fallback routing from `frontend_mounts` is not yet wired
-                    // through. This keeps the last mount as the served dir.
-                    server = server.with_static_dir(mount.dir.root());
+                if !frontend_mounts.is_empty() {
+                    server = server.with_static_mounts(frontend_mounts.clone());
                 }
 
                 if let (Some(gaddr), true) = (grpc_addr, !grpc_handlers.is_empty()) {
@@ -1619,7 +1615,7 @@ impl JustAPIApp {
                 // accepted tokio-tungstenite stream to a Python handler.
                 if !ws_routes.is_empty() {
                     let ws_routes_arc = Arc::new(ws_routes);
-                    let ws_handler: justapi_core::server::WsHandler = Arc::new(move |path, mut read, mut write| {
+                    let ws_handler: justapi_core::server::WsHandler = Arc::new(move |info, mut read, mut write| {
                         let ws_routes = ws_routes_arc.clone();
                         let app_py_ws = app_py_ws.clone();
                         Box::pin(async move {
@@ -1686,19 +1682,19 @@ impl JustAPIApp {
 
                             // Invoke the Python handler on the daemon event loop.
                             Python::attach(|py| {
-                                if let Some(h) = ws_routes.get(&path) {
-                                    let conn = Conn {
-                                        method: "GET".to_string(),
-                                        path: path.clone(),
-                                        path_params_raw: vec![],
-                                        query_string_raw: vec![],
-                                        headers_raw: vec![],
-                                        scheme: "ws".to_string(),
-                                        client: None,
-                                        app: app_py_ws.as_ref().as_ref().map(|a| a.clone_ref(py)),
-                                        http_version: "1.1".to_string(),
-                                        state: PyDict::new(py).unbind(),
-                                    };
+                                    if let Some(h) = ws_routes.get(&info.path) {
+                                        let conn = Conn {
+                                            method: "GET".to_string(),
+                                            path: info.path.clone(),
+                                            path_params_raw: vec![],
+                                            query_string_raw: info.query_string.clone(),
+                                            headers_raw: info.headers.clone(),
+                                            scheme: "ws".to_string(),
+                                            client: info.client.clone(),
+                                            app: app_py_ws.as_ref().as_ref().map(|a| a.clone_ref(py)),
+                                            http_version: "1.1".to_string(),
+                                            state: PyDict::new(py).unbind(),
+                                        };
                                     let rust_ws = match Py::new(
                                         py,
                                         WebSocket::new(incoming, out_tx, conn),

@@ -1099,17 +1099,37 @@ Status of the P0 sprint driven by the MED#9 audit verdict (see BENCHMARKS.md
 - [x] **Dead code / CI** (prior session): HTTP/3 removed (ADR-049); fuzz CI
       fixed to run all 7 real targets; orphan root `.rs` removed; `rustfmt.toml`
       stable-only so `cargo fmt --check` passes.
-- [ ] **Error-contract unification** (P1): three inconsistent shapes
-      (`{"error"}` vs `{"detail"}` vs RFC-7807) should collapse to one.
-- [ ] **Panic isolation** (P1/P2): `panic = "abort"` means one bad request can
-      kill the process; a GIL-path `catch_unwind` around handlers + an unwrap
-      audit on the hot path (server/ + native/) is still TODO.
+ - [x] **Error-contract unification** (P1): single `{"detail": ...}` envelope
+       across core + Python (ADR-052); Rust validation RFC-7807 + `{"error":...}`
+       collapsed; `application/json` everywhere. `error_response`/
+       `validation_response` helpers added in `justapi_core::lib.rs`.
+ - [x] **Panic model** (ADR-053): kept `panic = "abort"` + supervisor restart
+       (catch_unwind at the GIL FFI boundary is UB + ~3x regression per
+       `gil_pool.rs`); fixed the per-request `router.fallback().unwrap()` abort
+       and audited remaining hot-path unwraps.
 
-- [x] **Error contract** (ADR-052): single `{"detail": ...}` envelope across
-      core + Python (Rust validation RFC-7807 + `{"error":...}` collapsed;
-      `application/json` everywhere). `error_response`/`validation_response`
-      helpers added in `justapi_core::lib.rs`.
-- [x] **Panic model** (ADR-053): kept `panic = "abort"` + supervisor restart
-      (catch_unwind at the GIL FFI boundary is UB + ~3x regression per
-      `gil_pool.rs`); fixed the per-request `router.fallback().unwrap()` abort
-      and audited remaining hot-path unwraps.
+### Framework bug fixes (post-audit, 2026-07-16)
+
+Two pre-existing test failures (`test_websocket.py::test_websocket_scope_and_json`
+and `test_openapi_parity.py::test_openapi_parity`) were production-grade bugs,
+not test issues:
+
+- [x] **WebSocket scope query/headers/client** (ADR-054): the Rust WS upgrade
+      path only passed the request `path` to handlers — query string, headers,
+      and peer address were dropped, so a Starlette-style `scope` had an empty
+      `query`. `WsHandler` now receives a `WsConnInfo { path, query_string,
+      headers, client }` built from the upgrade request before
+      `hyper::upgrade::on` consumes it. Python `WebSocket` scope now reflects the
+      real query/headers/client.
+- [x] **OpenAPI parity** (ADR-054): `build_openapi` emitted `operation_id`
+      (wrong key; OpenAPI requires `operationId`), dropped `openapi_extra`
+      extensions, and omitted the default success response when `responses` was
+      supplied. Fixed to emit `operationId`, merge `openapi_extra`, and always
+      include the success code (`200`/`status_code`).
+- [x] **Frontend SPA mounts** (ADR-054): `app.frontend()` stored per-mount
+      `StaticMount { prefix, dir, fallback }` but `run()` discarded the prefix
+      and fallback (only mounted the dir root), so `/static/` returned 404. Core
+      `Server` now honors `with_static_mounts` (prefix + SPA fallback) via
+      `try_serve_static`. Added `run_on(listener)` to avoid an ephemeral-port
+      bind race in tests; added Rust integration + unit tests.
+

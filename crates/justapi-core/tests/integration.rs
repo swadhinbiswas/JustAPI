@@ -5,6 +5,8 @@ use http_body_util::BodyExt;
 use hyper::{Method, StatusCode};
 use hyper_util::rt::TokioIo;
 use justapi_core::serve;
+use justapi_core::server::Server;
+use justapi_core::static_files::{StaticDir, StaticMount};
 use tokio::net::{TcpListener, TcpStream};
 
 async fn send_request(
@@ -193,4 +195,53 @@ async fn test_loopback_websocket() {
     ws.send(Message::Text("hello".into())).await.unwrap();
     let msg = ws.next().await.unwrap().unwrap();
     assert_eq!(msg, Message::Text("hello".into()));
+}
+
+/// Helper to start a server with one static/frontend mount (prefix + SPA
+/// fallback) and the default router (404 for unknown paths, so the static
+/// fallback engages).
+async fn start_server_with_static(root: &std::path::Path, prefix: &str) -> SocketAddr {
+    let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let mounts = vec![StaticMount {
+        prefix: prefix.to_string(),
+        dir: StaticDir::new(root),
+        fallback: Some("index.html".to_string()),
+    }];
+    tokio::spawn(async move {
+        Server::new(addr)
+            .with_default_routes()
+            .with_static_mounts(mounts)
+            .run_on(listener)
+            .await
+            .unwrap();
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    addr
+}
+
+#[tokio::test]
+async fn test_static_mount_prefix_and_spa_fallback() {
+    let tmp = std::env::temp_dir().join(format!("justapi_static_test_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(tmp.join("css"));
+    std::fs::write(tmp.join("index.html"), "<html>SPA</html>").unwrap();
+    std::fs::write(tmp.join("css/style.css"), "body{}").unwrap();
+
+    let addr = start_server_with_static(&tmp, "/static").await;
+
+    // Exact file under the mount prefix is served.
+    let (status, body) = send_request(addr, Method::GET, "/static/css/style.css", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(&body[..], b"body{}");
+
+    // SPA fallback: unknown path under the prefix serves index.html.
+    let (status, body) = send_request(addr, Method::GET, "/static/deep/route", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(&body[..], b"<html>SPA</html>");
+
+    // Path not under the mount prefix is NOT served by the mount (404).
+    let (status, _) = send_request(addr, Method::GET, "/elsewhere/file", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let _ = std::fs::remove_dir_all(&tmp);
 }

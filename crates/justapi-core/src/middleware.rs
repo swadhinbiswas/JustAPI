@@ -1291,7 +1291,11 @@ mod tests {
             Box::pin(async { Ok(json_response(StatusCode::OK, "ok")) })
         });
         let mut chain = MiddlewareChain::new(handler);
-        chain.add(Cors::new().allow_origin("https://example.com").expose_headers(&["x-custom-header", "x-trace-id"]));
+        chain.add(
+            Cors::new()
+                .allow_origin("https://example.com")
+                .expose_headers(&["x-custom-header", "x-trace-id"]),
+        );
         let req = test_req_with_header(Method::GET, "/hello", "origin", "https://example.com");
         let resp = chain.run(req).await.unwrap();
         assert_eq!(resp.headers()["access-control-expose-headers"], "x-custom-header, x-trace-id");
