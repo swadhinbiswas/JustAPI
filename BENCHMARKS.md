@@ -157,14 +157,41 @@ normal Python path if no schema is present). The response is the validated reque
 body echoed verbatim; handlers that transform the body must keep using a Python
 handler.
 
-> **Known issue — non-native deadlock at high concurrency (see ADR-049):** the
-> *Python* dispatch path (`spawn_blocking` + `Python::attach`) hard-stalls at
-> ~100 concurrent connections for **every** non-native route, including the
-> simplest handler (≈16–20 req/s, all connections aborted). The native fast path
-> is immune because it never acquires the GIL or enters the blocking pool. This
-> is a pre-existing server-level GIL/blocking-pool deadlock, **not** introduced
-> by the native optimization; it must be fixed before non-native routes are
-> production-viable at scale (recommended fix: a dedicated GIL thread-pool).
+> **Non-native dispatch deadlock — RESOLVED (ADR-049).** The dedicated GIL
+> thread-pool (`gil_pool.rs`) replaced per-request `spawn_blocking` +
+> `Python::attach`; the Python path no longer stalls at high concurrency (verified
+> at `-c 200`, 100% success). On CPython the Python path is still GIL-serialized
+> (~100–120k req/s ceiling on this hardware) — that is the GIL, not a deadlock.
+> The native fast path remains the high-throughput option.
+
+> **Measuring the native fast path correctly:** the 410k–724k numbers require a
+> route registered with **both** `native=True` **and** a `Schema`. `native=True`
+> *without* a schema silently falls back to the Python GIL path (see the caveat
+> below), which is why a naively-tagged route benchmarks at ~120k, not ~700k. The
+> benchmark below reproduces the methodology on current hardware.
+
+### Current-hardware re-run (2026-07-16, release build)
+
+Same methodology as the fixture (`oha -z 10s -c 100`, single-process, release
+`maturin develop --release`) but on the dev box (different CPU bin). This
+substantiates the fast-path claim here and isolates the three variables that
+move the number: **build profile**, **concurrency**, and **whether the route
+actually takes the Rust fast path**.
+
+| Route | Registration | Mode | req/sec @ -c 100 |
+|---|---|---|---|
+| `/validate_native` | `native=True, schema=UserSchema` | **Rust fast path** | **430,367** |
+| `/python_route` | plain handler | Python GIL path | 123,170 |
+| `/native` (no schema) | `native=True` only | Python GIL path (fallback) | ~120,000 |
+
+- On a **dev** build (`maturin develop`, no `--release`) the Python path drops to
+  ~64k req/s — optimization level, not a deadlock.
+- The Python path is GIL-serialized; ~100–120k req/s is its realistic ceiling on
+  this hardware. The 430k native number is ~3.5× the Python path and matches the
+  lower end of the fixture's 410k–724k range (the fixture CPU is a faster bin).
+- **Takeaway:** to actually beat Robyn-class raw throughput, opt routes into
+  `native=True` + a `Schema`. Plain Python handlers are correct and stable but
+  GIL-bound.
 
 ---
 
