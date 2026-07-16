@@ -23,16 +23,46 @@ use hyper::body::Incoming;
 use hyper::Request;
 use hyper::StatusCode;
 
+/// Core Rust-native `POST`/insert logic over an already-read body.
+///
+/// `body` is the raw request bytes (the caller is responsible for enforcing the
+/// max body size). Pipeline (all in Rust): validate against `validator` (if
+/// any) → parse JSON → `INSERT ... RETURNING *` with bound parameters
+/// (injection-safe, column writes restricted to `columns`) → return the row as
+/// `200 application/json`. Validation failure → 422 with `{"detail": ...}`; a
+/// non-object / non-JSON body → 422; DB errors → 500.
+pub async fn crud_insert_bytes(
+    pool: &AnyPool,
+    table: &str,
+    columns: &[String],
+    validator: Option<&Arc<CompiledValidator>>,
+    body: &[u8],
+) -> Result<hyper::Response<crate::ResponseBody>, anyhow::Error> {
+    // 1. Validate.
+    if let Some(v) = validator {
+        if let Err(e) = v.validate(body) {
+            return Ok(validation_response(&e.to_string()));
+        }
+    }
+    let body_val: serde_json::Value = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(_) => return Ok(validation_response("request body must be valid JSON")),
+    };
+
+    // 2. Insert (single auto-committed statement; atomic per SQL).
+    match pool.insert_returning(table, columns, &body_val).await {
+        Ok(rows) => {
+            let single = rows.as_array().and_then(|a| a.first()).cloned();
+            let payload = single.unwrap_or(rows);
+            Ok(json_response(StatusCode::OK, &payload.to_string()))
+        }
+        Err(_) => Ok(error_response(StatusCode::INTERNAL_SERVER_ERROR, "database error")),
+    }
+}
+
 /// Build a `HandlerFn` for a Rust-native `POST`/insert route.
 ///
-/// Pipeline (all in Rust):
-/// 1. Read + limit the request body.
-/// 2. Validate against `validator` (if any); 422 with `{"detail": ...}` on
-///    failure (mirrors the Python path's validation envelope).
-/// 3. `INSERT ... RETURNING *` with **bound** parameters (injection-safe) as a
-///    single auto-committed statement (SQL guarantees atomicity); column writes
-///    are restricted to `columns`.
-/// 4. Return the inserted row as `200 application/json`. DB errors → 500.
+/// Reads + limits the body, then delegates to [`crud_insert_bytes`].
 pub fn crud_insert_handler(
     pool: Arc<AnyPool>,
     table: String,
@@ -45,8 +75,6 @@ pub fn crud_insert_handler(
         let columns = columns.clone();
         let validator = validator.clone();
         Box::pin(async move {
-            // 1. Read body (the server-level max_body_size already applies
-            //    upstream for the native path).
             let bytes = match http_body_util::Limited::new(
                 req.into_body(),
                 crate::server::DEFAULT_MAX_BODY_SIZE,
@@ -62,30 +90,7 @@ pub fn crud_insert_handler(
                     ))
                 }
             };
-
-            // 2. Validate.
-            if let Some(v) = &validator {
-                if let Err(e) = v.validate(&bytes) {
-                    return Ok(validation_response(&e.to_string()));
-                }
-            }
-            let body_val: serde_json::Value = match serde_json::from_slice(&bytes) {
-                Ok(v) => v,
-                Err(_) => {
-                    return Ok(validation_response("request body must be valid JSON"));
-                }
-            };
-
-            // 3. Insert (single auto-committed statement; atomic per SQL).
-            let result = pool.insert_returning(&table, &columns, &body_val).await;
-            match result {
-                Ok(rows) => {
-                    let single = rows.as_array().and_then(|a| a.first()).cloned();
-                    let payload = single.unwrap_or(rows);
-                    Ok(json_response(StatusCode::OK, &payload.to_string()))
-                }
-                Err(_) => Ok(error_response(StatusCode::INTERNAL_SERVER_ERROR, "database error")),
-            }
+            crud_insert_bytes(&pool, &table, &columns, validator.as_ref(), &bytes).await
         })
     })
 }

@@ -32,7 +32,7 @@ use tokio_util::sync::CancellationToken;
 #[cfg(feature = "db")]
 mod crud;
 #[cfg(feature = "db")]
-pub use crud::{crud_insert_handler, crud_select_handler};
+pub use crud::{crud_insert_bytes, crud_insert_handler, crud_select_handler};
 
 // ---------------------------------------------------------------------------
 // WebSocket handler (feature-gated on `ws`)

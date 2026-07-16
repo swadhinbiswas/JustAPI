@@ -43,6 +43,27 @@ impl DbKind {
     }
 }
 
+/// Translate a user-facing DB URL into the form `sqlx::Any` expects.
+///
+/// `sqlx::Any` is stricter than the per-driver pools about URL shape: SQLite
+/// wants `sqlite:<path>` (single colon), e.g. `sqlite::memory:` or
+/// `sqlite:./file.db`, whereas applications conventionally write
+/// `sqlite://:memory:` / `sqlite://./file.db` (double slash, Postgres-style).
+/// Postgres/MySQL URLs keep their `//` form. We only rewrite the SQLite scheme
+/// so existing `sqlite://...` configs (used by the Python `app.set_database`)
+/// keep working.
+fn normalize_db_url(url: &str) -> String {
+    if url.starts_with("sqlite://") {
+        // `sqlx::Any` wants `sqlite:<path>` (single colon). Replace the `//`:
+        // `sqlite://:memory:` => `sqlite::memory:`, `sqlite://./x` => `sqlite:./x`,
+        // `sqlite:///abs/x` => `sqlite:/abs/x`. Already-single-colon URLs
+        // (`sqlite:./x`) don't match and pass through unchanged.
+        url.replacen("sqlite://", "sqlite:", 1)
+    } else {
+        url.to_string()
+    }
+}
+
 /// Database configuration for a single named pool.
 #[derive(Debug, Clone)]
 pub struct DatabaseConfig {
@@ -82,7 +103,9 @@ impl AnyPool {
         // The `any` driver needs its backend drivers registered before the first
         // connection (sqlx 0.8). Idempotent and cheap.
         sqlx::any::install_default_drivers();
-        let inner = AnyPoolOptions::new().max_connections(max_connections).connect(url).await?;
+        let connect_url = normalize_db_url(url);
+        let inner =
+            AnyPoolOptions::new().max_connections(max_connections).connect(&connect_url).await?;
         Ok(Self { inner, kind })
     }
 

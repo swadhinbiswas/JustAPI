@@ -683,10 +683,12 @@ class JustAPIApp:
         self._record("GET", path, handler, query_schema=query_schema, native=native, **kw)
         return handler
 
-    def post(self, path: str, handler=None, body_schema=None, schema=None, query_schema=None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None, tags: typing.List[str] = None, summary: str = None, description: str = None, deprecated: bool = False, status_code: int = None, responses: dict = None, operation_id: str = None, openapi_extra: dict = None, name: str = None, include_in_schema: bool = True, native: bool = False):
+    def post(self, path: str, handler=None, body_schema=None, schema=None, query_schema=None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None, tags: typing.List[str] = None, summary: str = None, description: str = None, deprecated: bool = False, status_code: int = None, responses: dict = None, operation_id: str = None, openapi_extra: dict = None, name: str = None, include_in_schema: bool = True, native: bool = False, crud_table: str = None, crud_columns: typing.List[str] = None):
         if name is not None: self._named_routes[name] = path
         kw = self._route_kw(tags, summary, description, deprecated, status_code, responses, operation_id, openapi_extra, include_in_schema, name=name)
         kw["native"] = native
+        kw["crud_table"] = crud_table
+        kw["crud_columns"] = crud_columns
         if handler is None:
             def decorator(func):
                 batch_size, batch_window_ms = self._resolve_batch_config(func)
@@ -701,10 +703,12 @@ class JustAPIApp:
         self._record("POST", path, handler, body_schema=body_schema, schema=schema, query_schema=query_schema, **kw)
         return handler
 
-    def put(self, path: str, handler=None, body_schema=None, schema=None, query_schema=None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None, tags: typing.List[str] = None, summary: str = None, description: str = None, deprecated: bool = False, status_code: int = None, responses: dict = None, operation_id: str = None, openapi_extra: dict = None, name: str = None, include_in_schema: bool = True, native: bool = False):
+    def put(self, path: str, handler=None, body_schema=None, schema=None, query_schema=None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None, tags: typing.List[str] = None, summary: str = None, description: str = None, deprecated: bool = False, status_code: int = None, responses: dict = None, operation_id: str = None, openapi_extra: dict = None, name: str = None, include_in_schema: bool = True, native: bool = False, crud_table: str = None, crud_columns: typing.List[str] = None):
         if name is not None: self._named_routes[name] = path
         kw = self._route_kw(tags, summary, description, deprecated, status_code, responses, operation_id, openapi_extra, include_in_schema, name=name)
         kw["native"] = native
+        kw["crud_table"] = crud_table
+        kw["crud_columns"] = crud_columns
         if handler is None:
             def decorator(func):
                 batch_size, batch_window_ms = self._resolve_batch_config(func)
@@ -719,9 +723,11 @@ class JustAPIApp:
         self._record("PUT", path, handler, body_schema=body_schema, schema=schema, query_schema=query_schema, **kw)
         return handler
 
-    def delete(self, path: str, handler=None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None, tags: typing.List[str] = None, summary: str = None, description: str = None, deprecated: bool = False, status_code: int = None, responses: dict = None, operation_id: str = None, openapi_extra: dict = None, name: str = None, include_in_schema: bool = True, query_schema=None, native: bool = False):
+    def delete(self, path: str, handler=None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None, tags: typing.List[str] = None, summary: str = None, description: str = None, deprecated: bool = False, status_code: int = None, responses: dict = None, operation_id: str = None, openapi_extra: dict = None, name: str = None, include_in_schema: bool = True, query_schema=None, native: bool = False, crud_table: str = None, crud_columns: typing.List[str] = None):
         if name is not None: self._named_routes[name] = path
         kw = self._route_kw(tags, summary, description, deprecated, status_code, responses, operation_id, openapi_extra, include_in_schema, name=name)
+        kw["crud_table"] = crud_table
+        kw["crud_columns"] = crud_columns
         if handler is None:
             def decorator(func):
                 self._app.delete(path, self._wrap_handler(func, route_dependencies=dependencies, route_middlewares=middlewares), query_schema=query_schema, native=native, **kw)
@@ -732,10 +738,12 @@ class JustAPIApp:
         self._record("DELETE", path, handler, query_schema=query_schema, native=native, **kw)
         return handler
 
-    def patch(self, path: str, handler=None, body_schema=None, schema=None, query_schema=None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None, tags: typing.List[str] = None, summary: str = None, description: str = None, deprecated: bool = False, status_code: int = None, responses: dict = None, operation_id: str = None, openapi_extra: dict = None, name: str = None, include_in_schema: bool = True, native: bool = False):
+    def patch(self, path: str, handler=None, body_schema=None, schema=None, query_schema=None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None, tags: typing.List[str] = None, summary: str = None, description: str = None, deprecated: bool = False, status_code: int = None, responses: dict = None, operation_id: str = None, openapi_extra: dict = None, name: str = None, include_in_schema: bool = True, native: bool = False, crud_table: str = None, crud_columns: typing.List[str] = None):
         if name is not None: self._named_routes[name] = path
         kw = self._route_kw(tags, summary, description, deprecated, status_code, responses, operation_id, openapi_extra, include_in_schema, name=name)
         kw["native"] = native
+        kw["crud_table"] = crud_table
+        kw["crud_columns"] = crud_columns
         if handler is None:
             def decorator(func):
                 batch_size, batch_window_ms = self._resolve_batch_config(func)

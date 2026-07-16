@@ -43,6 +43,10 @@ pub struct JustAPIApp {
     pub router: Router<usize>,
     pub handlers: Vec<Py<PyAny>>,
     pub native: Vec<bool>,
+    /// Per-handler Rust-native CRUD spec (ADR-056 Step B). `Some` means this
+    /// route is served entirely in Rust by `crud_insert_handler`, with no GIL
+    /// hop. Indexed by handler id, in lockstep with `handlers`/`native`.
+    pub crud: Vec<Option<CrudSpec>>,
     pub schemas: Vec<Option<Py<PyAny>>>,
     pub schema_jsons: Vec<Option<String>>,
     /// JSON Schemas (resolved at registration) used by the native fast path to
@@ -98,6 +102,41 @@ pub struct PyTool {
     pub description: String,
     pub schema: String,
     pub handler: Py<PyAny>,
+}
+
+/// Rust-native CRUD route spec (ADR-056 Step B). When a route carries this, it
+/// is served by `justapi_core::server::crud_insert_handler` — validate body in
+/// Rust, `INSERT ... RETURNING`, return the row as 200 JSON — without acquiring
+/// the GIL.
+pub struct CrudSpec {
+    pub table: String,
+    pub columns: Vec<String>,
+}
+
+/// Build a [`CrudSpec`] from the Python-side `crud_table` / `crud_columns`
+/// arguments (both required together). Returns `None` when neither is given
+/// (a normal Python/native-echo route). Errors if only one is provided.
+pub(crate) fn make_crud_spec(
+    crud_table: Option<String>,
+    crud_columns: Option<Vec<String>>,
+) -> PyResult<Option<CrudSpec>> {
+    match (crud_table, crud_columns) {
+        (Some(table), Some(columns)) => {
+            if columns.is_empty() {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "crud_columns must be non-empty when crud_table is set",
+                ));
+            }
+            Ok(Some(CrudSpec { table, columns }))
+        }
+        (Some(_), None) => {
+            Err(pyo3::exceptions::PyValueError::new_err("crud_table requires crud_columns"))
+        }
+        (None, Some(_)) => {
+            Err(pyo3::exceptions::PyValueError::new_err("crud_columns requires crud_table"))
+        }
+        (None, None) => Ok(None),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -268,6 +307,7 @@ impl JustAPIApp {
             router: Router::new(),
             handlers: Vec::new(),
             native: Vec::new(),
+            crud: Vec::new(),
             schemas: Vec::new(),
             schema_jsons: Vec::new(),
             query_schema_jsons: Vec::new(),
@@ -587,7 +627,7 @@ impl JustAPIApp {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (path, handler, query_schema=None, tags=None, summary=None, description=None, deprecated=None, status_code=None, responses=None, operation_id=None, openapi_extra=None, include_in_schema=None, name=None, native=None))]
+    #[pyo3(signature = (path, handler, query_schema=None, tags=None, summary=None, description=None, deprecated=None, status_code=None, responses=None, operation_id=None, openapi_extra=None, include_in_schema=None, name=None, native=None, crud_table=None, crud_columns=None))]
     fn get(
         &mut self,
         py: Python<'_>,
@@ -605,10 +645,13 @@ impl JustAPIApp {
         include_in_schema: Option<bool>,
         name: Option<String>,
         native: Option<bool>,
+        crud_table: Option<String>,
+        crud_columns: Option<Vec<String>>,
     ) -> PyResult<()> {
         let id = self.handlers.len();
         self.handlers.push(handler);
         self.native.push(native.unwrap_or(false));
+        self.crud.push(make_crud_spec(crud_table, crud_columns)?);
         self.schemas.push(None);
         self.schema_jsons.push(None);
         self.query_schema_jsons.push(resolve_schema_json(py, query_schema)?);
@@ -639,7 +682,7 @@ impl JustAPIApp {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (path, handler, body_schema=None, schema=None, query_schema=None, batch_size=None, batch_window_ms=None, tags=None, summary=None, description=None, deprecated=None, status_code=None, responses=None, operation_id=None, openapi_extra=None, include_in_schema=None, name=None, native=None))]
+    #[pyo3(signature = (path, handler, body_schema=None, schema=None, query_schema=None, batch_size=None, batch_window_ms=None, tags=None, summary=None, description=None, deprecated=None, status_code=None, responses=None, operation_id=None, openapi_extra=None, include_in_schema=None, name=None, native=None, crud_table=None, crud_columns=None))]
     fn post(
         &mut self,
         py: Python<'_>,
@@ -661,10 +704,13 @@ impl JustAPIApp {
         include_in_schema: Option<bool>,
         name: Option<String>,
         native: Option<bool>,
+        crud_table: Option<String>,
+        crud_columns: Option<Vec<String>>,
     ) -> PyResult<()> {
         let id = self.handlers.len();
         self.handlers.push(handler);
         self.native.push(native.unwrap_or(false));
+        self.crud.push(make_crud_spec(crud_table, crud_columns)?);
         self.schemas.push(body_schema.as_ref().map(|b| b.clone_ref(py)));
         self.schema_jsons.push(resolve_schema_json(py, schema)?);
         self.query_schema_jsons.push(resolve_schema_json(py, query_schema)?);
@@ -695,7 +741,7 @@ impl JustAPIApp {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (path, handler, body_schema=None, schema=None, query_schema=None, batch_size=None, batch_window_ms=None, tags=None, summary=None, description=None, deprecated=None, status_code=None, responses=None, operation_id=None, openapi_extra=None, include_in_schema=None, name=None, native=None))]
+    #[pyo3(signature = (path, handler, body_schema=None, schema=None, query_schema=None, batch_size=None, batch_window_ms=None, tags=None, summary=None, description=None, deprecated=None, status_code=None, responses=None, operation_id=None, openapi_extra=None, include_in_schema=None, name=None, native=None, crud_table=None, crud_columns=None))]
     fn put(
         &mut self,
         py: Python<'_>,
@@ -717,10 +763,13 @@ impl JustAPIApp {
         include_in_schema: Option<bool>,
         name: Option<String>,
         native: Option<bool>,
+        crud_table: Option<String>,
+        crud_columns: Option<Vec<String>>,
     ) -> PyResult<()> {
         let id = self.handlers.len();
         self.handlers.push(handler);
         self.native.push(native.unwrap_or(false));
+        self.crud.push(make_crud_spec(crud_table, crud_columns)?);
         self.schemas.push(body_schema.as_ref().map(|b| b.clone_ref(py)));
         self.schema_jsons.push(resolve_schema_json(py, schema)?);
         self.query_schema_jsons.push(resolve_schema_json(py, query_schema)?);
@@ -751,7 +800,7 @@ impl JustAPIApp {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (path, handler, body_schema=None, schema=None, query_schema=None, batch_size=None, batch_window_ms=None, tags=None, summary=None, description=None, deprecated=None, status_code=None, responses=None, operation_id=None, openapi_extra=None, include_in_schema=None, name=None, native=None))]
+    #[pyo3(signature = (path, handler, body_schema=None, schema=None, query_schema=None, batch_size=None, batch_window_ms=None, tags=None, summary=None, description=None, deprecated=None, status_code=None, responses=None, operation_id=None, openapi_extra=None, include_in_schema=None, name=None, native=None, crud_table=None, crud_columns=None))]
     fn patch(
         &mut self,
         py: Python<'_>,
@@ -773,10 +822,13 @@ impl JustAPIApp {
         include_in_schema: Option<bool>,
         name: Option<String>,
         native: Option<bool>,
+        crud_table: Option<String>,
+        crud_columns: Option<Vec<String>>,
     ) -> PyResult<()> {
         let id = self.handlers.len();
         self.handlers.push(handler);
         self.native.push(native.unwrap_or(false));
+        self.crud.push(make_crud_spec(crud_table, crud_columns)?);
         self.schemas.push(body_schema.as_ref().map(|b| b.clone_ref(py)));
         self.schema_jsons.push(resolve_schema_json(py, schema)?);
         self.query_schema_jsons.push(resolve_schema_json(py, query_schema)?);
@@ -807,7 +859,7 @@ impl JustAPIApp {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (path, handler, query_schema=None, tags=None, summary=None, description=None, deprecated=None, status_code=None, responses=None, operation_id=None, openapi_extra=None, include_in_schema=None, name=None, native=None))]
+    #[pyo3(signature = (path, handler, query_schema=None, tags=None, summary=None, description=None, deprecated=None, status_code=None, responses=None, operation_id=None, openapi_extra=None, include_in_schema=None, name=None, native=None, crud_table=None, crud_columns=None))]
     fn delete(
         &mut self,
         py: Python<'_>,
@@ -825,10 +877,13 @@ impl JustAPIApp {
         include_in_schema: Option<bool>,
         name: Option<String>,
         native: Option<bool>,
+        crud_table: Option<String>,
+        crud_columns: Option<Vec<String>>,
     ) -> PyResult<()> {
         let id = self.handlers.len();
         self.handlers.push(handler);
         self.native.push(native.unwrap_or(false));
+        self.crud.push(make_crud_spec(crud_table, crud_columns)?);
         self.schemas.push(None);
         self.schema_jsons.push(None);
         self.query_schema_jsons.push(resolve_schema_json(py, query_schema)?);
@@ -862,7 +917,7 @@ impl JustAPIApp {
     /// idempotent, and body-carrying (like POST). The `experimental` flag
     /// is reserved for tagging the operation in generated OpenAPI specs.
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (path, handler, body_schema=None, schema=None, query_schema=None, experimental=None, tags=None, summary=None, description=None, deprecated=None, status_code=None, responses=None, operation_id=None, openapi_extra=None, include_in_schema=None, name=None, native=None))]
+    #[pyo3(signature = (path, handler, body_schema=None, schema=None, query_schema=None, experimental=None, tags=None, summary=None, description=None, deprecated=None, status_code=None, responses=None, operation_id=None, openapi_extra=None, include_in_schema=None, name=None, native=None, crud_table=None, crud_columns=None))]
     fn query(
         &mut self,
         py: Python<'_>,
@@ -883,11 +938,14 @@ impl JustAPIApp {
         include_in_schema: Option<bool>,
         name: Option<String>,
         native: Option<bool>,
+        crud_table: Option<String>,
+        crud_columns: Option<Vec<String>>,
     ) -> PyResult<()> {
         let experimental = experimental.unwrap_or(false);
         let id = self.handlers.len();
         self.handlers.push(handler);
         self.native.push(native.unwrap_or(false));
+        self.crud.push(make_crud_spec(crud_table, crud_columns)?);
         self.schemas.push(body_schema.as_ref().map(|b| b.clone_ref(py)));
         self.schema_jsons.push(resolve_schema_json(py, schema)?);
         self.query_schema_jsons.push(resolve_schema_json(py, query_schema)?);
@@ -918,7 +976,7 @@ impl JustAPIApp {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (path, handler, query_schema=None, tags=None, summary=None, description=None, deprecated=None, status_code=None, responses=None, operation_id=None, openapi_extra=None, include_in_schema=None, name=None, native=None))]
+    #[pyo3(signature = (path, handler, query_schema=None, tags=None, summary=None, description=None, deprecated=None, status_code=None, responses=None, operation_id=None, openapi_extra=None, include_in_schema=None, name=None, native=None, crud_table=None, crud_columns=None))]
     fn head(
         &mut self,
         py: Python<'_>,
@@ -936,10 +994,13 @@ impl JustAPIApp {
         include_in_schema: Option<bool>,
         name: Option<String>,
         native: Option<bool>,
+        crud_table: Option<String>,
+        crud_columns: Option<Vec<String>>,
     ) -> PyResult<()> {
         let id = self.handlers.len();
         self.handlers.push(handler);
         self.native.push(native.unwrap_or(false));
+        self.crud.push(make_crud_spec(crud_table, crud_columns)?);
         self.schemas.push(None);
         self.schema_jsons.push(None);
         self.query_schema_jsons.push(resolve_schema_json(py, query_schema)?);
@@ -970,7 +1031,7 @@ impl JustAPIApp {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (path, handler, query_schema=None, tags=None, summary=None, description=None, deprecated=None, status_code=None, responses=None, operation_id=None, openapi_extra=None, include_in_schema=None, name=None, native=None))]
+    #[pyo3(signature = (path, handler, query_schema=None, tags=None, summary=None, description=None, deprecated=None, status_code=None, responses=None, operation_id=None, openapi_extra=None, include_in_schema=None, name=None, native=None, crud_table=None, crud_columns=None))]
     fn options(
         &mut self,
         py: Python<'_>,
@@ -988,10 +1049,13 @@ impl JustAPIApp {
         include_in_schema: Option<bool>,
         name: Option<String>,
         native: Option<bool>,
+        crud_table: Option<String>,
+        crud_columns: Option<Vec<String>>,
     ) -> PyResult<()> {
         let id = self.handlers.len();
         self.handlers.push(handler);
         self.native.push(native.unwrap_or(false));
+        self.crud.push(make_crud_spec(crud_table, crud_columns)?);
         self.schemas.push(None);
         self.schema_jsons.push(None);
         self.query_schema_jsons.push(resolve_schema_json(py, query_schema)?);
@@ -1022,7 +1086,7 @@ impl JustAPIApp {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (path, handler, query_schema=None, tags=None, summary=None, description=None, deprecated=None, status_code=None, responses=None, operation_id=None, openapi_extra=None, include_in_schema=None, name=None, native=None))]
+    #[pyo3(signature = (path, handler, query_schema=None, tags=None, summary=None, description=None, deprecated=None, status_code=None, responses=None, operation_id=None, openapi_extra=None, include_in_schema=None, name=None, native=None, crud_table=None, crud_columns=None))]
     fn trace(
         &mut self,
         py: Python<'_>,
@@ -1040,10 +1104,13 @@ impl JustAPIApp {
         include_in_schema: Option<bool>,
         name: Option<String>,
         native: Option<bool>,
+        crud_table: Option<String>,
+        crud_columns: Option<Vec<String>>,
     ) -> PyResult<()> {
         let id = self.handlers.len();
         self.handlers.push(handler);
         self.native.push(native.unwrap_or(false));
+        self.crud.push(make_crud_spec(crud_table, crud_columns)?);
         self.schemas.push(None);
         self.schema_jsons.push(None);
         self.query_schema_jsons.push(resolve_schema_json(py, query_schema)?);
@@ -1283,6 +1350,14 @@ impl JustAPIApp {
         // (schema-backed, response = validated request body, no Python call)?
         let native: Vec<bool> = std::mem::take(&mut app.native);
         let native = Arc::new(native);
+        // Per-handler Rust-native CRUD spec (ADR-056 Step B). Empty entries mean
+        // the route is served by the Python/native-echo path, not the Rust CRUD
+        // handler. The pool is resolved at request time from `db_pool`.
+        let crud: Vec<Option<(String, Vec<String>)>> = std::mem::take(&mut app.crud)
+            .into_iter()
+            .map(|c| c.map(|s| (s.table, s.columns)))
+            .collect();
+        let crud_specs = Arc::new(crud);
         let schemas = Arc::new(std::mem::take(&mut app.schemas));
         let schema_jsons = Arc::new(std::mem::take(&mut app.schema_jsons));
         let query_schema_jsons = Arc::new(std::mem::take(&mut app.query_schema_jsons));
@@ -1352,6 +1427,14 @@ impl JustAPIApp {
                 };
 
                 let db_url_str = database_config.as_ref().map(|c| c.url.clone());
+
+                // A Rust-native CRUD route (ADR-056) needs a database pool; fail
+                // loudly rather than silently falling back to the Python path.
+                if crud_specs.iter().any(|c| c.is_some()) && db_pool.is_none() {
+                    return Err(anyhow::anyhow!(
+                        "a route registered with crud_table/crud_columns requires a database connection (set app.database)"
+                    ));
+                }
 
                 let mut batchers = Vec::new();
                 for (id, config) in batch_configs_arc.iter().enumerate() {
@@ -1461,6 +1544,7 @@ impl JustAPIApp {
                     app_py_http1,
                     needs_request.clone(),
                     native.clone(),
+                    crud_specs.clone(),
                     schema_validators.clone(),
                     max_body_size,
                 );
