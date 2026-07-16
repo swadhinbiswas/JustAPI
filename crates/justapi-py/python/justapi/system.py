@@ -121,6 +121,7 @@ def _build_descriptor(route):
         "operation_id": route.get("operation_id"),
         "responses": route.get("responses"),
         "experimental": bool(route.get("experimental")),
+        "openapi_extra": route.get("openapi_extra"),
     }
     params = []
     return_ann = None
@@ -240,9 +241,16 @@ def build_openapi(app):
         if d.get("tags"):
             op["tags"] = d["tags"]
         if d.get("operation_id"):
-            op["operation_id"] = d["operation_id"]
+            op["operationId"] = d["operation_id"]
         if d.get("deprecated"):
             op["deprecated"] = True
+        if d.get("openapi_extra"):
+            try:
+                extra = json.loads(d["openapi_extra"]) if isinstance(d["openapi_extra"], str) else d["openapi_extra"]
+                if isinstance(extra, dict):
+                    op.update(extra)
+            except (ValueError, TypeError):
+                pass
         parameters = []
         request_body = None
         for p in d["parameters"]:
@@ -281,9 +289,17 @@ def build_openapi(app):
             op["parameters"] = parameters
         if request_body:
             op["requestBody"] = request_body
-        op["responses"] = d.get("responses") or {
-            str(d.get("status_code") or 200): {"description": "Successful Response"}
-        }
+        success_code = str(d.get("status_code") or 200)
+        raw_responses = d.get("responses")
+        if isinstance(raw_responses, str):
+            try:
+                raw_responses = json.loads(raw_responses)
+            except (ValueError, TypeError):
+                raw_responses = None
+        responses = dict(raw_responses or {})
+        if success_code not in responses:
+            responses[success_code] = {"description": "Successful Response"}
+        op["responses"] = responses
         paths.setdefault(path, {})[method] = op
     return {
         "openapi": "3.1.0",

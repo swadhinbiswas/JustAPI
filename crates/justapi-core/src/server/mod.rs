@@ -22,7 +22,7 @@ use crate::middleware::{
 use crate::openapi;
 use crate::plugin::PluginRegistry;
 use crate::router::{Match, Router};
-use crate::static_files::StaticDir;
+use crate::static_files::{StaticDir, StaticMount};
 use crate::{json_response, streaming_response, ResponseBody};
 #[cfg(feature = "ws")]
 use futures::StreamExt;
@@ -57,9 +57,27 @@ pub type WsWrite = Box<
 /// Receives the request path plus the split read/write halves of the accepted
 /// WebSocket stream. The handler owns the connection for its lifetime.
 #[cfg(feature = "ws")]
+/// Connection metadata handed to a WebSocket handler on upgrade. Mirrors the
+/// subset of the HTTP request a WebSocket scope needs (`path`, decoded query
+/// string, raw headers) so handler frameworks can build a Starlette-style
+/// `scope` without re-reading the (already upgraded) socket.
+#[cfg(feature = "ws")]
+#[derive(Debug, Clone)]
+pub struct WsConnInfo {
+    /// Request path the upgrade arrived on.
+    pub path: String,
+    /// Raw query string (percent-encoded, without the leading `?`).
+    pub query_string: Vec<u8>,
+    /// Raw request headers observed on the upgrade request.
+    pub headers: Vec<(Vec<u8>, Vec<u8>)>,
+    /// Remote peer address as `(host, port)`, if known.
+    pub client: Option<(String, u16)>,
+}
+
+#[cfg(feature = "ws")]
 pub type WsHandler = std::sync::Arc<
     dyn Fn(
-            String,
+            WsConnInfo,
             WsRead,
             WsWrite,
         )
@@ -77,7 +95,7 @@ use tokio_tungstenite::tungstenite::Message;
 /// replaces this with an application-provided handler.
 #[cfg(feature = "ws")]
 fn default_ws_echo() -> WsHandler {
-    std::sync::Arc::new(|_path, mut read, mut write| {
+    std::sync::Arc::new(|_info, mut read, mut write| {
         Box::pin(async move {
             use futures::{SinkExt, StreamExt};
             while let Some(msg) = read.next().await {
@@ -275,6 +293,7 @@ pub struct Server {
     addr: SocketAddr,
     chain: MiddlewareChain,
     static_dir: Option<StaticDir>,
+    static_mounts: Vec<StaticMount>,
     metrics: Metrics,
     health_registry: Arc<HealthRegistry>,
     #[cfg(feature = "tls")]
@@ -318,6 +337,7 @@ impl Server {
             addr,
             chain,
             static_dir: None,
+            static_mounts: Vec::new(),
             metrics,
             health_registry,
             shutdown: None,
@@ -613,6 +633,15 @@ impl Server {
         self
     }
 
+    /// Register one or more SPA/frontend mounts. Each mount serves files from
+    /// its directory under its `prefix`, with an optional SPA `fallback` file
+    /// (e.g. `index.html`) for unmatched paths. Prefix + fallback are honored
+    /// per-mount, unlike `with_static_dir` which mounts a single dir at root.
+    pub fn with_static_mounts(mut self, mounts: Vec<StaticMount>) -> Self {
+        self.static_mounts = mounts;
+        self
+    }
+
     /// Register a plugin with the server.
     /// This calls the `build` hook immediately to allow the plugin to modify the Server configuration.
     pub fn register_plugin(mut self, plugin: Box<dyn crate::plugin::Plugin>) -> Result<Self> {
@@ -742,6 +771,24 @@ impl Server {
         }
 
         let listener = tokio::net::TcpListener::bind(self.addr).await?;
+        self.run_on(listener).await
+    }
+
+    /// Run the server on an already-bound listener (e.g. chosen by the caller
+    /// to avoid a bind race when the address uses an ephemeral port).
+    pub async fn run_on(mut self, listener: tokio::net::TcpListener) -> Result<()> {
+        if let Some(router) = self.router.take() {
+            let pool = Arc::new(BufferPool::new());
+            let handler = make_handler(
+                Arc::new(router),
+                pool,
+                self.metrics.clone(),
+                self.health_registry.clone(),
+                self.openapi_spec.clone(),
+            );
+            self.chain.set_handler(handler);
+        }
+
         let local_addr = listener.local_addr()?;
 
         if let (Some(grpc_addr), Some(grpc_handler)) = (self.grpc_addr, self.grpc_handler.take()) {
@@ -833,6 +880,7 @@ impl Server {
             listener,
             chain,
             static_dir,
+            self.static_mounts.clone(),
             metrics,
             self.shutdown,
             wasm_middleware,
@@ -840,8 +888,16 @@ impl Server {
         )
         .await;
         #[cfg(not(feature = "ws"))]
-        let res =
-            serve_http(listener, chain, static_dir, metrics, self.shutdown, wasm_middleware).await;
+        let res = serve_http(
+            listener,
+            chain,
+            static_dir,
+            self.static_mounts.clone(),
+            metrics,
+            self.shutdown,
+            wasm_middleware,
+        )
+        .await;
         plugin_registry.on_shutdown_all().await?;
         res
     }
@@ -879,9 +935,11 @@ pub async fn serve(listener: TcpListener) -> Result<()> {
     let chain = Arc::new(MiddlewareChain::new(handler));
 
     #[cfg(feature = "ws")]
-    let res = serve_http(listener, chain, None, metrics, None, None, Some(default_ws_echo())).await;
+    let res =
+        serve_http(listener, chain, None, Vec::new(), metrics, None, None, Some(default_ws_echo()))
+            .await;
     #[cfg(not(feature = "ws"))]
-    let res = serve_http(listener, chain, None, metrics, None, None).await;
+    let res = serve_http(listener, chain, None, Vec::new(), metrics, None, None).await;
     res
 }
 
@@ -978,10 +1036,50 @@ fn max_connections() -> usize {
         .unwrap_or(10_000)
 }
 
+/// Attempt to serve `path` from any registered frontend mount (prefix +
+/// optional SPA fallback), falling back to the legacy single `static_dir`.
+/// Returns `None` if no mount/dir matches a real file.
+async fn try_serve_static(
+    path: &str,
+    static_dir: &Option<StaticDir>,
+    static_mounts: &[StaticMount],
+) -> Option<Response<ResponseBody>> {
+    // Prefer per-mount prefix + fallback routing.
+    for mount in static_mounts {
+        if let Some(file_path) = mount.resolve(path) {
+            if tokio::fs::metadata(&file_path).await.map(|m| m.is_file()).unwrap_or(false) {
+                return mount.dir.serve_file(&file_path).await.ok();
+            }
+        }
+        // SPA fallback: unmatched paths under the prefix serve the fallback file.
+        if let Some(ref fallback) = mount.fallback {
+            let under_prefix = mount.prefix == "/"
+                || path == mount.prefix
+                || path.starts_with(&format!("{}/", mount.prefix.trim_end_matches('/')));
+            if under_prefix {
+                let fb = mount.dir.root().join(fallback.trim_start_matches('/'));
+                if tokio::fs::metadata(&fb).await.map(|m| m.is_file()).unwrap_or(false) {
+                    return mount.dir.serve_file(&fb).await.ok();
+                }
+            }
+        }
+    }
+    // Legacy single static dir at root.
+    if let Some(ref sd) = static_dir {
+        if let Some(file_path) = sd.resolve(path) {
+            if tokio::fs::metadata(&file_path).await.map(|m| m.is_file()).unwrap_or(false) {
+                return sd.serve_file(&file_path).await.ok();
+            }
+        }
+    }
+    None
+}
+
 async fn serve_http(
     listener: TcpListener,
     chain: Arc<MiddlewareChain>,
     static_dir: Option<StaticDir>,
+    static_mounts: Vec<StaticMount>,
     metrics: Metrics,
     shutdown: Option<CancellationToken>,
     wasm_middleware: Option<Arc<crate::wasm::WasmEngine>>,
@@ -1009,6 +1107,7 @@ async fn serve_http(
         // --- Normal HTTP via hyper -----------------------------------------
         let chain = chain.clone();
         let static_dir = static_dir.clone();
+        let static_mounts = static_mounts.clone();
         let conn_metrics = metrics.clone();
         conn_metrics.connection_opened();
         let spawn_metrics = conn_metrics.clone();
@@ -1030,12 +1129,13 @@ async fn serve_http(
                 .expect("connection semaphore closed");
             let io = TokioIo::new(stream);
             let arena = Arc::new(SharedArena::new());
-            let svc = service_fn(move |mut req| {
-                arena.reset();
-                let chain = chain.clone();
-                let arena = arena.clone();
-                let static_dir = static_dir.clone();
-                let metrics = spawn_metrics.clone();
+                        let svc = service_fn(move |mut req| {
+                            arena.reset();
+                            let chain = chain.clone();
+                            let arena = arena.clone();
+                            let static_dir = static_dir.clone();
+                            let static_mounts = static_mounts.clone();
+                            let metrics = spawn_metrics.clone();
                 let wasm_middleware = wasm_middleware.clone();
                 #[cfg(feature = "ws")]
                 let ws_handler = ws_handler.clone();
@@ -1078,7 +1178,16 @@ async fn serve_http(
                                 res.headers_mut().insert("sec-websocket-accept", hyper::header::HeaderValue::from_str(&accept_key).unwrap());
 
                                 let handler = handler.clone();
-                                let path_clone = path.clone();
+                                let ws_info = WsConnInfo {
+                                    path: path.clone(),
+                                    query_string: req.uri().query().unwrap_or("").as_bytes().to_vec(),
+                                    headers: req
+                                        .headers()
+                                        .iter()
+                                        .map(|(k, v)| (k.as_str().as_bytes().to_vec(), v.as_bytes().to_vec()))
+                                        .collect(),
+                                    client: Some((peer_addr.ip().to_string(), peer_addr.port())),
+                                };
 
                                 tokio::task::spawn(async move {
                                     match hyper::upgrade::on(&mut req).await {
@@ -1090,7 +1199,7 @@ async fn serve_http(
                                                 None
                                             ).await;
                                             let (write, read) = ws_stream.split();
-                                            dispatch_ws(Box::new(read), Box::new(write), path_clone, &handler).await;
+                                            dispatch_ws(Box::new(read), Box::new(write), ws_info, &handler).await;
                                         }
                                         Err(e) => tracing::error!("WebSocket upgrade error: {}", e),
                                     }
@@ -1172,18 +1281,10 @@ async fn serve_http(
                                 metrics.record_status(status);
                                 metrics.record_latency(start.elapsed().as_secs_f64() * 1000.0);
 
-                                // If the response is 404 and we have a static dir, try serving files
+                                // If the response is 404, try serving static files.
                                 if status == StatusCode::NOT_FOUND {
-                                    if let Some(ref sd) = static_dir {
-                                        if let Some(file_path) = sd.resolve(&path) {
-                                            if tokio::fs::metadata(&file_path)
-                                                .await
-                                                .map(|m| m.is_file())
-                                                .unwrap_or(false)
-                                            {
-                                                return sd.serve_file(&file_path).await;
-                                            }
-                                        }
+                                    if let Some(resp) = try_serve_static(&path, &static_dir, &static_mounts).await {
+                                        return Ok::<_, anyhow::Error>(resp);
                                     }
                                 }
                                 Ok(response)
@@ -1194,16 +1295,8 @@ async fn serve_http(
                                 metrics.record_latency(start.elapsed().as_secs_f64() * 1000.0);
 
                                 // Middleware error — try static files
-                                if let Some(ref sd) = static_dir {
-                                    if let Some(file_path) = sd.resolve(&path) {
-                                        if tokio::fs::metadata(&file_path)
-                                            .await
-                                            .map(|m| m.is_file())
-                                            .unwrap_or(false)
-                                        {
-                                            return sd.serve_file(&file_path).await;
-                                        }
-                                    }
+                                if let Some(resp) = try_serve_static(&path, &static_dir, &static_mounts).await {
+                                    return Ok::<_, anyhow::Error>(resp);
                                 }
                                 Ok(json_response(
                                     StatusCode::NOT_FOUND,
@@ -1429,8 +1522,8 @@ fn sse_response() -> Response<ResponseBody> {
 
 /// Dispatch an accepted WebSocket connection to a registered handler.
 #[cfg(feature = "ws")]
-async fn dispatch_ws(read: WsRead, write: WsWrite, path: String, handler: &WsHandler) {
-    if let Err(e) = handler(path, read, write).await {
+async fn dispatch_ws(read: WsRead, write: WsWrite, info: WsConnInfo, handler: &WsHandler) {
+    if let Err(e) = handler(info, read, write).await {
         tracing::warn!("WebSocket handler error: {}", e);
     }
 }
@@ -1452,6 +1545,7 @@ async fn serve_with_tls(
     chain: Arc<MiddlewareChain>,
     config: TlsConfig,
     static_dir: Option<StaticDir>,
+    static_mounts: Vec<StaticMount>,
     metrics: Metrics,
     shutdown: Option<CancellationToken>,
     wasm_middleware: Option<Arc<crate::wasm::WasmEngine>>,
@@ -1563,7 +1657,16 @@ async fn serve_with_tls(
                                         res.headers_mut().insert("sec-websocket-accept", hyper::header::HeaderValue::from_str(&accept_key).unwrap());
 
                                         let handler = handler.clone();
-                                        let path_clone = path.clone();
+                                        let ws_info = WsConnInfo {
+                                            path: path.clone(),
+                                            query_string: req.uri().query().unwrap_or("").as_bytes().to_vec(),
+                                            headers: req
+                                                .headers()
+                                                .iter()
+                                                .map(|(k, v)| (k.as_str().as_bytes().to_vec(), v.as_bytes().to_vec()))
+                                                .collect(),
+                                            client: Some((peer_addr.ip().to_string(), peer_addr.port())),
+                                        };
 
                                         tokio::task::spawn(async move {
                                             match hyper::upgrade::on(&mut req).await {
@@ -1575,7 +1678,7 @@ async fn serve_with_tls(
                                                         None
                                                     ).await;
                                                     let (write, read) = ws_stream.split();
-                                                    dispatch_ws(Box::new(read), Box::new(write), path_clone, &handler).await;
+                                                    dispatch_ws(Box::new(read), Box::new(write), ws_info, &handler).await;
                                                 }
                                                 Err(e) => tracing::error!("WebSocket upgrade error: {}", e),
                                             }
@@ -1652,16 +1755,8 @@ async fn serve_with_tls(
                                     metrics.record_latency(start.elapsed().as_secs_f64() * 1000.0);
 
                                     if status == StatusCode::NOT_FOUND {
-                                        if let Some(ref sd) = static_dir {
-                                            if let Some(file_path) = sd.resolve(&path) {
-                                                if tokio::fs::metadata(&file_path)
-                                                    .await
-                                                    .map(|m| m.is_file())
-                                                    .unwrap_or(false)
-                                                {
-                                                    return sd.serve_file(&file_path).await;
-                                                }
-                                            }
+                                        if let Some(resp) = try_serve_static(&path, &static_dir, &static_mounts).await {
+                                            return Ok::<_, anyhow::Error>(resp);
                                         }
                                     }
                                     Ok(response)
@@ -1670,16 +1765,8 @@ async fn serve_with_tls(
                                     metrics.record_status(StatusCode::NOT_FOUND);
                                     metrics.record_latency(start.elapsed().as_secs_f64() * 1000.0);
 
-                                    if let Some(ref sd) = static_dir {
-                                        if let Some(file_path) = sd.resolve(&path) {
-                                            if tokio::fs::metadata(&file_path)
-                                                .await
-                                                .map(|m| m.is_file())
-                                                .unwrap_or(false)
-                                            {
-                                                return sd.serve_file(&file_path).await;
-                                            }
-                                        }
+                                    if let Some(resp) = try_serve_static(&path, &static_dir, &static_mounts).await {
+                                        return Ok::<_, anyhow::Error>(resp);
                                     }
                                     Ok(json_response(
                                         StatusCode::NOT_FOUND,

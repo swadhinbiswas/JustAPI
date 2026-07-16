@@ -375,6 +375,40 @@ mod tests {
     }
 
     #[test]
+    fn test_mount_resolve_prefix() {
+        let mount = StaticMount {
+            prefix: "/static".to_string(),
+            dir: StaticDir::new("/srv/app"),
+            fallback: Some("index.html".to_string()),
+        };
+        // Path under prefix resolves relative to the mount root.
+        assert_eq!(mount.resolve("/static/index.html"), Some(PathBuf::from("/srv/app/index.html")));
+        assert_eq!(
+            mount.resolve("/static/css/style.css"),
+            Some(PathBuf::from("/srv/app/css/style.css"))
+        );
+        // Path not under prefix does not resolve.
+        assert_eq!(mount.resolve("/api/users"), None);
+        // Root prefix mount serves everything.
+        let root = StaticMount {
+            prefix: "/".to_string(),
+            dir: StaticDir::new("/srv/root"),
+            fallback: None,
+        };
+        assert_eq!(root.resolve("/favicon.ico"), Some(PathBuf::from("/srv/root/favicon.ico")));
+    }
+
+    #[test]
+    fn test_mount_traversal_blocked_through_prefix() {
+        let mount = StaticMount {
+            prefix: "/static".to_string(),
+            dir: StaticDir::new("/srv/app"),
+            fallback: None,
+        };
+        assert_eq!(mount.resolve("/static/../../etc/passwd"), None);
+    }
+
+    #[test]
     fn test_guess_content_type() {
         assert_eq!(guess_content_type(Path::new("index.html")), "text/html; charset=utf-8");
         assert_eq!(guess_content_type(Path::new("style.css")), "text/css; charset=utf-8");

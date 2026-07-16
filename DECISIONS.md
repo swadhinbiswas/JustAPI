@@ -1864,3 +1864,44 @@ Rust HTTP server. The actionable mitigation is the **hot-path unwrap audit**:
 
 **Evidence:** `cargo build --workspace` and all gates green; the core 404 path
 returns 200/404 normally and no longer panics on unmatched routes.
+
+## ADR-054 — 2026-07-16 — Fix WebSocket scope, OpenAPI parity, and SPA frontend mounts
+
+**Context:** Two pre-existing pytest failures (`test_websocket.py::
+test_websocket_scope_and_json`, `test_openapi_parity.py::test_openapi_parity`)
+were investigated and found to be genuine production-grade framework bugs, not
+test issues. A third gap (SPA `frontend()` serving) was discovered while fixing
+the OpenAPI parity test.
+
+**Decision / changes:**
+1. **WebSocket scope completeness.** The Rust WS upgrade path previously passed
+   only the request `path` to handlers; the query string, headers, and peer
+   address were discarded, so a Starlette-style `scope` exposed an empty
+   `query` and `None` client. The `WsHandler` signature changed from
+   `Fn(String, WsRead, WsWrite)` to `Fn(WsConnInfo, WsRead, WsWrite)`, where
+   `WsConnInfo { path, query_string, headers, client }` is built from the
+   upgrade `req` *before* `hyper::upgrade::on(req)` consumes it. The Python
+   `WebSocket` scope now reflects the real query/headers/client. The Rust fast
+   path (`native=True`) is unaffected.
+2. **OpenAPI parity.** `build_openapi` (Python) emitted the wrong key
+   (`operation_id` instead of OpenAPI's `operationId`), silently dropped
+   `openapi_extra` extensions, and omitted the default success response when a
+   `responses` map was supplied. Fixed to emit `operationId`, deep-merge
+   `openapi_extra` (handles the JSON-string form stored by route registration),
+   and always include the success code (`200` or `status_code`).
+3. **SPA frontend mounts.** `app.frontend(path, dir, fallback=...)` stored a
+   `StaticMount { prefix, dir, fallback }` but `Server::run()` discarded the
+   `prefix` and `fallback` (only mounted `dir` at root via `with_static_dir`),
+   so `/static/` returned 404. Core `Server` gained `with_static_mounts` and a
+   `try_serve_static` helper that honors per-mount prefix + SPA fallback
+   (unmatched paths under the prefix serve the fallback file). Added
+   `Server::run_on(listener)` so callers can supply a pre-bound listener (avoids
+   an ephemeral-port bind race in tests). Added Rust unit tests for
+   `StaticMount::resolve` and an integration test for prefix + SPA fallback.
+
+**Evidence:** Both previously-failing pytest tests now pass; full pytest suite
+119 passed / 1 skipped; `cargo test --workspace` green; `cargo clippy
+--workspace --tests -D warnings` clean; `cargo fmt --check` clean. New Rust
+tests: `static_files::tests::test_mount_resolve_prefix`,
+`test_mount_traversal_blocked_through_prefix`, and
+`integration::test_static_mount_prefix_and_spa_fallback`.
