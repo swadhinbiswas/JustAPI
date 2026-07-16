@@ -4,7 +4,7 @@ import json
 import re
 import typing
 from urllib.parse import quote
-from ._justapi import _JustAPIApp, TokenStreamResponse, ValidatedStreamResponse
+from ._justapi import _JustAPIApp, TokenStreamResponse, ValidatedStreamResponse, Database
 from .exceptions import WebSocketException
 from .websockets import WebSocket
 from .system import register_system_routes, build_help, build_openapi
@@ -670,17 +670,26 @@ class JustAPIApp:
             name=name,
         )
 
-    def get(self, path: str, handler=None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None, tags: typing.List[str] = None, summary: str = None, description: str = None, deprecated: bool = False, status_code: int = None, responses: dict = None, operation_id: str = None, openapi_extra: dict = None, name: str = None, include_in_schema: bool = True, query_schema=None, native: bool = False):
+    def get(self, path: str, handler=None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None, tags: typing.List[str] = None, summary: str = None, description: str = None, deprecated: bool = False, status_code: int = None, responses: dict = None, operation_id: str = None, openapi_extra: dict = None, name: str = None, include_in_schema: bool = True, query_schema=None, native: bool = False, crud_table: str = None, crud_columns: typing.List[str] = None):
         if name is not None: self._named_routes[name] = path
         kw = self._route_kw(tags, summary, description, deprecated, status_code, responses, operation_id, openapi_extra, include_in_schema, name=name)
+        kw["native"] = native
+        kw["crud_table"] = crud_table
+        kw["crud_columns"] = crud_columns
+        if handler is None and crud_table is not None:
+            def _crud_noop(request):
+                raise AssertionError("crud routes must not invoke the Python handler")
+            self._app.get(path, _crud_noop, query_schema=query_schema, **kw)
+            self._record("GET", path, _crud_noop, query_schema=query_schema, **kw)
+            return _crud_noop
         if handler is None:
             def decorator(func):
-                self._app.get(path, self._wrap_handler(func, route_dependencies=dependencies, route_middlewares=middlewares), query_schema=query_schema, native=native, **kw)
-                self._record("GET", path, func, query_schema=query_schema, native=native, **kw)
+                self._app.get(path, self._wrap_handler(func, route_dependencies=dependencies, route_middlewares=middlewares), query_schema=query_schema, **kw)
+                self._record("GET", path, func, query_schema=query_schema, **kw)
                 return func
             return decorator
-        self._app.get(path, self._wrap_handler(handler, route_dependencies=dependencies, route_middlewares=middlewares), query_schema=query_schema, native=native, **kw)
-        self._record("GET", path, handler, query_schema=query_schema, native=native, **kw)
+        self._app.get(path, self._wrap_handler(handler, route_dependencies=dependencies, route_middlewares=middlewares), query_schema=query_schema, **kw)
+        self._record("GET", path, handler, query_schema=query_schema, **kw)
         return handler
 
     def post(self, path: str, handler=None, body_schema=None, schema=None, query_schema=None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None, tags: typing.List[str] = None, summary: str = None, description: str = None, deprecated: bool = False, status_code: int = None, responses: dict = None, operation_id: str = None, openapi_extra: dict = None, name: str = None, include_in_schema: bool = True, native: bool = False, crud_table: str = None, crud_columns: typing.List[str] = None):
@@ -689,6 +698,14 @@ class JustAPIApp:
         kw["native"] = native
         kw["crud_table"] = crud_table
         kw["crud_columns"] = crud_columns
+        if handler is None and crud_table is not None:
+            # Rust-native CRUD route with no Python handler: register a no-op
+            # that is never invoked because the CRUD path short-circuits in Rust.
+            def _crud_noop(request):
+                raise AssertionError("crud routes must not invoke the Python handler")
+            self._app.post(path, _crud_noop, body_schema, schema, query_schema=query_schema, **kw)
+            self._record("POST", path, _crud_noop, body_schema=body_schema, schema=schema, query_schema=query_schema, **kw)
+            return _crud_noop
         if handler is None:
             def decorator(func):
                 batch_size, batch_window_ms = self._resolve_batch_config(func)
@@ -709,6 +726,12 @@ class JustAPIApp:
         kw["native"] = native
         kw["crud_table"] = crud_table
         kw["crud_columns"] = crud_columns
+        if handler is None and crud_table is not None:
+            def _crud_noop(request):
+                raise AssertionError("crud routes must not invoke the Python handler")
+            self._app.put(path, _crud_noop, body_schema, schema, query_schema=query_schema, **kw)
+            self._record("PUT", path, _crud_noop, body_schema=body_schema, schema=schema, query_schema=query_schema, **kw)
+            return _crud_noop
         if handler is None:
             def decorator(func):
                 batch_size, batch_window_ms = self._resolve_batch_config(func)
@@ -728,6 +751,12 @@ class JustAPIApp:
         kw = self._route_kw(tags, summary, description, deprecated, status_code, responses, operation_id, openapi_extra, include_in_schema, name=name)
         kw["crud_table"] = crud_table
         kw["crud_columns"] = crud_columns
+        if handler is None and crud_table is not None:
+            def _crud_noop(request):
+                raise AssertionError("crud routes must not invoke the Python handler")
+            self._app.delete(path, _crud_noop, query_schema=query_schema, native=native, **kw)
+            self._record("DELETE", path, _crud_noop, query_schema=query_schema, native=native, **kw)
+            return _crud_noop
         if handler is None:
             def decorator(func):
                 self._app.delete(path, self._wrap_handler(func, route_dependencies=dependencies, route_middlewares=middlewares), query_schema=query_schema, native=native, **kw)
@@ -744,6 +773,12 @@ class JustAPIApp:
         kw["native"] = native
         kw["crud_table"] = crud_table
         kw["crud_columns"] = crud_columns
+        if handler is None and crud_table is not None:
+            def _crud_noop(request):
+                raise AssertionError("crud routes must not invoke the Python handler")
+            self._app.patch(path, _crud_noop, body_schema, schema, query_schema=query_schema, **kw)
+            self._record("PATCH", path, _crud_noop, body_schema=body_schema, schema=schema, query_schema=query_schema, **kw)
+            return _crud_noop
         if handler is None:
             def decorator(func):
                 batch_size, batch_window_ms = self._resolve_batch_config(func)
@@ -831,7 +866,11 @@ class JustAPIApp:
     def use(self, plugin):
         self._app.use(plugin)
 
-    def set_database(self, db):
+    def set_database(self, db, init_sql=None):
+        if isinstance(db, str):
+            db = Database(db, init_sql=init_sql)
+        elif init_sql is not None:
+            db = Database(db.url, max_connections=db.max_connections, init_sql=init_sql)
         self._app.set_database(db)
         
     def enable_gateway(self, config_path: str):

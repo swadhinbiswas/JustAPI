@@ -70,11 +70,15 @@ pub struct DatabaseConfig {
     pub url: String,
     pub max_connections: u32,
     pub kind: Option<DbKind>,
+    /// Optional DDL run once right after the pool is created (e.g. `CREATE
+    /// TABLE ...`). Bounded by a single statement; used by the Python app to
+    /// bootstrap schema for Rust-native CRUD routes.
+    pub init_sql: Option<String>,
 }
 
 impl Default for DatabaseConfig {
     fn default() -> Self {
-        Self { url: String::new(), max_connections: 10, kind: None }
+        Self { url: String::new(), max_connections: 10, kind: None, init_sql: None }
     }
 }
 
@@ -151,6 +155,24 @@ impl AnyPool {
     /// their string form.
     pub async fn query_json(&self, sql: &str) -> Result<serde_json::Value, sqlx::Error> {
         let rows = sqlx::query(sql).fetch_all(&self.inner).await?;
+        rows_to_json(rows)
+    }
+
+    /// Run a SQL statement with bound parameters and return all rows as a JSON
+    /// array of objects. Parameters are downcast from JSON via [`bind_json`], so
+    /// this is injection-safe (no string interpolation). Used by the Rust-native
+    /// CRUD handlers (select/update/delete) which build the SQL string but bind
+    /// every value as a parameter.
+    pub(crate) async fn query_with_params(
+        &self,
+        sql: &str,
+        params: &[serde_json::Value],
+    ) -> Result<serde_json::Value, sqlx::Error> {
+        let mut q = sqlx::query(sql);
+        for v in params {
+            q = bind_json(q, v);
+        }
+        let rows = q.fetch_all(&self.inner).await?;
         rows_to_json(rows)
     }
 

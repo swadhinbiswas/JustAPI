@@ -1962,14 +1962,22 @@ runs the same route in both modes and diffs responses. Silent semantic drift is
 the failure mode to prevent.
 
 **Phased plan:**
-- **Step B (prototype, this ADR):** Rust-native `POST` CRUD insert — validate
-  body → `INSERT ... RETURNING` (via new `AnyPool::query_json`) → return row as
-  200 JSON, within a transaction; 422 on validation failure; 500 on DB error.
-  Exposed as `app.post(path, schema=S, native="crud_insert", table=...,
-  columns=...)` on the Python side, compiling to `Handler::Custom`. Reuses
-  `db/`, `validate`, `serialize`. Benchmark vs Robyn + vs Python path.
-- **Step C:** GET select, PUT update, DELETE; then Rust-native middleware chain
-  (rate-limit/circuit-breaker/CORS/JWT) running without a Python hop.
+ - **Step B (shipped):** Rust-native `POST` CRUD insert — validate body →
+   `INSERT ... RETURNING *` (via `AnyPool::query_with_params`, injection-safe
+   bound params) → return the row as 200 JSON. Exposed as
+   `app.post(path, crud_table=..., crud_columns=...)` on the Python side,
+   compiling to `Handler::Custom`. Reuses `db/`, `validate`, `serialize`.
+ - **Step C (shipped):** Unified `crud_dispatch_bytes` handler switches on the
+   HTTP method: `POST`→insert, `GET`→select, `PUT`/`PATCH`→update,
+   `DELETE`→delete, using one `CrudSpec { op, table, columns, id_column }` per
+   route. All ops run entirely in Rust with no GIL/Python hop. Exposed on the
+   Python side as `app.post/get/put/patch/delete(path, crud_table=...,
+   crud_columns=...)`. `id_column` is hardcoded `"id"` (no Python exposure yet).
+   Correctness locked by `integration::test_crud_all_handler` + end-to-end smoke.
+ - **Step D:** Compile-time eligibility checker promoting routes automatically
+   when all steps are Rust-backed; honest benchmark ledger vs Robyn **and**
+   Actix/Axum on the same fixture; expose pool-size/WAL tuning from
+   `app.set_database` and benchmark on Postgres.
 - **Step D:** Compile-time eligibility checker promoting routes automatically
   when all steps are Rust-backed; honest benchmark ledger vs Robyn **and**
   Actix/Axum on the same fixture.
@@ -1987,12 +1995,24 @@ stays an option for truly custom logic.
  worse there only because the default 10-connection pool queues checkouts, while the
  Python path opens a fresh connection per request. So the bottleneck under concurrency
  is the DB + pool size, **not** the runtime — the architecture is correct and faster at
- the single-flight level. Remaining work (Step C/D): raise/expose `max_connections`,
- enable WAL, and benchmark on **Postgres** where the GIL-avoidance advantage compounds
- (no single-writer lock). Gates met: `cargo test --workspace` (incl.
- `integration::test_crud_insert_handler`), `cargo clippy --workspace --tests -D warnings`,
- pytest green; Rust integration test asserts the Rust-native route returns the same row
- JSON + 422 envelope as the Python contract.
+  the single-flight level. Remaining work (Step D): raise/expose `max_connections`,
+  enable WAL, and benchmark on **Postgres** where the GIL-avoidance advantage compounds
+  (no single-writer lock). Gates met: `cargo test --workspace` (incl.
+  `integration::test_crud_insert_handler`), `cargo clippy --workspace --tests -D warnings`,
+  pytest green; Rust integration test asserts the Rust-native route returns the same row
+  JSON + 422 envelope as the Python contract.
+
+  **Evidence (Step C, recorded in BENCHMARKS.md, 2026-07-16):** All four CRUD ops
+  now serve entirely in Rust via `crud_dispatch_bytes`. On an in-memory SQLite
+  fixture (`max_connections=1`, no fsync), INSERT ≈ 12.9k RPS @c1 and SELECT-by-id
+  ≈ 18.1k RPS @c1 (≈ 21.7k @c10 — reads avoid the write lock). UPDATE/DELETE are
+  correct in isolation (core integration test + end-to-end smoke both pass) and
+  bounded by the same SQLite single-writer lock as INSERT. The Python API is
+  `app.post/get/put/patch/delete(path, crud_table=..., crud_columns=...)`; a route
+  registered this way never invokes a Python handler. `Database(init_sql=...)` was
+  added so apps can bootstrap schema at startup. Gates met: `cargo test --workspace
+  --features db` (incl. `integration::test_crud_all_handler`), `cargo clippy
+  --workspace --tests -D warnings`, `cargo fmt --check`, pytest green.
 
 ## ADR-055 — 2026-07-16 — Configurable max request body size (413 on overflow)
 

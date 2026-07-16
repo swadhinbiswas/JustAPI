@@ -525,7 +525,7 @@ async fn run() -> anyhow::Result<()> {
                     anyhow::bail!("Migrations directory does not exist: {:?}", dir);
                 }
                 let config =
-                    justapi_core::db::DatabaseConfig { url, max_connections: 1, kind: None };
+                    justapi_core::db::DatabaseConfig { url, max_connections: 1, kind: None, init_sql: None };
                 let mut mgr = justapi_core::db::PoolManager::new();
                 let pool = mgr.init("", config).await?;
 
@@ -543,7 +543,7 @@ async fn run() -> anyhow::Result<()> {
                     anyhow::bail!("Migrations directory does not exist: {:?}", dir);
                 }
                 let config =
-                    justapi_core::db::DatabaseConfig { url, max_connections: 1, kind: None };
+                    justapi_core::db::DatabaseConfig { url, max_connections: 1, kind: None, init_sql: None };
                 let mut mgr = justapi_core::db::PoolManager::new();
                 let pool = mgr.init("", config).await?;
 
@@ -555,7 +555,7 @@ async fn run() -> anyhow::Result<()> {
             }
             DbCommands::Init { url, dir } => {
                 let config =
-                    justapi_core::db::DatabaseConfig { url, max_connections: 1, kind: None };
+                    justapi_core::db::DatabaseConfig { url, max_connections: 1, kind: None, init_sql: None };
                 let mut mgr = justapi_core::db::PoolManager::new();
                 let pool = mgr.init("", config).await?;
 

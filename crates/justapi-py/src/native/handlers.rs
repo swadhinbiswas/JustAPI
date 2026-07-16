@@ -13,6 +13,11 @@ use justapi_core::{json_response, ResponseBody};
 
 use justapi_core::db::AnyPool;
 
+/// Shared, per-route Rust-native CRUD config: `Some((table, columns,
+/// id_column))` means the route is served by `crud_dispatch_bytes` with the
+/// operation inferred from the request method.
+pub(crate) type CrudConfig = Arc<Vec<Option<(String, Vec<String>, String)>>>;
+
 use super::types::*;
 #[allow(clippy::too_many_arguments)]
 /// Env-gated profiler for the GIL-path FFI cost. Activated only when the
@@ -593,7 +598,7 @@ pub(crate) fn make_native_handler<B>(
     app: Option<Py<PyAny>>,
     needs_request: Arc<Vec<bool>>,
     native: Arc<Vec<bool>>,
-    crud_specs: Arc<Vec<Option<(String, Vec<String>)>>>,
+    crud_specs: CrudConfig,
     schema_validators: Arc<Vec<Option<justapi_core::validate::CompiledValidator>>>,
     max_body_size: usize,
 ) -> justapi_core::middleware::HandlerFn<B>
@@ -724,20 +729,40 @@ where
                 return Ok(nr_to_response(res));
             }
 
-            // Rust-native CRUD insert (ADR-056 Step B): validate body + run
-            // INSERT ... RETURNING entirely in Rust, no GIL/Python hop. The body
-            // was already read (and size-limited) above, so we feed the bytes
-            // straight into the core handler.
-            if let Some(Some((table, columns))) = crud_specs_clone.get(handler_id) {
+            // Rust-native CRUD (ADR-056 Step C): validate body + run INSERT /
+            // SELECT / UPDATE / DELETE entirely in Rust, no GIL/Python hop. The
+            // operation is inferred from the request method; the body was already
+            // read (and size-limited) above.
+            if let Some(Some((table, columns, id_column))) = crud_specs_clone.get(handler_id) {
                 if let Some(ref pool) = *db_pool {
-                    return justapi_core::server::crud_insert_bytes(
-                        pool,
-                        table,
-                        columns,
-                        None,
-                        &body_bytes,
-                    )
-                    .await;
+                    let op: Option<justapi_core::server::CrudOp> = match method {
+                        Method::POST => Some(justapi_core::server::CrudOp::Insert),
+                        Method::GET => Some(justapi_core::server::CrudOp::Select),
+                        Method::PUT | Method::PATCH => Some(justapi_core::server::CrudOp::Update),
+                        Method::DELETE => Some(justapi_core::server::CrudOp::Delete),
+                        _ => {
+                            // Method not supported for Rust-native CRUD; fall
+                            // through to the Python path (which will 405).
+                            None
+                        }
+                    };
+                    if let Some(op) = op {
+                        let spec = justapi_core::server::CrudSpec {
+                            op,
+                            table: table.clone(),
+                            columns: columns.clone(),
+                            id_column: id_column.clone(),
+                        };
+                        return justapi_core::server::crud_dispatch_bytes(
+                            pool,
+                            &spec,
+                            &path_params,
+                            &query_string,
+                            &body_bytes,
+                            None,
+                        )
+                        .await;
+                    }
                 }
             }
 

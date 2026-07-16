@@ -89,6 +89,7 @@ impl JustAPITestClient {
                 kind: Some(justapi_core::db::DbKind::from_url(url)),
                 url: url.clone(),
                 max_connections: 5,
+                init_sql: None,
             };
             let pool = py
                 .detach(move || -> Result<AnyPool, String> {
