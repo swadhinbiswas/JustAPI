@@ -84,6 +84,22 @@ fn id_param(path_params: &[(String, String)], id_column: &str) -> Option<serde_j
     }
 }
 
+/// Build a driver-aware placeholder generator. Postgres/MySQL use positional
+/// `$N` / `?`; SQLite uses `?`. The closure increments its index on each call so
+/// callers emit placeholders in the same order the values are bound.
+fn placeholder_gen(pool: &AnyPool) -> impl FnMut() -> String + '_ {
+    let dollar = matches!(pool.kind(), crate::db::DbKind::Postgres);
+    let mut i = 0usize;
+    move || {
+        i += 1;
+        if dollar {
+            format!("${}", i)
+        } else {
+            "?".to_string()
+        }
+    }
+}
+
 /// Core Rust-native CRUD logic over an already-read body.
 ///
 /// Dispatches on `spec.op`:
@@ -133,7 +149,8 @@ pub async fn crud_dispatch_bytes(
             if cols.is_empty() {
                 return Ok(validation_response("no insertable columns matched the request body"));
             }
-            let placeholders: Vec<String> = (0..cols.len()).map(|_| "?".to_string()).collect();
+            let mut ph = placeholder_gen(pool);
+            let placeholders: Vec<String> = (0..cols.len()).map(|_| ph()).collect();
             let sql = format!(
                 "INSERT INTO {} ({}) VALUES ({}) RETURNING *",
                 spec.table,
@@ -152,14 +169,15 @@ pub async fn crud_dispatch_bytes(
         CrudOp::Select => {
             let mut params: Vec<serde_json::Value> = Vec::new();
             let mut wheres: Vec<String> = Vec::new();
+            let mut ph = placeholder_gen(pool);
             // Filter by path id when present.
             if let Some(id) = id_param(path_params, &spec.id_column) {
-                wheres.push(format!("{} = ?", spec.id_column));
+                wheres.push(format!("{} = {}", spec.id_column, ph()));
                 params.push(id);
             }
             // Filter by allowlisted query-string params.
             for (k, v) in parse_query(query_string, &spec.columns) {
-                wheres.push(format!("{} = ?", k));
+                wheres.push(format!("{} = {}", k, ph()));
                 params.push(serde_json::Value::String(v));
             }
             let mut sql = format!("SELECT * FROM {}", spec.table);
@@ -192,9 +210,10 @@ pub async fn crud_dispatch_bytes(
             };
             let mut sets: Vec<String> = Vec::new();
             let mut params: Vec<serde_json::Value> = Vec::new();
+            let mut ph = placeholder_gen(pool);
             for c in &spec.columns {
                 if let Some(v) = obj.get(c) {
-                    sets.push(format!("{} = ?", c));
+                    sets.push(format!("{} = {}", c, ph()));
                     params.push(v.clone());
                 }
             }
@@ -203,10 +222,11 @@ pub async fn crud_dispatch_bytes(
             }
             params.push(id);
             let sql = format!(
-                "UPDATE {} SET {} WHERE {} = ? RETURNING *",
+                "UPDATE {} SET {} WHERE {} = {} RETURNING *",
                 spec.table,
                 sets.join(", "),
-                spec.id_column
+                spec.id_column,
+                ph()
             );
             match pool.query_with_params(&sql, &params).await {
                 Ok(rows) => {
@@ -229,8 +249,13 @@ pub async fn crud_dispatch_bytes(
                     ))
                 }
             };
-            let sql =
-                format!("DELETE FROM {} WHERE {} = ? RETURNING *", spec.table, spec.id_column);
+            let mut ph = placeholder_gen(pool);
+            let sql = format!(
+                "DELETE FROM {} WHERE {} = {} RETURNING *",
+                spec.table,
+                spec.id_column,
+                ph()
+            );
             match pool.query_with_params(&sql, &[id]).await {
                 Ok(rows) => {
                     let single = rows.as_array().and_then(|a| a.first()).cloned();

@@ -866,11 +866,34 @@ class JustAPIApp:
     def use(self, plugin):
         self._app.use(plugin)
 
-    def set_database(self, db, init_sql=None):
+    def set_database(self, db, init_sql=None, pragmas=None, wal=False):
         if isinstance(db, str):
-            db = Database(db, init_sql=init_sql)
-        elif init_sql is not None:
-            db = Database(db.url, max_connections=db.max_connections, init_sql=init_sql)
+            db = Database(db, init_sql=init_sql, pragmas=pragmas)
+        else:
+            if init_sql is not None:
+                db = Database(
+                    db.url,
+                    max_connections=db.max_connections,
+                    init_sql=init_sql,
+                    pragmas=pragmas if pragmas is not None else db.pragmas,
+                )
+            elif pragmas is not None:
+                db = Database(
+                    db.url,
+                    max_connections=db.max_connections,
+                    init_sql=db.init_sql,
+                    pragmas=pragmas,
+                )
+        if wal:
+            existing = list(db.pragmas or [])
+            if "journal_mode=WAL" not in existing:
+                existing.append("journal_mode=WAL")
+            db = Database(
+                db.url,
+                max_connections=db.max_connections,
+                init_sql=db.init_sql,
+                pragmas=existing,
+            )
         self._app.set_database(db)
         
     def enable_gateway(self, config_path: str):

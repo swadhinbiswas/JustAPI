@@ -13,7 +13,11 @@ use justapi_core::db::DatabaseConfig;
 /// from justapi import JustAPIApp, Database
 ///
 /// app = JustAPIApp()
-/// app.database = Database("sqlite://:memory:", init_sql="CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT)")
+/// app.database = Database(
+///     "sqlite://:memory:",
+///     init_sql="CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT)",
+///     pragmas=["journal_mode=WAL", "synchronous=NORMAL"],
+/// )
 /// app.run("127.0.0.1:8080")
 /// ```
 #[pyclass(from_py_object)]
@@ -25,14 +29,23 @@ pub struct Database {
     pub max_connections: u32,
     #[pyo3(get)]
     pub init_sql: Option<String>,
+    /// SQLite-only PRAGMA statements applied to every pooled connection (e.g.
+    /// `journal_mode=WAL`). Ignored by Postgres/MySQL.
+    #[pyo3(get)]
+    pub pragmas: Option<Vec<String>>,
 }
 
 #[pymethods]
 impl Database {
     #[new]
-    #[pyo3(signature = (url, max_connections=10, init_sql=None))]
-    fn py_new(url: String, max_connections: u32, init_sql: Option<String>) -> Self {
-        Self { url, max_connections, init_sql }
+    #[pyo3(signature = (url, max_connections=10, init_sql=None, pragmas=None))]
+    fn py_new(
+        url: String,
+        max_connections: u32,
+        init_sql: Option<String>,
+        pragmas: Option<Vec<String>>,
+    ) -> Self {
+        Self { url, max_connections, init_sql, pragmas }
     }
 
     fn __repr__(&self) -> String {
@@ -42,7 +55,7 @@ impl Database {
 
 impl Database {
     pub fn new(url: String, max_connections: u32) -> Self {
-        Self { url, max_connections, init_sql: None }
+        Self { url, max_connections, init_sql: None, pragmas: None }
     }
 
     pub fn to_config(&self) -> DatabaseConfig {
@@ -51,6 +64,7 @@ impl Database {
             max_connections: self.max_connections,
             kind: None,
             init_sql: self.init_sql.clone(),
+            pragmas: self.pragmas.clone(),
         }
     }
 }

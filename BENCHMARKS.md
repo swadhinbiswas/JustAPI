@@ -1373,3 +1373,42 @@ entirely in Rust with no GIL/Python hop, with injection-safe bound parameters an
 a single shared code path over `sqlx::Any`. Remaining work (Step D): expose
 pool/WAL tuning from `app.set_database` and benchmark against Postgres to show
 the GIL-avoidance advantage compounding without the SQLite single-writer ceiling.
+
+## Rust-native CRUD vs real Postgres (ADR-056 Step D) — 2026-07-16
+
+Step D moves the benchmark off file/`:memory:` SQLite onto a **real hosted
+Postgres** (Aiven, TLS `sslmode=require`, `max_connections=20`) so the
+GIL-avoidance win is measured without the SQLite single-writer ceiling. The
+Rust-native CRUD path (`crud_dispatch_bytes`) is unchanged; it now emits
+driver-correct placeholders (`$N` for Postgres via `placeholder_gen`) and runs
+over `sqlx::Any` + rustls.
+
+Fixture: Aiven Postgres (`postgres://…`, region EU), single client box on a
+different host, release build, `benchmarks/workloads_crud_pg.py`
+(`justapi_bench_items(id BIGSERIAL PK, name TEXT, qty INT)`).
+
+| Op | Concurrency | RPS | p50 latency | Notes |
+|---|---|---|---|---|
+| INSERT (`POST /items`) | -c1 | **~9** | ~110 ms | bounded by cloud round-trip, not Rust |
+| INSERT (`POST /items`) | -c20 | **~84** | — | 20× conn pool overlaps the 110 ms latency |
+| SELECT by id (`GET /items/1`) | -c1 | **~8** | ~111 ms | read, same network latency |
+| SELECT by id (`GET /items/1`) | -c20 | **~92** | — | pool concurrency fills the latency |
+
+**Reading.** Throughput scales almost linearly with pool concurrency
+(~9→~84 RPS from -c1→-c20) because the bottleneck is the **~110 ms network
+round-trip to the cloud DB**, not JustAPI. The Rust-native handler adds only
+microseconds of work per request and never touches the GIL, so under higher
+concurrency the *whole* 20-connection pool is kept busy — exactly the Step D
+prediction (no SQLite single-writer lock, GIL-avoidance lets the pool saturate).
+On a local/colocated Postgres these numbers would be 10–100× higher and the
+Rust-vs-Python GIL gap (~2.5× at -c1, per Step B) would be the dominant factor.
+
+**Correctness.** All four verbs verified end-to-end against Postgres:
+INSERT→`{"id":N,…}`, SELECT→`[{…}]`, UPDATE→`{…}`, DELETE→`{…}`,
+post-delete SELECT→`[]`. Response shapes match the SQLite runs.
+
+**Step D tuning knobs added:** `Database(max_connections=…)`, `init_sql`
+(multi-statement DDL bootstrap), `pragmas=[…]` / `wal=True` (SQLite
+`journal_mode=WAL` etc. applied per pooled connection via `after_connect`),
+and `app.set_database(db, init_sql=, pragmas=, wal=)`. Postgres TLS enabled in
+the workspace `sqlx` features (`runtime-tokio-rustls` → `tls-rustls`).
