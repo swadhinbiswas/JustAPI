@@ -1198,7 +1198,8 @@ impl JustAPIApp {
     }
 
     /// Start the server and begin accepting requests.
-    fn run(slf: Py<Self>, py: Python<'_>, addr: &str) -> PyResult<()> {
+    #[pyo3(signature = (addr, max_body_size=50*1024*1024))]
+    fn run(slf: Py<Self>, py: Python<'_>, addr: &str, max_body_size: usize) -> PyResult<()> {
         let mut app = slf.borrow_mut(py);
         let addr: std::net::SocketAddr = addr.parse().map_err(|e| {
             pyo3::exceptions::PyValueError::new_err(format!("Invalid address: {}", e))
@@ -1461,6 +1462,7 @@ impl JustAPIApp {
                     needs_request.clone(),
                     native.clone(),
                     schema_validators.clone(),
+                    max_body_size,
                 );
 
                 // Install signal handlers to trigger graceful shutdown.

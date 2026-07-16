@@ -118,6 +118,7 @@ impl JustAPITestClient {
             needs_request,
             native,
             schema_validators,
+            50 * 1024 * 1024,
         );
 
         // Apply request coalescing (singleflight) if the app enabled it, so the

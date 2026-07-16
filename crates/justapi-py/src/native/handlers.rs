@@ -594,6 +594,7 @@ pub(crate) fn make_native_handler<B>(
     needs_request: Arc<Vec<bool>>,
     native: Arc<Vec<bool>>,
     schema_validators: Arc<Vec<Option<justapi_core::validate::CompiledValidator>>>,
+    max_body_size: usize,
 ) -> justapi_core::middleware::HandlerFn<B>
 where
     B: http_body::Body<Data = Bytes> + Send + Sync + Unpin + 'static,
@@ -675,11 +676,17 @@ where
                     }
                 }
             } else {
-                let b = http_body_util::Limited::new(req_body, 50 * 1024 * 1024)
-                    .collect()
-                    .await
-                    .map_err(|e| anyhow::anyhow!("Body too large or error: {}", e))?
-                    .to_bytes();
+                let b = match http_body_util::Limited::new(req_body, max_body_size).collect().await
+                {
+                    Ok(c) => c.to_bytes(),
+                    Err(e) if e.to_string().contains("length limit") => {
+                        return Ok(json_response(
+                            StatusCode::PAYLOAD_TOO_LARGE,
+                            r#"{"detail":"payload too large"}"#,
+                        ));
+                    }
+                    Err(e) => return Err(anyhow::anyhow!("Body error: {}", e)),
+                };
                 (b.to_vec(), None)
             };
 
@@ -858,6 +865,7 @@ pub fn make_test_handler<B>(
     needs_request: Arc<Vec<bool>>,
     native: Arc<Vec<bool>>,
     schema_validators: Arc<Vec<Option<justapi_core::validate::CompiledValidator>>>,
+    max_body_size: usize,
 ) -> justapi_core::middleware::HandlerFn<B>
 where
     B: http_body::Body<Data = Bytes> + Send + Sync + Unpin + 'static,
@@ -914,11 +922,19 @@ where
             let is_multipart =
                 content_type.as_deref().unwrap_or("").starts_with("multipart/form-data");
 
-            let body_bytes = http_body_util::Limited::new(req.into_body(), 50 * 1024 * 1024)
+            let body_bytes = match http_body_util::Limited::new(req.into_body(), max_body_size)
                 .collect()
                 .await
-                .map_err(|e| anyhow::anyhow!("Body too large or error: {}", e))?
-                .to_bytes();
+            {
+                Ok(c) => c.to_bytes(),
+                Err(e) if e.to_string().contains("length limit") => {
+                    return Ok(json_response(
+                        StatusCode::PAYLOAD_TOO_LARGE,
+                        r#"{"detail":"payload too large"}"#,
+                    ));
+                }
+                Err(e) => return Err(anyhow::anyhow!("Body error: {}", e)),
+            };
 
             let multipart_form_res: Option<
                 Result<justapi_core::multipart::MultipartForm, anyhow::Error>,

@@ -1115,8 +1115,9 @@ class JustAPIApp:
         register_system_routes(self)
         return self
 
-    def run(self, addr: str):
-        self._app.run(addr)
+    def run(self, addr: str, max_body_size: int = 50 * 1024 * 1024):
+        self._app.run(addr, max_body_size)
+
 
     def _wrap_sse_handler(self, func):
         """Wrap a generator/async-generator handler into a TokenStreamResponse."""

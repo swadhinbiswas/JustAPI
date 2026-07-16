@@ -314,6 +314,9 @@ pub struct Server {
     /// installed, so we can refuse a later `with_handler` (same footgun).
     default_routes_set: bool,
     openapi_spec: Option<Arc<String>>,
+    /// Maximum accepted request body size in bytes (DoS guard). Configurable
+    /// via `with_max_body_size`; defaults to `DEFAULT_MAX_BODY_SIZE`.
+    max_body_size: usize,
 }
 
 impl Server {
@@ -353,6 +356,7 @@ impl Server {
             custom_handler_set: false,
             default_routes_set: false,
             openapi_spec: None,
+            max_body_size: DEFAULT_MAX_BODY_SIZE,
         }
     }
 
@@ -360,6 +364,14 @@ impl Server {
     /// (e.g., from a Python JustAPIApp's registered routes).
     pub fn with_openapi_spec(mut self, spec: String) -> Self {
         self.openapi_spec = Some(Arc::new(spec));
+        self
+    }
+
+    /// Cap the maximum accepted request body size (bytes). Bodies larger than
+    /// this are rejected with `413 Payload Too Large`, protecting against
+    /// memory-exhaustion DoS. Defaults to `DEFAULT_MAX_BODY_SIZE` (50 MiB).
+    pub fn with_max_body_size(mut self, bytes: usize) -> Self {
+        self.max_body_size = bytes;
         self
     }
 
@@ -766,6 +778,7 @@ impl Server {
                 self.metrics.clone(),
                 self.health_registry.clone(),
                 self.openapi_spec.clone(),
+                self.max_body_size,
             );
             self.chain.set_handler(handler);
         }
@@ -785,6 +798,7 @@ impl Server {
                 self.metrics.clone(),
                 self.health_registry.clone(),
                 self.openapi_spec.clone(),
+                self.max_body_size,
             );
             self.chain.set_handler(handler);
         }
@@ -853,6 +867,7 @@ impl Server {
                 chain,
                 tls_config,
                 static_dir,
+                self.static_mounts.clone(),
                 metrics,
                 self.shutdown,
                 wasm_middleware,
@@ -865,6 +880,7 @@ impl Server {
                 chain,
                 tls_config,
                 static_dir,
+                self.static_mounts.clone(),
                 metrics,
                 self.shutdown,
                 wasm_middleware,
@@ -931,7 +947,8 @@ pub async fn serve(listener: TcpListener) -> Result<()> {
     let pool = Arc::new(BufferPool::new());
     let metrics = Metrics::new();
     let health_registry = Arc::new(HealthRegistry::new());
-    let handler = make_handler(router, pool, metrics.clone(), health_registry, None);
+    let handler =
+        make_handler(router, pool, metrics.clone(), health_registry, None, DEFAULT_MAX_BODY_SIZE);
     let chain = Arc::new(MiddlewareChain::new(handler));
 
     #[cfg(feature = "ws")]
@@ -953,6 +970,7 @@ fn make_handler(
     metrics: Metrics,
     health_registry: Arc<HealthRegistry>,
     openapi_spec: Option<Arc<String>>,
+    max_body_size: usize,
 ) -> crate::middleware::HandlerFn {
     // Build the global GraphQL schema
     let graphql_schema = Arc::new(crate::graphql::create_schema());
@@ -977,6 +995,7 @@ fn make_handler(
                         Some(&health_registry),
                         Some(&graphql_schema),
                         openapi_spec.as_deref().map(|s| s.as_str()),
+                        max_body_size,
                     )
                     .await
                 }
@@ -995,6 +1014,7 @@ fn make_handler(
                             Some(&health_registry),
                             Some(&graphql_schema),
                             openapi_spec.as_deref().map(|s| s.as_str()),
+                            max_body_size,
                         )
                         .await
                     }
@@ -1012,6 +1032,11 @@ fn make_handler(
 /// Max time to wait for a client to send complete request headers (slowloris
 /// protection). Applies to HTTP/1 and HTTP/2.
 const HEADER_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Default cap on request body size. Bounding the body protects against
+/// memory-exhaustion DoS; it is configurable per-server via
+/// `Server::with_max_body_size`.
+const DEFAULT_MAX_BODY_SIZE: usize = 50 * 1024 * 1024;
 
 /// Max wall-clock time a single request handler may run before we respond 504
 /// and abort it. Guards against stuck/slow handlers and resource exhaustion.
@@ -1379,6 +1404,7 @@ async fn execute_handler(
     health_registry: Option<&HealthRegistry>,
     graphql_schema: Option<&crate::graphql::AppSchema>,
     openapi_spec: Option<&str>,
+    max_body_size: usize,
 ) -> Result<Response<ResponseBody>> {
     let handler_name = match m.handler {
         Handler::Static { .. } => "static",
@@ -1400,7 +1426,7 @@ async fn execute_handler(
     match m.handler {
         Handler::Static { status, body } => Ok(json_response(*status, body)),
         Handler::Echo => {
-            let body_bytes = match http_body_util::Limited::new(req.into_body(), 50 * 1024 * 1024)
+            let body_bytes = match http_body_util::Limited::new(req.into_body(), max_body_size)
                 .collect()
                 .await
             {
@@ -1408,6 +1434,12 @@ async fn execute_handler(
                     let bytes = collected.to_bytes();
                     metrics.add_bytes_in(bytes.len() as u64);
                     bytes
+                }
+                Err(e) if e.to_string().contains("length limit") => {
+                    return Ok(json_response(
+                        StatusCode::PAYLOAD_TOO_LARGE,
+                        r#"{"detail":"payload too large"}"#,
+                    ))
                 }
                 Err(_) => {
                     return Ok(json_response(

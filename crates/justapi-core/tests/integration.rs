@@ -245,3 +245,33 @@ async fn test_static_mount_prefix_and_spa_fallback() {
 
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+async fn start_server_with_max_body_size(limit: usize) -> SocketAddr {
+    let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        Server::new(addr)
+            .with_default_routes()
+            .with_max_body_size(limit)
+            .run_on(listener)
+            .await
+            .unwrap();
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    addr
+}
+
+#[tokio::test]
+async fn test_max_body_size_enforced() {
+    let addr = start_server_with_max_body_size(1024).await;
+
+    // Within the limit: echoed back.
+    let (status, body) = send_request(addr, Method::POST, "/echo", Some(&[b'x'; 512])).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(&body[..], &[b'x'; 512][..]);
+
+    // Over the limit: 413.
+    let (status, body) = send_request(addr, Method::POST, "/echo", Some(&[b'x'; 1025])).await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert!(String::from_utf8_lossy(&body).contains("payload too large"));
+}
