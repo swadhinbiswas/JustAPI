@@ -90,6 +90,7 @@ impl JustAPITestClient {
                 url: url.clone(),
                 max_connections: 5,
                 init_sql: None,
+                pragmas: None,
             };
             let pool = py
                 .detach(move || -> Result<AnyPool, String> {

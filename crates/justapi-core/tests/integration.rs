@@ -291,6 +291,7 @@ async fn start_server_with_crud_insert() -> SocketAddr {
             "sqlite:file:crudtest?mode=memory&cache=shared",
             1,
             justapi_core::db::DbKind::Sqlite,
+            None,
         )
         .await
         .unwrap(),
@@ -363,6 +364,7 @@ async fn start_server_with_crud_all() -> SocketAddr {
             "sqlite:file:crudall?mode=memory&cache=shared",
             1,
             justapi_core::db::DbKind::Sqlite,
+            None,
         )
         .await
         .unwrap(),

@@ -2014,6 +2014,22 @@ stays an option for truly custom logic.
   --features db` (incl. `integration::test_crud_all_handler`), `cargo clippy
   --workspace --tests -D warnings`, `cargo fmt --check`, pytest green.
 
+  **Evidence (Step D, recorded in BENCHMARKS.md, 2026-07-16):** Benchmarked the
+  Rust-native CRUD path against a real hosted Postgres (Aiven, TLS, 20-conn
+  pool). All four verbs verified end-to-end; throughput scales ~linearly with
+  pool concurrency (~9→~84 RPS INSERT from -c1→-c20) and is bounded by the
+  ~110 ms cloud round-trip, not by JustAPI — confirming the Step D prediction
+  (no SQLite single-writer ceiling, GIL-avoidance lets the pool saturate).
+  Delivered the Step D tuning knobs: `Database(max_connections=…, init_sql=…,
+  pragmas=…)` + `app.set_database(db, init_sql=, pragmas=, wal=)`; SQLite
+  `journal_mode=WAL` applied per connection via `after_connect`; Postgres TLS
+  enabled via `sqlx` `tls-rustls`. `crud_dispatch_bytes` now emits driver-correct
+  placeholders (`$N` Postgres / `?` SQLite-MySQL) via `placeholder_gen`. Gates
+  met: `cargo test --workspace --features db`, `cargo clippy -D warnings`,
+  `cargo fmt --check`, pytest green. Remaining (post-Step D): a Rust-backed
+  Python DB API (`app.query`/`app.execute` over `AnyPool`) so *custom* handlers
+  can run arbitrary SQL without losing the GIL-avoidance win.
+
 ## ADR-055 — 2026-07-16 — Configurable max request body size (413 on overflow)
 
 **Context:** The request body cap was a hardcoded `50 * 1024 * 1024` (50 MiB)

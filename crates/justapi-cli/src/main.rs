@@ -524,8 +524,13 @@ async fn run() -> anyhow::Result<()> {
                 if !dir.exists() {
                     anyhow::bail!("Migrations directory does not exist: {:?}", dir);
                 }
-                let config =
-                    justapi_core::db::DatabaseConfig { url, max_connections: 1, kind: None, init_sql: None };
+                let config = justapi_core::db::DatabaseConfig {
+                    url,
+                    max_connections: 1,
+                    kind: None,
+                    init_sql: None,
+                    pragmas: None,
+                };
                 let mut mgr = justapi_core::db::PoolManager::new();
                 let pool = mgr.init("", config).await?;
 
@@ -542,8 +547,13 @@ async fn run() -> anyhow::Result<()> {
                 if !dir.exists() {
                     anyhow::bail!("Migrations directory does not exist: {:?}", dir);
                 }
-                let config =
-                    justapi_core::db::DatabaseConfig { url, max_connections: 1, kind: None, init_sql: None };
+                let config = justapi_core::db::DatabaseConfig {
+                    url,
+                    max_connections: 1,
+                    kind: None,
+                    init_sql: None,
+                    pragmas: None,
+                };
                 let mut mgr = justapi_core::db::PoolManager::new();
                 let pool = mgr.init("", config).await?;
 
@@ -554,8 +564,13 @@ async fn run() -> anyhow::Result<()> {
                 Ok(())
             }
             DbCommands::Init { url, dir } => {
-                let config =
-                    justapi_core::db::DatabaseConfig { url, max_connections: 1, kind: None, init_sql: None };
+                let config = justapi_core::db::DatabaseConfig {
+                    url,
+                    max_connections: 1,
+                    kind: None,
+                    init_sql: None,
+                    pragmas: None,
+                };
                 let mut mgr = justapi_core::db::PoolManager::new();
                 let pool = mgr.init("", config).await?;
 

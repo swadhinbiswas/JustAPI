@@ -1410,11 +1410,19 @@ impl JustAPIApp {
                     match mgr.init("", config.clone()).await {
                         Ok(pool) => {
                             tracing::info!("Database pool initialized ({:?})", pool.kind());
-                            // Bootstrap schema if provided (single DDL statement).
+                            // Bootstrap schema if provided. Multiple statements
+                            // (separated by `;`) are each run in order — this is a
+                            // startup DDL bootstrap, not a request path.
                             if let Some(sql) = &config.init_sql {
-                                if let Err(e) = pool.execute(sql).await {
-                                    tracing::error!("Database init_sql failed: {}", e);
-                                    return Err(anyhow::anyhow!("Database init_sql error: {}", e));
+                                for stmt in sql.split(';') {
+                                    let stmt = stmt.trim();
+                                    if stmt.is_empty() {
+                                        continue;
+                                    }
+                                    if let Err(e) = pool.execute(stmt).await {
+                                        tracing::error!("Database init_sql failed: {}", e);
+                                        return Err(anyhow::anyhow!("Database init_sql error: {}", e));
+                                    }
                                 }
                             }
                             Some(pool)

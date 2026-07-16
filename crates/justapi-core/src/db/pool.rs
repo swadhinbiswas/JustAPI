@@ -8,7 +8,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use sqlx::any::AnyPoolOptions;
-use sqlx::{Column, Row};
+use sqlx::{Column, Executor, Row};
 use tokio::sync::RwLock;
 
 /// Database engine kind.
@@ -74,11 +74,16 @@ pub struct DatabaseConfig {
     /// TABLE ...`). Bounded by a single statement; used by the Python app to
     /// bootstrap schema for Rust-native CRUD routes.
     pub init_sql: Option<String>,
+    /// Optional PRAGMA / session statements run on every connection right after
+    /// it is checked out of the pool (e.g. `journal_mode=WAL`,
+    /// `synchronous=NORMAL`). SQLite-only; ignored by other drivers. Applied via
+    /// `after_connect` so every pooled connection picks them up.
+    pub pragmas: Option<Vec<String>>,
 }
 
 impl Default for DatabaseConfig {
     fn default() -> Self {
-        Self { url: String::new(), max_connections: 10, kind: None, init_sql: None }
+        Self { url: String::new(), max_connections: 10, kind: None, init_sql: None, pragmas: None }
     }
 }
 
@@ -98,18 +103,31 @@ pub struct AnyPool {
 impl AnyPool {
     /// Connect to any supported engine. The backend is selected by the URL
     /// scheme (`postgres://`, `sqlite://`, `mysql://`). `max_connections`
-    /// controls the pool size.
+    /// controls the pool size. `pragmas` (SQLite-only) are run on every
+    /// connection as it is checked out of the pool (e.g. `journal_mode=WAL`).
     pub async fn connect_with(
         url: &str,
         max_connections: u32,
         kind: DbKind,
+        pragmas: Option<Vec<String>>,
     ) -> Result<Self, sqlx::Error> {
         // The `any` driver needs its backend drivers registered before the first
         // connection (sqlx 0.8). Idempotent and cheap.
         sqlx::any::install_default_drivers();
         let connect_url = normalize_db_url(url);
-        let inner =
-            AnyPoolOptions::new().max_connections(max_connections).connect(&connect_url).await?;
+        let mut opts = AnyPoolOptions::new().max_connections(max_connections);
+        if let (DbKind::Sqlite, Some(pragmas)) = (kind, pragmas) {
+            opts = opts.after_connect(move |conn, _meta| {
+                let pragmas = pragmas.clone();
+                Box::pin(async move {
+                    for p in &pragmas {
+                        conn.execute(sqlx::query(p)).await?;
+                    }
+                    Ok(())
+                })
+            });
+        }
+        let inner = opts.connect(&connect_url).await?;
         Ok(Self { inner, kind })
     }
 
@@ -307,7 +325,13 @@ impl PoolManager {
     ) -> Result<AnyPool, sqlx::Error> {
         let name = name.into();
         let kind = config.kind.unwrap_or_else(|| DbKind::from_url(&config.url));
-        let pool = AnyPool::connect_with(&config.url, config.max_connections, kind).await?;
+        let pool = AnyPool::connect_with(
+            &config.url,
+            config.max_connections,
+            kind,
+            config.pragmas.clone(),
+        )
+        .await?;
         self.pools.write().await.insert(name, pool.clone());
         Ok(pool)
     }
