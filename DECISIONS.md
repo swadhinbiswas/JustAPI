@@ -1905,3 +1905,40 @@ the OpenAPI parity test.
 tests: `static_files::tests::test_mount_resolve_prefix`,
 `test_mount_traversal_blocked_through_prefix`, and
 `integration::test_static_mount_prefix_and_spa_fallback`.
+
+## ADR-055 — 2026-07-16 — Configurable max request body size (413 on overflow)
+
+**Context:** The request body cap was a hardcoded `50 * 1024 * 1024` (50 MiB)
+buried at four read sites (core `execute_handler` Echo path; Python
+`make_native_handler` native-fast-path and the Python-handler path; plus the
+`serve()` default-routes path). It was invisible to operators and could not be
+tightened for endpoints that only expect small payloads — a memory-exhaustion
+DoS exposure on untrusted ingress.
+
+**Decision / changes:**
+1. **Single source of truth.** Added `const DEFAULT_MAX_BODY_SIZE = 50 * 1024
+   * 1024` in `server/mod.rs`. Every read site now derives its cap from a
+   threaded `max_body_size: usize` value rather than a literal.
+2. **Builder surface.** `Server::with_max_body_size(bytes)` (Rust) and
+   `JustAPIApp.run(addr, max_body_size=...)` (Python, default 50 MiB) plumb the
+   cap through `make_handler` → `execute_handler` (core) and `make_native_handler`
+   → both body reads (Python). `serve()`'s default-routes path uses the default.
+3. **Correct status code.** Previously an oversized body surfaced as a generic
+   `400`/`500`/`404`. The `http_body_util::Limited` length-limit error now maps
+   to `413 Payload Too Large` with `{"detail":"payload too large"}` on every
+   affected path (core Echo, Python native fast path, Python handler path).
+4. **Test handler** (`make_test_handler`, used by the async test client) takes
+   the same parameter; the test-client call site passes the default.
+
+**Evidence:** New Rust integration test `integration::test_max_body_size_enforced`
+(binds `limit=1024`, asserts a 512-byte echo returns 200 and a 1025-byte body
+returns 413). New pytest suite `test_max_body_size.py` (`test_max_body_size_enforced`
++ `test_max_body_size_default_accepts_large`) passes against a real server.
+`cargo test --workspace`, `cargo clippy --workspace --tests -D warnings`, and
+`cargo fmt --check` all clean.
+
+**Note:** `crates/justapi-py/test_graphql.py::test_graphql` fails with 404 — the
+Python package does not yet expose a `graphql()` builder, so `/graphql` is never
+registered. This is a pre-existing gap unrelated to this change (the core has a
+`Handler::GraphQL`, but no Python binding wires it up). Tracked separately.
+
