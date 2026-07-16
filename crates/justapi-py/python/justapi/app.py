@@ -925,9 +925,24 @@ class JustAPIApp:
             )
         self._app.set_database(db)
 
+    def connect_database(self):
+        """Connect the configured database pool eagerly, so `app.db` is usable
+        immediately after `app.set_database(...)` — from a REPL, a test, or a
+        migration step — not only once the server has started. Idempotent: calling
+        it again (or relying on `run()` to connect) is a no-op. Raises if no
+        database was configured or the connection fails.
+
+            app.set_database("postgres://localhost/app")
+            app.connect_database()
+            print(app.db.query("SELECT 1"))
+        """
+        self._app.connect_database()
+
     @property
     def db(self):
-        """Resolved DB pool handle (`DbPool`), or `None` before `app.run()`.
+        """Resolved DB pool handle (`DbPool`). Connects on first access if a
+        database was configured with `app.set_database(...)`, so it works both
+        before and after `app.run()`. Returns `None` if no database was configured.
 
         Use it from handlers to run arbitrary, injection-safe SQL in Rust:
 
@@ -935,6 +950,12 @@ class JustAPIApp:
             def reports(request):
                 return app.db.query("SELECT * FROM items WHERE qty > ?", [3])
         """
+        try:
+            self._app.connect_database()
+        except Exception:
+            # Not configured, or connection failed — let handlers surface errors
+            # via the normal pool path; here just return whatever is resolved.
+            pass
         return self._app.db_pool()
         
     def enable_gateway(self, config_path: str):

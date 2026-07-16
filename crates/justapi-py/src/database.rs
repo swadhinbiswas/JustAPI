@@ -166,6 +166,12 @@ impl DbPool {
     pub fn new(inner: justapi_core::db::AnyPool, rt: tokio::runtime::Handle) -> Self {
         Self { inner, rt }
     }
+
+    /// Borrow the underlying core pool (used internally by the server entrypoint
+    /// to wire the same pool into the Rust-native CRUD handler).
+    pub fn as_any_pool(&self) -> justapi_core::db::AnyPool {
+        self.inner.clone()
+    }
 }
 
 #[pymethods]

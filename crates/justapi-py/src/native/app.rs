@@ -56,10 +56,16 @@ pub struct JustAPIApp {
     pub batch_configs: Vec<Option<(usize, u64)>>,
     pub plugins: Vec<Py<PyAny>>,
     pub database: Option<Database>,
-    /// Resolved DB pool (set during `run()`), exposed to Python handlers via the
-    /// `DbPool` bridge so application code can run arbitrary, injection-safe SQL
-    /// without losing the GIL-avoidance win (ADR-056 follow-up).
+    /// Resolved DB pool (set once `connect_database` or `run()` resolves the
+    /// configured database), exposed to Python handlers via the `DbPool` bridge so
+    /// application code can run arbitrary, injection-safe SQL without losing the
+    /// GIL-avoidance win (ADR-056 follow-up). Available before `run()` if the pool
+    /// was connected eagerly.
     pub db_pool: Option<crate::database::DbPool>,
+    /// Persistent tokio runtime that owns the `db_pool` handle when the pool was
+    /// connected eagerly (outside `run()`). Kept alive for the app's lifetime so
+    /// the `DbPool`'s `Handle` stays valid for the whole process.
+    pub db_runtime: Option<tokio::runtime::Runtime>,
     pub grpc_addr: Option<std::net::SocketAddr>,
     pub grpc_handlers: std::collections::HashMap<String, Py<PyAny>>,
     pub ws_routes: std::collections::HashMap<String, Py<PyAny>>,
@@ -316,6 +322,7 @@ impl JustAPIApp {
             plugins: Vec::new(),
             database: None,
             db_pool: None,
+            db_runtime: None,
             grpc_addr: None,
             grpc_handlers: std::collections::HashMap::new(),
             ws_routes: std::collections::HashMap::new(),
@@ -1163,9 +1170,61 @@ impl JustAPIApp {
         self.database.clone()
     }
 
+    /// Connect the configured database pool eagerly, outside of `run()`, so that
+    /// `app.db` is usable immediately after `app.set_database(...)` (e.g. from a
+    /// REPL, a test, or a migration step) — not only once the server has started.
+    ///
+    /// This is idempotent: if the pool is already resolved it returns early. The
+    /// DB round-trip runs with the GIL released on a throwaway tokio runtime.
+    fn connect_database(&mut self, py: Python<'_>) -> PyResult<()> {
+        if self.db_pool.is_some() {
+            return Ok(());
+        }
+        let config = match self.database.as_ref() {
+            Some(db) => db.to_config(),
+            None => {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "no database configured; call app.set_database(url) first",
+                ))
+            }
+        };
+        let rt = tokio::runtime::Runtime::new()
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        let handle = rt.handle().clone();
+        // Connect + bootstrap inside one GIL-released async block so no Python
+        // token is alive during the DB round-trip. Returns an owned pool.
+        let pool = py
+            .detach(|| {
+                rt.block_on(async {
+                    let mut mgr = justapi_core::db::PoolManager::new();
+                    let pool = mgr.init("", config.clone()).await.map_err(|e| e.to_string())?;
+                    if let Some(sql) = &config.init_sql {
+                        for stmt in sql.split(';') {
+                            let stmt = stmt.trim();
+                            if !stmt.is_empty() {
+                                pool.execute(stmt).await.map_err(|e| e.to_string())?;
+                            }
+                        }
+                    }
+                    if let Some(interval) = config.health_check_interval {
+                        let mgr = std::sync::Arc::new(mgr);
+                        mgr.spawn_health_checks(interval).await;
+                    }
+                    Ok::<_, String>(pool)
+                })
+            })
+            .map_err(|e: String| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+        // Keep the runtime alive for the app's lifetime so the DbPool's Handle
+        // remains valid (e.g. for REPL/test use before `run()`).
+        self.db_runtime = Some(rt);
+        self.db_pool = Some(crate::database::DbPool::new(pool, handle));
+        Ok(())
+    }
+
     /// Return the resolved DB pool handle (`DbPool`) if a database was configured
-    /// and the server has started, else `None`. Handlers use this to run
-    /// arbitrary, injection-safe SQL in Rust (no GIL during the DB round-trip).
+    /// and the pool is connected (via `connect_database` or after `run()` starts),
+    /// else `None`. Handlers use this to run arbitrary, injection-safe SQL in Rust
+    /// (no GIL during the DB round-trip).
     fn db_pool(&self) -> Option<crate::database::DbPool> {
         self.db_pool.clone()
     }
@@ -1377,7 +1436,27 @@ impl JustAPIApp {
             vec![None; schema_jsons.len()];
         let schema_validators = Arc::new(schema_validators);
         let batch_configs_arc = Arc::new(std::mem::take(&mut app.batch_configs));
-        let database_config = app.database.take().map(|d| d.to_config());
+        let database_config = app.database.as_ref().map(|d| d.to_config());
+
+        // Eagerly resolve the pool now (if configured and not already connected)
+        // so the rest of `run` and any handler sees a ready `app.db`. `connect_database`
+        // reads `self.database`, so we keep it (no `.take()`).
+        if database_config.is_some() && app.db_pool.is_none() {
+            let connect_err = match app.connect_database(py) {
+                Ok(()) => None,
+                Err(e) => Some(e.to_string()),
+            };
+            if let Some(msg) = connect_err {
+                return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
+                    "Database init error: {}",
+                    msg
+                )));
+            }
+        }
+        // Capture the (now resolved) pool before the borrow is released, so the
+        // detached server loop — which must be `Send` — can use it without moving
+        // the non-`Send` `PyRefMut`.
+        let db_pool = app.db_pool.clone();
         let plugins = std::mem::take(&mut app.plugins);
         let grpc_addr = app.grpc_addr.take();
         let grpc_handlers = Arc::new(std::mem::take(&mut app.grpc_handlers));
@@ -1416,57 +1495,8 @@ impl JustAPIApp {
         let result = py.detach(move || -> Result<(), anyhow::Error> {
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(async {
-                // Initialize database pool if configured, and build transaction-aware handler.
-                    let db_pool = if let Some(ref config) = database_config {
-                    let mut mgr = justapi_core::db::PoolManager::new();
-                    match mgr.init("", config.clone()).await {
-                        Ok(pool) => {
-                            tracing::info!("Database pool initialized ({:?})", pool.kind());
-                            // Bootstrap schema if provided. Multiple statements
-                            // (separated by `;`) are each run in order — this is a
-                            // startup DDL bootstrap, not a request path.
-                            if let Some(sql) = &config.init_sql {
-                                for stmt in sql.split(';') {
-                                    let stmt = stmt.trim();
-                                    if stmt.is_empty() {
-                                        continue;
-                                    }
-                                    if let Err(e) = pool.execute(stmt).await {
-                                        tracing::error!("Database init_sql failed: {}", e);
-                                        return Err(anyhow::anyhow!("Database init_sql error: {}", e));
-                                    }
-                                }
-                            }
-                            // Optional background health-check loop.
-                            if let Some(interval) = config.health_check_interval {
-                                let mgr = std::sync::Arc::new(mgr);
-                                mgr.spawn_health_checks(interval).await;
-                            }
-                            Some(pool)
-                        }
-                        Err(e) => {
-                            tracing::error!("Failed to initialize database pool: {}", e);
-                            return Err(anyhow::anyhow!("Database init error: {}", e));
-                        }
-                    }
-                } else {
-                    None
-                };
-
-                // Expose the resolved pool to Python handlers (Rust-owned,
-                // injection-safe query/execute via the DbPool bridge). Done after
-                // the async block; set via `Python::attach` so no outer `Python`
-                // token crosses the GIL boundary.
-                if let Some(ref pool) = db_pool {
-                    let handle = rt.handle().clone();
-                    let pool_inner = pool.clone();
-                    Python::attach(|py| {
-                        let slf_py = slf.clone_ref(py);
-                        slf_py.borrow_mut(py).db_pool =
-                            Some(crate::database::DbPool::new(pool_inner, handle));
-                    });
-                }
-
+                // `db_pool` is the resolved `DbPool` (already connected), ready
+                // for handlers and exposed to Python.
                 let db_url_str = database_config.as_ref().map(|c| c.url.clone());
 
                 // A Rust-native CRUD route (ADR-056) needs a database pool; fail
@@ -1579,7 +1609,7 @@ impl JustAPIApp {
                     schema_jsons,
                     query_schema_jsons.clone(),
                     batchers,
-                    db_pool.clone(),
+                    db_pool.as_ref().map(|p| p.as_any_pool()),
                     db_url_str,
                     "http".to_string(),
                     app_py_http1,

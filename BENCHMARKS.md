@@ -1453,3 +1453,12 @@ against live Aiven Postgres now also covers:
 All endpoints return 200 ("DBPOOL SMOKE OK"). Same ~110 ms/round-trip Aiven
 network bound as before — no added latency. CLI `justapi create <app> --db
 {postgres,mysql,sqlite}` scaffolds a DB-wired project for each engine (verified).
+
+### P1 follow-up 2 — `app.db` usable before `run()` (2026-07-17)
+
+`JustAPIApp.connect_database()` resolves the pool eagerly (kept alive on a
+dedicated runtime); the `app.db` property lazy-connects on first access. Verified
+against Aiven Postgres in `benchmarks/smoke_dbpool_prerun.py`: `app.db` is live
+**before any socket is bound** — `SELECT 1`, `DELETE`/`INSERT`, `SELECT` all
+succeed pre-`run()`, and a served route reuses the same pool. No added latency
+(same ~110 ms Aiven network bound). Gates green.

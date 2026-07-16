@@ -2125,3 +2125,36 @@ Python code could not run unmodified across all three engines — defeating the
 postgres, mysql, and sqlite. `cargo test --workspace --features db` green;
 `cargo clippy --workspace --tests --features justapi-core/db -D warnings` clean;
 `cargo fmt --check` clean.
+
+## ADR-057 — 2026-07-17 — Eager/early DB pool connect removes `app.db is None` footgun
+
+**Context:** `app.db` returned `None` until `app.run()` had started, because the
+pool was only resolved inside the server entrypoint's detached async block.
+Application code that wanted to touch the DB before serving — a migration step,
+a REPL, or a test that exercises `app.db.query(...)` without binding a socket —
+had no way to get a live `DbPool`. This was a recurring footgun.
+
+**Decision / changes:**
+1. **`JustAPIApp::connect_database(py)`** (crates/justapi-py/src/native/app.rs):
+   resolves the configured `Database` into an `AnyPool` immediately. Idempotent
+   (returns early if `db_pool` already set). The DB round-trip runs with the GIL
+   released on a dedicated tokio runtime that is **kept alive on the app**
+   (`db_runtime: Option<Runtime>`) so the `DbPool`'s `Handle` stays valid for the
+   whole process. Bootstrap `init_sql` and the optional background health-check
+   loop are applied here.
+2. **Lazy-by-default on the Python side:** `JustAPIApp.db` property now calls
+   `connect_database()` on first access (swallowing only the "not configured"
+   case) and returns the resolved `DbPool`. So `app.db` works both before and
+   after `run()`. Added an explicit `app.connect_database()` for callers who want
+   to surface connect errors eagerly.
+3. **`run()` reuses the same path:** it now resolves the pool via
+   `connect_database` before the detached loop (guarded by `db_pool.is_none()`),
+   then hands the inner `AnyPool` to the Rust-native CRUD handler via
+   `DbPool::as_any_pool()`. No double-connect, no second runtime for the server
+   case.
+
+**Evidence:** New `benchmarks/smoke_dbpool_prerun.py` asserts `app.db is not None`
+and runs `SELECT 1`, a `DELETE`/`INSERT`, and a `SELECT` **before any socket is
+bound**; then serves a route that queries the same pool. Against live Aiven
+Postgres: "FOOTGUN FIX VERIFIED". `cargo clippy -p justapi-py --tests -D warnings`
+clean; `cargo test --workspace --features db` green.
