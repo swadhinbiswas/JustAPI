@@ -7,7 +7,7 @@ license.workspace = true
 [features]
 default = ["opentelemetry"]
 tls = ["rustls", "tokio-rustls", "rustls-pemfile"]
-ws = ["tokio-tungstenite", "sha1", "base64"]
+ws = ["tokio-tungstenite", "sha1"]
 compression = []
 brotli-compression = ["compression", "brotli"]
 zstd-compression = ["compression", "zstd"]
@@ -45,7 +45,7 @@ simd-json = { workspace = true, optional = true }
 tokio-tungstenite = { workspace = true, optional = true }
 tokio-stream.workspace = true
 sha1 = { workspace = true, optional = true }
-base64 = { workspace = true, optional = true }
+base64 = { workspace = true }
 jsonschema.workspace = true
 rustls = { workspace = true, optional = true }
 tokio-rustls = { workspace = true, optional = true }

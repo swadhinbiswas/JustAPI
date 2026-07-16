@@ -2092,3 +2092,36 @@ Python package does not yet expose a `graphql()` builder, so `/graphql` is never
 registered. This is a pre-existing gap unrelated to this change (the core has a
 `Handler::GraphQL`, but no Python binding wires it up). Tracked separately.
 
+
+## ADR-056 — 2026-07-17 — Cross-engine `?` placeholder normalization + `justapi create <app>`
+
+**Context:** The `DbPool` public API (`query_with_params` / `execute_with_params`
+/ `query_stream` / `transaction`) was documented as injection-safe with bound
+`?` parameters, but Postgres's driver (`sqlx::Any` + Postgres) requires positional
+`$1`, `$2`, … placeholders. Passing `?` to Postgres produced `syntax error at or
+near ")"`. SQLite and MySQL accept `?` natively. Without normalization, the same
+Python code could not run unmodified across all three engines — defeating the
+"pick any engine at scaffold time" promise of the CLI.
+
+**Decision / changes:**
+1. **`AnyPool::normalize_sql(sql)`** (crates/justapi-core/src/db/pool.rs): rewrites
+   each `?` → `$N` when `self.kind == DbKind::Postgres`; returns the SQL unchanged
+   for SQLite/MySQL. Applied in `query_with`, `execute_with`, `query_stream`, and
+   `transaction_with_isolation`. Callers (Python `db.query`/`db.execute`/
+   `db.query_stream`/`db.transaction`) continue to pass `?` everywhere.
+2. **`justapi create <app>` CLI** (crates/justapi-cli/src/main.rs): new
+   `Commands::Create { name, output, db, db_url }`. `--db {sqlite,postgres,mysql}`
+   picks the scaffolded backend (default sqlite); `--db-url` overrides the URL.
+   `resolve_scaffold_db` maps the choice to a default URL; `scaffold_project`
+   writes a full project (app/main.py wired to `Database`, migrations/, static/,
+   .env, README, requirements.txt, Dockerfile, .gitignore). `New` now delegates
+   to `scaffold_project` with sqlite default, removing ~90 lines of duplicated
+   inline logic.
+
+**Evidence:** `benchmarks/smoke_dbpool.py` extended to cover `query_stream`,
+`DbParam.bytes` round-trip (`{"$bytes":...}` wire marker → Postgres `BYTEA`), and
+`transaction`. Run against live Aiven Postgres — all endpoints return 200
+("DBPOOL SMOKE OK"). Verified `justapi create` scaffolds correct `main.py` for
+postgres, mysql, and sqlite. `cargo test --workspace --features db` green;
+`cargo clippy --workspace --tests --features justapi-core/db -D warnings` clean;
+`cargo fmt --check` clean.

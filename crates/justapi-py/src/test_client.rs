@@ -91,6 +91,7 @@ impl JustAPITestClient {
                 max_connections: 5,
                 init_sql: None,
                 pragmas: None,
+                ..Default::default()
             };
             let pool = py
                 .detach(move || -> Result<AnyPool, String> {

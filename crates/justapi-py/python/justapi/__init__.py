@@ -30,7 +30,7 @@ from . import tracing as tracing
 from . import status as status
 
 from ._justapi import serve, TokenStreamResponse, ValidatedStreamResponse, Dag, DagNode, RateLimiter, RateLimitResult, Request, HTTPConnection, Headers, QueryParams, URL, State, RequestStream, UploadFile  # type: ignore[import-untyped]
-from ._justapi import Database, DbPool  # type: ignore[import-untyped]
+from ._justapi import Database, DbPool, DbParam  # type: ignore[import-untyped]
 from .app import JustAPIApp, JustAPI, Depends, adaptive_batch, APIRouter, Controller, controller, route_get, route_post, route_put, route_patch, route_delete, route_query, route_sse, route_websocket, JustAPITestClient, RequestValidationError, Session
 from .system import build_help, build_openapi, register_system_routes
 from .exceptions import HTTPException, WebSocketException
@@ -167,7 +167,7 @@ def pydantic_schema(model_class) -> str:
 
 
 __all__ = [
-    "serve", "JustAPIApp", "JustAPI", "Depends", "Database", "DbPool", "Schema", "pydantic_schema", 
+    "serve", "JustAPIApp", "JustAPI", "Depends", "Database", "DbPool", "DbParam", "Schema", "pydantic_schema", 
     "JustAPITestClient", "testing", "tracing", "Jinja2Templates", "BackgroundTasks", 
     "TokenStreamResponse", "ValidatedStreamResponse", "WebSocket", "Dag", "DagNode", "RateLimiter", "RateLimitResult",
     "adaptive_batch", "APIRouter", "Controller", "controller", 

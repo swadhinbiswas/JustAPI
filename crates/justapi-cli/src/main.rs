@@ -152,6 +152,26 @@ enum Commands {
         output: Option<PathBuf>,
     },
 
+    /// Create a new JustAPI project with a database backend wired in.
+    ///
+    /// Prompts are avoided: pass `--db` to pick the engine, or `--db-url` to
+    /// supply a full connection string (engine is inferred from the URL scheme).
+    /// Defaults to SQLite (zero-config, file-based).
+    Create {
+        /// Name of the project
+        name: String,
+        /// Output directory (defaults to project name)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        /// Database engine: `sqlite` (default), `postgres`, or `mysql`.
+        #[arg(long, default_value = "sqlite")]
+        db: String,
+        /// Full database connection URL. Overrides `--db` (engine is inferred
+        /// from the scheme: `postgres://`, `sqlite://`, `mysql://`).
+        #[arg(long)]
+        db_url: Option<String>,
+    },
+
     /// Profile a running JustAPI server (built-in load test)
     Profile {
         /// Target server address
@@ -268,6 +288,158 @@ fn emit_rich_error(err: &anyhow::Error) {
         let d = Diagnostic::new(DiagLevel::Error, msg);
         d.emit();
     }
+}
+
+/// Resolve the database engine + connection URL for a scaffolded project.
+///
+/// `--db-url` wins (engine inferred from its scheme); otherwise `--db` picks a
+/// sensible default URL for the chosen engine.
+fn resolve_scaffold_db(db: &str, db_url: Option<String>) -> anyhow::Result<(String, String)> {
+    if let Some(url) = db_url {
+        let kind = if url.starts_with("postgres://") || url.starts_with("postgresql://") {
+            "postgres"
+        } else if url.starts_with("sqlite://") || url.starts_with("sqlite:") {
+            "sqlite"
+        } else if url.starts_with("mysql://") || url.starts_with("mariadb://") {
+            "mysql"
+        } else {
+            anyhow::bail!("Unrecognized database URL scheme: {}", url);
+        };
+        Ok((kind.to_string(), url))
+    } else {
+        let kind = match db.to_ascii_lowercase().as_str() {
+            "postgres" | "postgresql" => "postgres",
+            "mysql" | "mariadb" => "mysql",
+            "sqlite" => "sqlite",
+            other => anyhow::bail!(
+                "Unsupported --db '{}'. Choose one of: sqlite, postgres, mysql",
+                other
+            ),
+        };
+        let url = match kind {
+            "postgres" => "postgres://user:pass@localhost:5432/app".to_string(),
+            "mysql" => "mysql://user:pass@localhost:3306/app".to_string(),
+            _ => format!("sqlite://{name}.db", name = "{name}"),
+        };
+        Ok((kind.to_string(), url))
+    }
+}
+
+/// Generate the `app/main.py` for a scaffolded project, wired to the chosen DB.
+fn scaffold_main_py(name: &str, db_kind: &str, db_url: &str) -> String {
+    let db_setup = match db_kind {
+        "postgres" => format!(
+            "app.set_database(\n    \"{url}\",\n    init_sql=\"\"\"\n    CREATE TABLE IF NOT EXISTS items (\n        id SERIAL PRIMARY KEY,\n        name TEXT NOT NULL,\n        qty INT NOT NULL DEFAULT 0\n    )\n    \"\"\",\n)",
+            url = db_url
+        ),
+        "mysql" => format!(
+            "app.set_database(\n    \"{url}\",\n    init_sql=\"\"\"\n    CREATE TABLE IF NOT EXISTS items (\n        id INT AUTO_INCREMENT PRIMARY KEY,\n        name VARCHAR(255) NOT NULL,\n        qty INT NOT NULL DEFAULT 0\n    )\n    \"\"\",\n)",
+            url = db_url
+        ),
+        _ => format!(
+            "app.set_database(\n    \"{url}\",\n    pragmas=[\"journal_mode=WAL\"],\n    init_sql=\"\"\"\n    CREATE TABLE IF NOT EXISTS items (\n        id INTEGER PRIMARY KEY AUTOINCREMENT,\n        name TEXT NOT NULL,\n        qty INTEGER NOT NULL DEFAULT 0\n    )\n    \"\"\",\n)",
+            url = db_url
+        ),
+    };
+    format!(
+        r#""""JustAPI application — {name}
+
+Database backend: {kind} (URL: {url})
+"""
+from justapi import JustAPIApp, Database
+
+app = JustAPIApp()
+
+# Wire the database. `app.db` is available inside handlers once the server runs.
+{dbsetup}
+
+
+@app.get("/items")
+def list_items(request):
+    # Runs entirely in Rust (GIL released) with bound parameters.
+    return app.db.query("SELECT * FROM items ORDER BY id")
+
+
+@app.post("/items")
+def add_item(request):
+    data = request.json()
+    app.db.execute(
+        "INSERT INTO items (name, qty) VALUES (?, ?)",
+        [data.get("name"), data.get("qty", 0)],
+    )
+    return {{"ok": True}}
+
+
+@app.get("/")
+def root(request):
+    return {{"message": "Hello from {name}!", "db": "{kind}"}}
+"#,
+        name = name,
+        kind = db_kind,
+        url = db_url,
+        dbsetup = db_setup,
+    )
+}
+
+/// Scaffold a new JustAPI project (shared by `new` and `create`).
+fn scaffold_project(
+    name: &str,
+    output: Option<PathBuf>,
+    db_kind: &str,
+    db_url: &str,
+) -> anyhow::Result<()> {
+    let project_dir = output.unwrap_or_else(|| PathBuf::from(name));
+    if project_dir.exists() {
+        anyhow::bail!("Directory '{}' already exists", project_dir.display());
+    }
+    std::fs::create_dir_all(&project_dir)?;
+    std::fs::create_dir_all(project_dir.join("app"))?;
+    std::fs::create_dir_all(project_dir.join("migrations"))?;
+    std::fs::create_dir_all(project_dir.join("static"))?;
+
+    std::fs::write(project_dir.join("app").join("__init__.py"), "")?;
+    std::fs::write(
+        project_dir.join("app").join("main.py"),
+        scaffold_main_py(name, db_kind, db_url),
+    )?;
+
+    let env = format!(
+        "# {name} configuration\nHOST=127.0.0.1\nPORT=8080\n# Database engine: {kind}\nDATABASE_URL={url}\n# SECRET_KEY=change-me\n",
+        name = name,
+        kind = db_kind,
+        url = db_url,
+    );
+    std::fs::write(project_dir.join(".env"), env)?;
+
+    std::fs::write(
+        project_dir.join("requirements.txt"),
+        "# Add your Python dependencies here\n# justapi is pre-installed with the runtime\n",
+    )?;
+
+    let readme = format!(
+        "# {name}\n\nA JustAPI application (database backend: {kind}).\n\n## Quick start\n\n```bash\njustapi create {name} --db {kind}   # or: justapi new {name}\ncd {dir}\njustapi serve\n```\n\n## Database\n\nConnection: `{url}`\n\n```bash\n# Run migrations\njustapi db migrate --url \"{url}\"\n\n# Start with hot reload\njustapi serve --reload\n```\n",
+        name = name,
+        kind = db_kind,
+        dir = project_dir.display(),
+        url = db_url,
+    );
+    std::fs::write(project_dir.join("README.md"), readme)?;
+
+    std::fs::write(
+        project_dir.join(".gitignore"),
+        "*.pyc\n__pycache__/\n.env\n*.egg-info/\ndist/\nbuild/\n*.db\n",
+    )?;
+
+    std::fs::write(
+        project_dir.join("Dockerfile"),
+        "FROM python:3.12-slim\nWORKDIR /app\nCOPY requirements.txt .\nRUN pip install justapi\nCOPY . .\nEXPOSE 8080\nCMD [\"justapi\", \"serve\", \"--host\", \"0.0.0.0\", \"--port\", \"8080\"]\n",
+    )?;
+
+    println!("✅ Created new JustAPI project '{}' (database: {})", name, db_kind);
+    println!();
+    println!("  cd {}", project_dir.display());
+    println!("  justapi serve");
+    Ok(())
 }
 
 async fn run() -> anyhow::Result<()> {
@@ -530,6 +702,7 @@ async fn run() -> anyhow::Result<()> {
                     kind: None,
                     init_sql: None,
                     pragmas: None,
+                    ..Default::default()
                 };
                 let mut mgr = justapi_core::db::PoolManager::new();
                 let pool = mgr.init("", config).await?;
@@ -553,6 +726,7 @@ async fn run() -> anyhow::Result<()> {
                     kind: None,
                     init_sql: None,
                     pragmas: None,
+                    ..Default::default()
                 };
                 let mut mgr = justapi_core::db::PoolManager::new();
                 let pool = mgr.init("", config).await?;
@@ -570,6 +744,7 @@ async fn run() -> anyhow::Result<()> {
                     kind: None,
                     init_sql: None,
                     pragmas: None,
+                    ..Default::default()
                 };
                 let mut mgr = justapi_core::db::PoolManager::new();
                 let pool = mgr.init("", config).await?;
@@ -725,102 +900,12 @@ async fn run() -> anyhow::Result<()> {
             Ok(())
         }
         Commands::New { name, output } => {
-            let project_dir = output.unwrap_or_else(|| PathBuf::from(&name));
-            if project_dir.exists() {
-                anyhow::bail!("Directory '{}' already exists", project_dir.display());
-            }
-            std::fs::create_dir_all(&project_dir)?;
-            std::fs::create_dir_all(project_dir.join("app"))?;
-            std::fs::create_dir_all(project_dir.join("migrations"))?;
-            std::fs::create_dir_all(project_dir.join("static"))?;
-
-            // Create main.py
-            let main_py = format!(
-                r#""""JustAPI application — {}
-"""
-
-from justapi import JustAPIApp
-
-app = JustAPIApp()
-
-
-@app.get("/")
-async def root():
-    return {{"message": "Hello from {}!"}}
-
-
-@app.get("/health")
-async def health():
-    return {{"status": "healthy"}}
-
-
-if __name__ == "__main__":
-    app.run()
-"#,
-                name, name
-            );
-            std::fs::write(project_dir.join("app").join("__init__.py"), "")?;
-            std::fs::write(project_dir.join("app").join("main.py"), &main_py)?;
-
-            // Create .env
-            let env = format!(
-                r#"# {} configuration
-HOST=127.0.0.1
-PORT=8080
-# DATABASE_URL=postgres://user:pass@localhost:5432/{}
-# SECRET_KEY=change-me
-"#,
-                name, name
-            );
-            std::fs::write(project_dir.join(".env"), &env)?;
-
-            // Create requirements.txt
-            std::fs::write(
-                project_dir.join("requirements.txt"),
-                "# Add your Python dependencies here\n# justapi is pre-installed with the runtime\n",
-            )?;
-
-            // Create README.md
-            let readme = format!(
-                r#"# {}
-
-A JustAPI application.
-
-## Quick start
-
-```bash
-justapi serve
-```
-
-## Development
-
-```bash
-# Install dependencies
-pip install -r requirements.txt
-
-# Run migrations
-justapi db migrate --url postgres://localhost/{}
-
-# Start server with hot reload
-justapi serve --reload
-```
-"#,
-                name, name
-            );
-            std::fs::write(project_dir.join("README.md"), &readme)?;
-
-            // Create .gitignore
-            std::fs::write(
-                project_dir.join(".gitignore"),
-                "*.pyc\n__pycache__/\n.env\n*.egg-info/\ndist/\nbuild/\n",
-            )?;
-
-            println!("✅ Created new JustAPI project '{}'", name);
-            println!();
-            println!("  cd {}", project_dir.display());
-            println!("  justapi serve");
-
-            Ok(())
+            // Default scaffold: SQLite (zero-config).
+            scaffold_project(&name, output, "sqlite", "sqlite://app.db")
+        }
+        Commands::Create { name, output, db, db_url } => {
+            let (kind, url) = resolve_scaffold_db(&db, db_url)?;
+            scaffold_project(&name, output, &kind, &url)
         }
         Commands::Profile { addr, duration, connections, output } => {
             println!("🔬 JustAPI Profiler");

@@ -1436,3 +1436,20 @@ runs on the captured tokio `Handle` outside any `Python` token). Throughput is
 therefore identical in shape to Step D — bounded by network + pool concurrency,
 not by JustAPI. Gates: `cargo test --workspace --features db`, clippy `-D
 warnings` on both crates, `cargo fmt --check`, pytest green, Aiven smoke.
+
+### P1 follow-up — cross-engine `?` placeholders, `DbParam.bytes`, stream (2026-07-17)
+
+`AnyPool` now normalizes `?` → `$N` for Postgres internally, so Python handlers
+pass `?` unmodified on every engine. Extended smoke (`benchmarks/smoke_dbpool.py`)
+against live Aiven Postgres now also covers:
+
+| Call | Result |
+|---|---|
+| `db.query_stream("SELECT id FROM dbpool_demo ORDER BY id", None, 2)` | `{"chunks":N, "first":[…]}` (bounded chunks) |
+| `db.execute("INSERT INTO blobs(data) VALUES (?)", [DbParam.bytes(b"\x01\x02\x03")])` | row inserted (BYTEA) |
+| `db.query("SELECT data FROM blobs …")` | `[{"data":{"$bytes":"AQID"}}]` (base64 wire → JSON) |
+| `db.transaction([(…),(…)], isolation="serializable")` | commit, isolation applied for PG/MySQL |
+
+All endpoints return 200 ("DBPOOL SMOKE OK"). Same ~110 ms/round-trip Aiven
+network bound as before — no added latency. CLI `justapi create <app> --db
+{postgres,mysql,sqlite}` scaffolds a DB-wired project for each engine (verified).

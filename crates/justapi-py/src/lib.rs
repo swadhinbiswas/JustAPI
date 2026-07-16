@@ -14,7 +14,7 @@ mod test_client;
 mod websocket;
 
 pub use dag::{Dag, DagNode};
-pub use database::{Database, DbPool};
+pub use database::{Database, DbParam, DbPool};
 pub use multipart::UploadFile;
 pub use native::{validate_value, TokenStreamResponse, ValidatedStreamResponse};
 pub use rate_limit::PyRateLimitResult;
@@ -69,6 +69,7 @@ fn _justapi(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<UploadFile>()?;
     m.add_class::<Database>()?;
     m.add_class::<DbPool>()?;
+    m.add_class::<DbParam>()?;
     m.add_class::<Dag>()?;
     m.add_class::<DagNode>()?;
     m.add_class::<background::BackgroundTasks>()?;
