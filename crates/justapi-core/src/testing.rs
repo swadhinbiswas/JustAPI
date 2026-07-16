@@ -9,6 +9,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use hyper_util::rt::TokioIo;
 
 use crate::middleware::HandlerFn;
+use tracing;
 
 /// An in-memory HTTP test response.
 #[derive(Debug, Clone)]
@@ -87,7 +88,12 @@ impl TestClient {
             match hyper::server::conn::http1::Builder::new().serve_connection(io, svc).await {
                 Ok(()) => {}
                 Err(e) => {
-                    panic!("Test server connection error: {}", e);
+                    // A body-stream error (e.g. a validated stream aborting on an
+                    // invalid item) surfaces here as a connection-level error. That
+                    // is expected application behavior, not a harness bug, so log it
+                    // instead of panicking — panicking aborts the whole test process
+                    // under `panic = "abort"`.
+                    tracing::debug!("Test server connection closed with error: {}", e);
                 }
             }
         });
