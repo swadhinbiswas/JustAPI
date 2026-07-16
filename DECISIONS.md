@@ -2184,3 +2184,34 @@ body-stream error — aborting the entire test process.
 **Evidence:** `pytest crates/justapi-py/python/justapi/` → 120 passed, 1 skipped
 (previously aborted). `cargo test --workspace --features db` green; clippy
 `-D warnings` clean; `cargo fmt --check` clean.
+
+## ADR-059 — 2026-07-17 — `Request.json()/body()/form()` must not require an event loop
+
+**Context:** A framework audit (background tasks, routes, request handling) found
+that a **sync** handler accessing `request.json()` / `request.body()` /
+`request.form()` raised `RuntimeError: no running event loop`. Root cause:
+`Request::json`/`body`/`form` in `crates/justapi-py/src/request.rs` returned their
+value wrapped in `pyo3_async_runtimes::tokio::future_into_py(...)`, i.e. an
+awaitable coroutine. Under the real server the sync handler runs on the daemon
+event-loop thread (so it happened to work), but the `JustAPITestClient` path
+(`make_test_handler`) runs sync handlers on a plain worker thread with **no**
+running loop — so `request.json()` crashed every sync handler that parsed a body
+through the test client. `body()`/`form()` had the same latent defect.
+
+**Decision / change:** Make `json()`, `body()`, and `form()` pure synchronous
+returns (they are CPU-only parses — no I/O). `receive`/`close`/`is_disconnected`
+remain async (legitimate ASGI coroutines). Updated the two `await request.*`
+call sites (`system.py` `tools_call_handler`, `test_request_parity.py`) to call
+them without `await`. Added `test_sync_handler_body_json_no_event_loop` to lock
+the regression in.
+
+**Evidence:** New repro + test confirm `request.json()` works in a sync handler
+via `JustAPITestClient` (previously `RuntimeError: no running event loop`). Full
+suite 120 passed / 1 skipped; `cargo test --workspace --features db`, clippy
+`-D warnings`, `cargo fmt --check` all green.
+
+**Other audit observations (not changed):** (1) Registering two `GET` routes on
+the same path raises `ValueError` ("route conflict") from the `matchit` router —
+FastAPI/Starlette let the last win; this is a deliberate hard-fail, documented
+here. (2) Trailing-slash mismatch is not normalized: a route declared `/trail/`
+returns 404 for `/trail`. Consistent with the hard-fail philosophy; left as-is.

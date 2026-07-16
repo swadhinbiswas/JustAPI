@@ -344,7 +344,7 @@ def _help_handler_factory(app):
         return JSONResponse({"tools": app.list_tools(), "count": len(app.list_tools())})
 
     async def tools_call_handler(request):
-        body = await request.json()
+        body = request.json()
         name = body.get("name")
         arguments = body.get("arguments", {})
         if not name:
