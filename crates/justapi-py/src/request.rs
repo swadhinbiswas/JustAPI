@@ -344,22 +344,28 @@ impl Request {
 
     #[pyo3(signature = ())]
     fn body<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let body = PyBytes::new(py, &self.body_raw).into_any().unbind();
-        future_into_py(py, async move { Ok(body) })
+        // Pure synchronous parse: returns the bytes directly so it works in both
+        // sync and async handlers (no running event loop required). Previously this
+        // wrapped the value in `future_into_py`, which raised "no running event
+        // loop" for sync handlers invoked without a loop (e.g. via the test client).
+        Ok(PyBytes::new(py, &self.body_raw).into_any())
     }
 
     #[pyo3(signature = ())]
     fn json<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let parsed = {
-            let json_module = py.import("json")?;
-            let body_bytes = PyBytes::new(py, &self.body_raw);
-            json_module.getattr("loads")?.call1((body_bytes,))?.unbind()
-        };
-        future_into_py(py, async move { Ok(parsed) })
+        // Pure synchronous parse: returns the parsed value directly so it works in
+        // both sync and async handlers without requiring a running event loop.
+        let json_module = py.import("json")?;
+        let body_bytes = PyBytes::new(py, &self.body_raw);
+        let loads = json_module.getattr("loads")?;
+        let parsed = loads.call1((body_bytes,))?;
+        Ok(parsed)
     }
 
     #[pyo3(signature = ())]
-    fn form<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+    fn form(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        // Pure synchronous parse: returns the form dict directly so it works in
+        // both sync and async handlers without requiring a running event loop.
         let result = if let Some(ref d) = self.form_data {
             d.bind(py).clone().into_any().unbind()
         } else {
@@ -388,7 +394,7 @@ impl Request {
                 PyDict::new(py).into_any().unbind()
             }
         };
-        future_into_py(py, async move { Ok(result) })
+        Ok(result)
     }
 
     #[pyo3(signature = ())]

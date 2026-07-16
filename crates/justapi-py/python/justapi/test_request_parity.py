@@ -62,8 +62,8 @@ def test_request_body_json_form():
     app = JustAPIApp()
 
     async def inspect(request):
-        body = await request.body()
-        parsed = await request.json()
+        body = request.body()
+        parsed = request.json()
         return {"len": len(body), "parsed": parsed}
 
     app.post("/data", inspect)
@@ -77,7 +77,7 @@ def test_request_body_json_form():
     assert data["parsed"] == {"x": 7}
 
     async def form_inspect(request):
-        form = await request.form()
+        form = request.form()
         return {"a": form.get("a"), "b": form.get("b")}
 
     app.post("/form", form_inspect)
@@ -135,8 +135,29 @@ def test_app_url_for_and_include_router():
     assert data["pong"] is True
 
 
+def test_sync_handler_body_json_no_event_loop():
+    """`request.body()` / `request.json()` must work inside a *sync* handler,
+    where no asyncio event loop is running (e.g. under the test client). They are
+    pure synchronous parses and must not require `await`."""
+    app = JustAPIApp()
+
+    def handler(request):
+        return {"len": len(request.body()), "parsed": request.json()}
+
+    app.post("/data", handler)
+    client = JustAPITestClient(app)
+    resp = client.post_with(
+        "/data", b'{"x": 7}', [("Content-Type", "application/json")]
+    )
+    assert resp["status"] == 200
+    data = json.loads(bytes(resp["body"]))
+    assert data["len"] == 8
+    assert data["parsed"] == {"x": 7}
+
+
 if __name__ == "__main__":
     test_request_attributes_and_mapping()
     test_request_body_json_form()
     test_request_state_isolation_and_url_for()
+    test_sync_handler_body_json_no_event_loop()
     print("PASS: request parity")
