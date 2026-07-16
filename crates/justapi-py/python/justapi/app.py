@@ -895,6 +895,18 @@ class JustAPIApp:
                 pragmas=existing,
             )
         self._app.set_database(db)
+
+    @property
+    def db(self):
+        """Resolved DB pool handle (`DbPool`), or `None` before `app.run()`.
+
+        Use it from handlers to run arbitrary, injection-safe SQL in Rust:
+
+            @app.get("/reports")
+            def reports(request):
+                return app.db.query("SELECT * FROM items WHERE qty > ?", [3])
+        """
+        return self._app.db_pool()
         
     def enable_gateway(self, config_path: str):
         self._app.enable_gateway(config_path)

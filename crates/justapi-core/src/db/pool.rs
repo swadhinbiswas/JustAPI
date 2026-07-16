@@ -180,8 +180,9 @@ impl AnyPool {
     /// array of objects. Parameters are downcast from JSON via [`bind_json`], so
     /// this is injection-safe (no string interpolation). Used by the Rust-native
     /// CRUD handlers (select/update/delete) which build the SQL string but bind
-    /// every value as a parameter.
-    pub(crate) async fn query_with_params(
+    /// every value as a parameter. Also exposed to Python handlers via the
+    /// `DbPool` bridge as `query(sql, params)`.
+    pub async fn query_with_params(
         &self,
         sql: &str,
         params: &[serde_json::Value],
@@ -192,6 +193,63 @@ impl AnyPool {
         }
         let rows = q.fetch_all(&self.inner).await?;
         rows_to_json(rows)
+    }
+
+    /// Run a write (INSERT/UPDATE/DELETE/DDL) with bound parameters. Injection-safe
+    /// (no string interpolation). Returns the number of rows affected.
+    pub async fn execute_with_params(
+        &self,
+        sql: &str,
+        params: &[serde_json::Value],
+    ) -> Result<u64, sqlx::Error> {
+        let mut q = sqlx::query(sql);
+        for v in params {
+            q = bind_json(q, v);
+        }
+        let res = q.execute(&self.inner).await?;
+        Ok(res.rows_affected())
+    }
+
+    /// Run a list of `(sql, params)` statements atomically inside one transaction
+    /// and commit. On any error the transaction is rolled back. Returns the rows
+    /// of the final statement (as JSON) if it was a query, else an object with the
+    /// total rows affected. This is the production-safe multi-statement primitive
+    /// exposed to Python as `DbPool.transaction([...])`.
+    pub async fn transaction(
+        &self,
+        stmts: &[(String, Vec<serde_json::Value>)],
+    ) -> Result<serde_json::Value, sqlx::Error> {
+        let mut tx = self.inner.begin().await?;
+        let mut last_rows: serde_json::Value = serde_json::Value::Null;
+        let mut total_affected: u64 = 0;
+        for (sql, params) in stmts {
+            let mut q = sqlx::query(sql);
+            for v in params {
+                q = bind_json(q, v);
+            }
+            // Try to fetch (SELECT) first; if it's not a query, it returns no rows
+            // and we fall back to execute (rows affected). `sqlx::query` supports
+            // both, but `fetch_all` on a non-SELECT still works (0 rows). We use
+            // `execute` for writes and `fetch_all` for reads by probing the SQL.
+            let upper = sql.trim_start().to_uppercase();
+            if upper.starts_with("SELECT")
+                || upper.starts_with("WITH")
+                || upper.starts_with("RETURNING")
+            {
+                let rows = q.fetch_all(&mut *tx).await?;
+                last_rows = rows_to_json(rows)?;
+            } else {
+                let res = q.execute(&mut *tx).await?;
+                total_affected += res.rows_affected();
+                last_rows = serde_json::Value::Null;
+            }
+        }
+        tx.commit().await?;
+        if last_rows.is_null() {
+            Ok(serde_json::json!({ "rows_affected": total_affected }))
+        } else {
+            Ok(last_rows)
+        }
     }
 
     /// Insert a row from a JSON object (`{column: value}`) and return the

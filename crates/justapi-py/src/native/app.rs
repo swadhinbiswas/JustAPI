@@ -56,6 +56,10 @@ pub struct JustAPIApp {
     pub batch_configs: Vec<Option<(usize, u64)>>,
     pub plugins: Vec<Py<PyAny>>,
     pub database: Option<Database>,
+    /// Resolved DB pool (set during `run()`), exposed to Python handlers via the
+    /// `DbPool` bridge so application code can run arbitrary, injection-safe SQL
+    /// without losing the GIL-avoidance win (ADR-056 follow-up).
+    pub db_pool: Option<crate::database::DbPool>,
     pub grpc_addr: Option<std::net::SocketAddr>,
     pub grpc_handlers: std::collections::HashMap<String, Py<PyAny>>,
     pub ws_routes: std::collections::HashMap<String, Py<PyAny>>,
@@ -311,6 +315,7 @@ impl JustAPIApp {
             batch_configs: Vec::new(),
             plugins: Vec::new(),
             database: None,
+            db_pool: None,
             grpc_addr: None,
             grpc_handlers: std::collections::HashMap::new(),
             ws_routes: std::collections::HashMap::new(),
@@ -1158,6 +1163,13 @@ impl JustAPIApp {
         self.database.clone()
     }
 
+    /// Return the resolved DB pool handle (`DbPool`) if a database was configured
+    /// and the server has started, else `None`. Handlers use this to run
+    /// arbitrary, injection-safe SQL in Rust (no GIL during the DB round-trip).
+    fn db_pool(&self) -> Option<crate::database::DbPool> {
+        self.db_pool.clone()
+    }
+
     fn set_grpc_addr(&mut self, addr: &str) -> PyResult<()> {
         self.grpc_addr = Some(addr.parse().map_err(|e| {
             pyo3::exceptions::PyValueError::new_err(format!("Invalid gRPC address: {}", e))
@@ -1435,6 +1447,20 @@ impl JustAPIApp {
                 } else {
                     None
                 };
+
+                // Expose the resolved pool to Python handlers (Rust-owned,
+                // injection-safe query/execute via the DbPool bridge). Done after
+                // the async block; set via `Python::attach` so no outer `Python`
+                // token crosses the GIL boundary.
+                if let Some(ref pool) = db_pool {
+                    let handle = rt.handle().clone();
+                    let pool_inner = pool.clone();
+                    Python::attach(|py| {
+                        let slf_py = slf.clone_ref(py);
+                        slf_py.borrow_mut(py).db_pool =
+                            Some(crate::database::DbPool::new(pool_inner, handle));
+                    });
+                }
 
                 let db_url_str = database_config.as_ref().map(|c| c.url.clone());
 
