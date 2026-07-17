@@ -26,6 +26,7 @@ anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio-util.workspace = true
+libc.workspace = true
 notify-debouncer-mini = "0.7"
 notify = "8"
 

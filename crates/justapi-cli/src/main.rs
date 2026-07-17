@@ -9,6 +9,7 @@ use tokio::sync::mpsc;
 mod gen_client;
 mod profile;
 mod watcher;
+mod workers;
 
 #[derive(Parser)]
 #[command(name = "justapi", about = "JustAPI Runtime — Python application server")]
@@ -49,6 +50,17 @@ enum Commands {
         /// Timeout in seconds to drain in-flight requests before restart
         #[arg(long, default_value = "5")]
         drain_timeout: u64,
+
+        /// Number of worker processes (prefork). Each worker shares the bound
+        /// listening socket. Defaults to 1 (single process). Incompatible with
+        /// `--reload` (hot reload restarts the whole process tree).
+        #[arg(long, default_value_t = 1)]
+        workers: usize,
+
+        /// Hidden: internal flag used by the prefork supervisor to hand a bound
+        /// listening socket fd to a worker child. Do not pass manually.
+        #[arg(long, hide = true)]
+        worker_fd: Option<i32>,
 
         /// TLS certificate file (PEM)
         #[cfg(feature = "tls")]
@@ -442,6 +454,154 @@ fn scaffold_project(
     Ok(())
 }
 
+/// Build the inference engine + optional scheduler engine from `--model` etc.
+/// Returns `(None, None)` when `--model` is not supplied. Inference-only.
+#[cfg(feature = "inference")]
+fn build_engines(
+    model: &Option<String>,
+    gpu: &str,
+    scheduled: bool,
+    pool_blocks: usize,
+    max_seqs: usize,
+    gamma: usize,
+    branch: usize,
+) -> anyhow::Result<(
+    Option<std::sync::Arc<justapi_inference::Engine>>,
+    Option<std::sync::Arc<justapi_inference::SchedulerEngine>>,
+)> {
+    use justapi_inference::EngineDevice;
+    let engine: Option<std::sync::Arc<justapi_inference::Engine>> = match model {
+        Some(id) => {
+            let device = if gpu.eq_ignore_ascii_case("cpu") {
+                EngineDevice::Cpu
+            } else {
+                EngineDevice::Cuda(gpu.parse().unwrap_or(0))
+            };
+            let eng = std::sync::Arc::new(
+                justapi_inference::Engine::new(device)
+                    .map_err(|e| anyhow::anyhow!("failed to start inference engine: {e}"))?,
+            );
+            eng.register_mock(id);
+
+            if gamma > 0 || branch > 0 {
+                let target = eng.get(id).unwrap();
+                let draft_id = format!("{id}-draft");
+                let draft = eng.register_mock(&draft_id);
+                if branch > 0 {
+                    let g = gamma.max(1);
+                    eng.register_tree_speculative(id, target, draft, g, branch, 0);
+                    tracing::info!(
+                        model = %id, device = %gpu, gamma = g, branch,
+                        "Serving model via OpenAI-compatible endpoints (tree speculative decoding)"
+                    );
+                } else {
+                    eng.register_speculative(id, target, draft, gamma, 0);
+                    tracing::info!(
+                        model = %id, device = %gpu, gamma,
+                        "Serving model via OpenAI-compatible endpoints (draft-target speculative decoding)"
+                    );
+                }
+            } else {
+                tracing::info!(model = %id, device = %gpu, "Serving model via OpenAI-compatible endpoints");
+            }
+            Some(eng)
+        }
+        None => None,
+    };
+
+    let scheduler_engine: Option<std::sync::Arc<justapi_inference::SchedulerEngine>> = if scheduled
+        && engine.is_some()
+    {
+        use justapi_inference::{KvBlockPool, Scheduler, SchedulerConfig, SchedulerEngine};
+        let eng = engine.as_ref().unwrap().clone();
+        let pool = KvBlockPool::new(pool_blocks.max(64));
+        let config = SchedulerConfig { max_num_seqs: max_seqs.max(1), ..Default::default() };
+        let scheduler = std::sync::Arc::new(std::sync::Mutex::new(Scheduler::new(config, pool)));
+        let se = std::sync::Arc::new(SchedulerEngine::new(eng, scheduler));
+        tracing::info!(pool_blocks, max_seqs, "Scheduler-enabled serving path");
+        Some(se)
+    } else {
+        None
+    };
+
+    Ok((engine, scheduler_engine))
+}
+
+/// Configure a `Server` from the shared serve options. TLS/compression/inference
+/// wiring is applied uniformly for both the single-process and worker paths,
+/// eliminating the previous duplication between the reload/non-reload branches.
+fn build_server(
+    addr: SocketAddr,
+    static_dir: &Option<String>,
+    #[cfg(feature = "compression")] compress: bool,
+    #[cfg(feature = "tls")] tls_cert: &Option<String>,
+    #[cfg(feature = "tls")] tls_key: &Option<String>,
+    #[cfg(feature = "inference")] engine: &Option<std::sync::Arc<justapi_inference::Engine>>,
+    #[cfg(feature = "inference")] scheduler_engine: &Option<
+        std::sync::Arc<justapi_inference::SchedulerEngine>,
+    >,
+    token: tokio_util::sync::CancellationToken,
+) -> justapi_core::Server {
+    let mut server = justapi_core::Server::new(addr).with_shutdown(token);
+
+    if let Some(dir) = static_dir.clone() {
+        server = server.with_static_dir(dir);
+    }
+
+    #[cfg(feature = "compression")]
+    if compress {
+        server = server.add_compression();
+    }
+
+    #[cfg(feature = "inference")]
+    if let Some(ref se) = scheduler_engine {
+        server = server.with_openai_scheduled(se.clone());
+    } else if let Some(ref eng) = engine {
+        server = server.with_openai(eng.clone());
+    }
+
+    #[cfg(feature = "tls")]
+    if let (Some(cert), Some(key)) = (tls_cert.clone(), tls_key.clone()) {
+        let config = justapi_core::server::TlsConfig { cert_path: cert, key_path: key };
+        server = server.with_tls(config);
+    }
+
+    server
+}
+
+/// Install signal handlers that cancel `token` on SIGTERM/SIGINT (Unix) and
+/// Ctrl+C (all platforms), so the server/worker begins graceful drain.
+fn wire_shutdown_signals(token: tokio_util::sync::CancellationToken) {
+    // Ctrl+C works everywhere.
+    let ctrl = token.clone();
+    tokio::spawn(async move {
+        tokio::signal::ctrl_c().await.ok();
+        tracing::info!("Shutdown signal received (Ctrl+C)");
+        ctrl.cancel();
+    });
+
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        let term = token.clone();
+        tokio::spawn(async move {
+            if let Ok(mut s) = signal(SignalKind::terminate()) {
+                s.recv().await;
+                tracing::info!("Shutdown signal received (SIGTERM)");
+                term.cancel();
+            }
+        });
+        let int = token.clone();
+        tokio::spawn(async move {
+            if let Ok(mut s) = signal(SignalKind::interrupt()) {
+                s.recv().await;
+                tracing::info!("Shutdown signal received (SIGINT)");
+                int.cancel();
+            }
+        });
+    }
+}
+
 async fn run() -> anyhow::Result<()> {
     justapi_core::tracing_setup::init_tracing()?;
 
@@ -456,6 +616,8 @@ async fn run() -> anyhow::Result<()> {
             watch_dir,
             watch_ext,
             drain_timeout,
+            workers,
+            worker_fd,
             #[cfg(feature = "tls")]
             tls_cert,
             #[cfg(feature = "tls")]
@@ -475,6 +637,75 @@ async fn run() -> anyhow::Result<()> {
             #[cfg(feature = "inference")]
             branch,
         } => {
+            let drain_duration = Duration::from_secs(drain_timeout);
+
+            // Build the inference engines (no-op unless --model supplied).
+            #[cfg(feature = "inference")]
+            let (engine, scheduler_engine) =
+                build_engines(&model, &gpu, scheduled, pool_blocks, max_seqs, gamma, branch)?;
+
+            // ---- Worker mode: parent handed us a bound listening socket fd. ----
+            if let Some(fd) = worker_fd {
+                #[cfg(unix)]
+                {
+                    let listener = workers::listener_from_fd(fd)?;
+                    let token = tokio_util::sync::CancellationToken::new();
+                    wire_shutdown_signals(token.clone());
+                    let server = build_server(
+                        addr,
+                        &static_dir,
+                        #[cfg(feature = "compression")]
+                        compress,
+                        #[cfg(feature = "tls")]
+                        &tls_cert,
+                        #[cfg(feature = "tls")]
+                        &tls_key,
+                        #[cfg(feature = "inference")]
+                        &engine,
+                        #[cfg(feature = "inference")]
+                        &scheduler_engine,
+                        token,
+                    );
+                    let result = server.run_on(listener).await;
+                    justapi_core::tracing_setup::shutdown_tracing();
+                    return result;
+                }
+                #[cfg(not(unix))]
+                {
+                    anyhow::bail!("--worker-fd is only supported on Unix platforms");
+                }
+            }
+
+            // ---- Prefork multi-worker mode: parent binds + supervises. ----
+            if workers > 1 {
+                if reload {
+                    tracing::warn!(
+                        "--reload is ignored when --workers > 1 (prefork cannot hot-reload)"
+                    );
+                }
+                anyhow::ensure!(workers <= 256, "worker count must be <= 256");
+
+                let std_listener = workers::bind_listener(addr)?;
+                let raw_fd = {
+                    use std::os::fd::AsRawFd;
+                    std_listener.as_raw_fd()
+                };
+
+                // Original argv (minus program name) so each child reconstructs
+                // the identical server config.
+                let base_argv: Vec<String> = std::env::args().skip(1).collect();
+
+                let shutdown = tokio_util::sync::CancellationToken::new();
+                wire_shutdown_signals(shutdown.clone());
+
+                let spawn = workers::make_spawn_argv(&base_argv, raw_fd, drain_duration);
+                tracing::info!(addr = %addr, workers, "starting prefork server");
+                let result = workers::supervise(workers, spawn, shutdown).await;
+                justapi_core::tracing_setup::shutdown_tracing();
+                return result;
+            }
+
+            // ---- Single-process mode (optionally with hot reload). ----
             // Set up the file watcher once (if --reload), it sends on each
             // detected change via mpsc so we can restart multiple times.
             let mut reload_rx = if reload {
@@ -483,83 +714,6 @@ async fn run() -> anyhow::Result<()> {
                     .unwrap_or_else(|| std::env::current_dir().expect("cannot read cwd"));
                 tracing::info!(dir = %dir.display(), "Watching for file changes");
                 Some(watcher::spawn_file_watcher(&dir, &watch_ext)?)
-            } else {
-                None
-            };
-
-            let drain_duration = Duration::from_secs(drain_timeout);
-
-            // Build the inference engine if `--model` was supplied (inference
-            // feature). The engine serves the OpenAI-compatible endpoints with a
-            // GIL-free generation thread; the scheduler provides continuous
-            // batching + paged KV cache (real weight loading is gated on `real`).
-            #[cfg(feature = "inference")]
-            let engine: Option<std::sync::Arc<justapi_inference::Engine>> = if let Some(id) =
-                model.as_ref()
-            {
-                use justapi_inference::EngineDevice;
-                let device = if gpu.eq_ignore_ascii_case("cpu") {
-                    EngineDevice::Cpu
-                } else {
-                    EngineDevice::Cuda(gpu.parse().unwrap_or(0))
-                };
-                let eng = std::sync::Arc::new(
-                    justapi_inference::Engine::new(device)
-                        .map_err(|e| anyhow::anyhow!("failed to start inference engine: {e}"))?,
-                );
-                eng.register_mock(id);
-
-                // Wire speculative decoding if requested.
-                if gamma > 0 || branch > 0 {
-                    let target = eng.get(id).unwrap();
-                    let draft_id = format!("{id}-draft");
-                    let draft = eng.register_mock(&draft_id);
-                    if branch > 0 {
-                        let g = gamma.max(1);
-                        eng.register_tree_speculative(id, target, draft, g, branch, 0);
-                        tracing::info!(
-                            model = %id,
-                            device = %gpu,
-                            gamma = g,
-                            branch = branch,
-                            "Serving model via OpenAI-compatible endpoints (tree speculative decoding)"
-                        );
-                    } else {
-                        eng.register_speculative(id, target, draft, gamma, 0);
-                        tracing::info!(
-                            model = %id,
-                            device = %gpu,
-                            gamma = gamma,
-                            "Serving model via OpenAI-compatible endpoints (draft-target speculative decoding)"
-                        );
-                    }
-                } else {
-                    tracing::info!(model = %id, device = %gpu, "Serving model via OpenAI-compatible endpoints");
-                }
-                Some(eng)
-            } else {
-                None
-            };
-
-            // Build the scheduler engine if `--scheduled` is also set.
-            #[cfg(feature = "inference")]
-            let scheduler_engine: Option<
-                std::sync::Arc<justapi_inference::SchedulerEngine>,
-            > = if scheduled && engine.is_some() {
-                use justapi_inference::{KvBlockPool, Scheduler, SchedulerConfig, SchedulerEngine};
-                let eng = engine.as_ref().unwrap().clone();
-                let pool = KvBlockPool::new(pool_blocks.max(64));
-                let config =
-                    SchedulerConfig { max_num_seqs: max_seqs.max(1), ..Default::default() };
-                let scheduler =
-                    std::sync::Arc::new(std::sync::Mutex::new(Scheduler::new(config, pool)));
-                let se = std::sync::Arc::new(SchedulerEngine::new(eng, scheduler));
-                tracing::info!(
-                    pool_blocks = pool_blocks,
-                    max_seqs = max_seqs,
-                    "Scheduler-enabled serving path"
-                );
-                Some(se)
             } else {
                 None
             };
@@ -603,40 +757,25 @@ async fn run() -> anyhow::Result<()> {
                         return_tx.send(inner_rx).ok();
                     });
 
-                    // We'll collect the receiver back after `server.run()` completes.
-                    // Stash the return channel for later.
-                    // (We use a scope trick: store it in the reload_rx option.)
-                    // Actually we need the return_rx after the server stops,
-                    // so we hold it outside and await it after run().
-                    // Re-structure: keep return_rx in a variable.
-                    let mut server = justapi_core::Server::new(addr).with_shutdown(token.clone());
+                    let server = build_server(
+                        addr,
+                        &static_dir,
+                        #[cfg(feature = "compression")]
+                        compress,
+                        #[cfg(feature = "tls")]
+                        &tls_cert,
+                        #[cfg(feature = "tls")]
+                        &tls_key,
+                        #[cfg(feature = "inference")]
+                        &engine,
+                        #[cfg(feature = "inference")]
+                        &scheduler_engine,
+                        token.clone(),
+                    );
 
-                    if let Some(dir) = static_dir.clone() {
-                        server = server.with_static_dir(dir);
-                    }
-
-                    #[cfg(feature = "compression")]
-                    if compress {
-                        server = server.add_compression();
-                    }
-
-                    #[cfg(feature = "inference")]
-                    if let Some(ref se) = scheduler_engine {
-                        server = server.with_openai_scheduled(se.clone());
-                    } else if let Some(ref eng) = engine {
-                        server = server.with_openai(eng.clone());
-                    }
-
-                    #[cfg(feature = "tls")]
-                    if let (Some(cert), Some(key)) = (tls_cert.clone(), tls_key.clone()) {
-                        let config =
-                            justapi_core::server::TlsConfig { cert_path: cert, key_path: key };
-                        let result = server.with_tls(config).run().await;
-                        justapi_core::tracing_setup::shutdown_tracing();
-                        return result;
-                    }
-
-                    let result = server.run().await;
+                    let std_listener = workers::bind_listener(addr)?;
+                    let listener = tokio::net::TcpListener::from_std(std_listener)?;
+                    let result = server.run_on(listener).await;
 
                     // Recover the watcher receiver for the next iteration.
                     if let Ok(recovered) = return_rx.await {
@@ -660,31 +799,21 @@ async fn run() -> anyhow::Result<()> {
                 }
 
                 // Non-reload path: run server once and exit.
-                let mut server = justapi_core::Server::new(addr).with_shutdown(token);
-
-                if let Some(dir) = static_dir.clone() {
-                    server = server.with_static_dir(dir);
-                }
-
-                #[cfg(feature = "compression")]
-                if compress {
-                    server = server.add_compression();
-                }
-
-                #[cfg(feature = "inference")]
-                if let Some(ref se) = scheduler_engine {
-                    server = server.with_openai_scheduled(se.clone());
-                } else if let Some(ref eng) = engine {
-                    server = server.with_openai(eng.clone());
-                }
-
-                #[cfg(feature = "tls")]
-                if let (Some(cert), Some(key)) = (tls_cert.clone(), tls_key.clone()) {
-                    let config = justapi_core::server::TlsConfig { cert_path: cert, key_path: key };
-                    let result = server.with_tls(config).run().await;
-                    justapi_core::tracing_setup::shutdown_tracing();
-                    return result;
-                }
+                let server = build_server(
+                    addr,
+                    &static_dir,
+                    #[cfg(feature = "compression")]
+                    compress,
+                    #[cfg(feature = "tls")]
+                    &tls_cert,
+                    #[cfg(feature = "tls")]
+                    &tls_key,
+                    #[cfg(feature = "inference")]
+                    &engine,
+                    #[cfg(feature = "inference")]
+                    &scheduler_engine,
+                    tokio_util::sync::CancellationToken::new(),
+                );
 
                 let result = server.run().await;
                 justapi_core::tracing_setup::shutdown_tracing();
