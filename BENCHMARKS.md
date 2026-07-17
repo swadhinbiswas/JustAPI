@@ -1536,3 +1536,22 @@ data). Bounded FIFO eviction (default 1024 keys), `Arc<Mutex<HashMap>>`.
 
 No routing-semantics change (param/method-not-allowed/fallback identical).
 Unit tests added. Gates green. Negligible fixed memory per key.
+
+### ADR-064 — XML request/response support (`justapi_core::xml`)
+
+XML is now a first-class content type. Responses: `xml_response` / `XmlResponse<T>`
+emit `application/xml`. Requests: an `application/xml` / `text/xml` body is
+normalized to a `serde_json::Value` (`xml_to_json`) — nested elements → objects,
+repeated siblings → arrays, attributes → `@name`, leaf text collapses to scalar —
+so Python handlers receive uniform JSON. Content negotiation via `negotiate` /
+`respond` lets handlers return JSON or XML from one `Value`. New dep: `quick-xml`.
+
+| Property | Result |
+|---|---|
+| `XmlResponse` (typed) | emits `application/xml`, correct element tree |
+| `xml_to_json` nested + arrays | `{"user":{"id":1}}`, `{"root":{"item":["a","b"]}}` |
+| XML request body (Python path) | converted to JSON; invalid XML → 400 |
+| `negotiate` / `respond` | `Accept: application/xml` → XML response |
+| Gates | 274 core tests (8 new); clippy `-D warnings`; fmt clean |
+
+Limitation: attributes only as `@name`; namespaces/comments/DTD ignored.

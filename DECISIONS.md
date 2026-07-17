@@ -2389,3 +2389,49 @@ fallback all resolve identically.
 
 **Trade-off:** small fixed memory per cached `(method, path)` key (bounded by
 capacity, FIFO-evicted). No new dependency.
+
+## ADR-064 — 2026-07-17 — XML request/response support (`justapi_core::xml`)
+
+**Context:** The feature list calls for XML/SOAP support. JSON is the dominant
+wire format, but enterprise/legacy clients (SOAP, many internal services) speak
+XML. JustAPI needed first-class XML as a content type alongside JSON, with the
+parsing/sizing living in Rust (`justapi-core`) per ADR-008.
+
+**Decision / change:**
+- New `crates/justapi-core/src/xml.rs` (new dep `quick-xml = "0.36"`,
+  `serialize` feature — high-perf XML reader/writer, justified below). Provides:
+  - **Responses:** `xml_response(status, &str)` (raw string →
+    `application/xml`) and `XmlResponse<T: Serialize>` (typed, mirrors
+    `serialize::JsonResponse`) emitting `application/xml` via
+    `quick_xml::se::to_string_with_root`. `json_to_xml(root, &Value)` serializes
+    a `serde_json::Value` to XML.
+  - **Requests:** `xml_to_json(bytes) -> Value` converts an `application/xml` /
+    `text/xml` body into a `serde_json::Value`, so the rest of the pipeline (which
+    speaks JSON `Value`) consumes XML input transparently. Implemented as a small
+    event-driven converter over `quick_xml::reader::Reader` (NOT its serde
+    `Deserializer` — that cannot represent open JSON `Value`s). Semantics: nested
+    elements → nested objects; **repeated sibling tags → arrays**; text → string
+    (coerced to number when it parses); attributes → `@name` keys; a leaf element
+    with only text collapses to the scalar (`<id>1</id>` → `{"id": 1}`); mixed
+    text+children lives under `#text`.
+  - **Content negotiation:** `Format { Json, Xml }`, `negotiate(content_type,
+    accept)`, and `respond(status, root, &Value, format)` produce a JSON or XML
+    response from one `Value`.
+- **Request wiring (Python path):** in `crates/justapi-py/src/native/handlers.rs`,
+  after the body is read the request `Content-Type` is checked; an
+  `application/xml` / `text/xml` body is converted to JSON via `xml_to_json` and
+  re-serialized to canonical JSON bytes, so Python handlers receive a uniform
+  JSON-shaped body regardless of the wire format (invalid XML → 400 with detail).
+  Routing/validation/CRUD paths are untouched.
+- `lib.rs` exports the `xml` module.
+
+**Why `quick-xml`:** it is the de-facto high-performance Rust XML crate (zero-copy
+reader, serde integration) and avoids hand-rolling a parser. The alternative
+(writing our own XML reader) is more code and more bug surface for no benefit.
+Only the `serialize` feature is enabled; no transitive heavy deps.
+
+**Evidence:** 8 new `xml::tests` covering raw/typed XML responses, status+headers,
+`json_to_xml`, `xml_to_json` (nested + arrays), `negotiate` (all branches), and
+content-negotiated `respond`. Full workspace suite green (274 core tests). clippy
+`-D warnings` + `fmt` clean. Limitation documented: XML attributes survive only
+as `@name` keys; namespaces/comments/DTDs are ignored by the converter.
