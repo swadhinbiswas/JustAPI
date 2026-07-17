@@ -76,6 +76,46 @@ pub fn listener_from_fd(fd: i32) -> anyhow::Result<tokio::net::TcpListener> {
         .context("worker: failed to wrap inherited fd as tokio TcpListener")
 }
 
+/// Recover a tokio `UnixListener` from an inherited raw fd (Unix only).
+#[cfg(unix)]
+pub fn listener_from_unix_fd(fd: i32) -> anyhow::Result<tokio::net::UnixListener> {
+    use std::os::fd::FromRawFd;
+    // SAFETY: the fd was created by the parent via `bind_unix_listener` and is
+    // not closed on exec, so it is valid and uniquely owned by this process
+    // after fork/exec. We do not `from_raw_fd` it anywhere else.
+    let std_listener = unsafe { <std::os::fd::OwnedFd as FromRawFd>::from_raw_fd(fd) };
+    let std_listener = std::os::unix::net::UnixListener::from(std_listener);
+    std_listener
+        .set_nonblocking(true)
+        .context("worker: failed to set inherited unix listener non-blocking")?;
+    tokio::net::UnixListener::from_std(std_listener)
+        .context("worker: failed to wrap inherited fd as tokio UnixListener")
+}
+
+/// Bind a Unix domain socket once and return the std listener (non-CLOEXEC fd
+/// so it survives the child re-exec on Unix). An existing socket file is
+/// removed first to avoid EADDRINUSE on restart.
+#[cfg(unix)]
+pub fn bind_unix_listener(path: &str) -> anyhow::Result<std::os::unix::net::UnixListener> {
+    use std::os::fd::AsRawFd;
+    let p = std::path::Path::new(path);
+    if p.exists() {
+        let _ = std::fs::remove_file(p);
+    }
+    let listener = std::os::unix::net::UnixListener::bind(p)
+        .with_context(|| format!("failed to bind unix socket {path}"))?;
+    // Clear FD_CLOEXEC so the fd survives the child's exec (mirrors bind_listener).
+    let fd = listener.as_raw_fd();
+    // SAFETY: fd is a valid, owned listener socket; we only clear CLOEXEC.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+    if flags >= 0 {
+        unsafe {
+            libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC);
+        }
+    }
+    Ok(listener)
+}
+
 /// Run the supervisor: spawn `count` workers and manage their lifecycle until
 /// the shutdown token is cancelled (or a fatal spawn error occurs).
 pub async fn supervise(
@@ -219,11 +259,7 @@ pub fn make_spawn_argv(
     listener_fd: i32,
     drain_timeout: Duration,
 ) -> WorkerSpawn {
-    WorkerSpawn {
-        argv: base_argv.to_vec(),
-        listener_fd,
-        drain_timeout,
-    }
+    WorkerSpawn { argv: base_argv.to_vec(), listener_fd, drain_timeout }
 }
 
 #[cfg(test)]
@@ -251,4 +287,3 @@ mod tests {
         assert!(again.is_err(), "ephemeral port must be occupied by our listener");
     }
 }
-

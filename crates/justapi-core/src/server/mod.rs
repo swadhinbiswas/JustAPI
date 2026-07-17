@@ -297,8 +297,35 @@ pub struct TlsConfig {
 // Server builder
 // ---------------------------------------------------------------------------
 
+/// Where the server listens. Either a TCP `SocketAddr` or a Unix domain socket
+/// path. Both are bound by the parent and (in prefork mode) the fd is handed to
+/// worker processes, so the same socket is shared across the worker fleet.
+#[derive(Clone, Debug)]
+pub enum ListenAddr {
+    /// TCP listener, e.g. `127.0.0.1:8080`.
+    Tcp(SocketAddr),
+    /// Unix domain socket, e.g. `/run/justapi.sock` (Unix only).
+    Unix(std::path::PathBuf),
+}
+
+impl ListenAddr {
+    /// Human-readable address for logs.
+    pub fn display(&self) -> String {
+        match self {
+            ListenAddr::Tcp(a) => a.to_string(),
+            ListenAddr::Unix(p) => p.display().to_string(),
+        }
+    }
+}
+
+impl From<SocketAddr> for ListenAddr {
+    fn from(addr: SocketAddr) -> Self {
+        ListenAddr::Tcp(addr)
+    }
+}
+
 pub struct Server {
-    addr: SocketAddr,
+    addr: ListenAddr,
     chain: MiddlewareChain,
     static_dir: Option<StaticDir>,
     static_mounts: Vec<StaticMount>,
@@ -328,7 +355,7 @@ pub struct Server {
 }
 
 impl Server {
-    pub fn new(addr: SocketAddr) -> Self {
+    pub fn new(addr: impl Into<ListenAddr>) -> Self {
         let router = Router::new();
         let metrics = Metrics::new();
         let health_registry = Arc::new(HealthRegistry::new());
@@ -345,7 +372,7 @@ impl Server {
             })
         }));
         Self {
-            addr,
+            addr: addr.into(),
             chain,
             static_dir: None,
             static_mounts: Vec::new(),
@@ -807,8 +834,23 @@ impl Server {
             self.chain.set_handler(handler);
         }
 
-        let listener = tokio::net::TcpListener::bind(self.addr).await?;
-        self.run_on(listener).await
+        match &self.addr {
+            ListenAddr::Tcp(a) => {
+                let listener = tokio::net::TcpListener::bind(*a).await?;
+                self.run_on(listener).await
+            }
+            ListenAddr::Unix(path) => {
+                #[cfg(unix)]
+                {
+                    let listener = bind_unix_listener(path).await?;
+                    self.run_on_uds(listener).await
+                }
+                #[cfg(not(unix))]
+                {
+                    anyhow::bail!("Unix domain sockets are only supported on Unix platforms")
+                }
+            }
+        }
     }
 
     /// Run the server on an already-bound listener (e.g. chosen by the caller
@@ -827,7 +869,7 @@ impl Server {
             self.chain.set_handler(handler);
         }
 
-        let local_addr = listener.local_addr()?;
+        let local_addr = self.addr.display();
 
         if let (Some(grpc_addr), Some(grpc_handler)) = (self.grpc_addr, self.grpc_handler.take()) {
             tracing::info!("Starting gRPC server on {}", grpc_addr);
@@ -929,6 +971,111 @@ impl Server {
         .await;
         #[cfg(not(feature = "ws"))]
         let res = serve_http(
+            listener,
+            chain,
+            static_dir,
+            self.static_mounts.clone(),
+            metrics,
+            self.shutdown,
+            wasm_middleware,
+        )
+        .await;
+        plugin_registry.on_shutdown_all().await?;
+        res
+    }
+
+    /// Run the server on an already-bound Unix domain socket listener (used by
+    /// the prefork supervisor to hand a UDS fd to a worker child).
+    pub async fn run_on_uds(mut self, listener: tokio::net::UnixListener) -> Result<()> {
+        if let Some(router) = self.router.take() {
+            let pool = Arc::new(BufferPool::new());
+            let handler = make_handler(
+                Arc::new(router),
+                pool,
+                self.metrics.clone(),
+                self.health_registry.clone(),
+                self.openapi_spec.clone(),
+                self.max_body_size,
+            );
+            self.chain.set_handler(handler);
+        }
+
+        let local_addr = self.addr.display();
+
+        if let (Some(grpc_addr), Some(grpc_handler)) = (self.grpc_addr, self.grpc_handler.take()) {
+            tracing::info!("Starting gRPC server on {}", grpc_addr);
+            let grpc_service = crate::grpc::DynamicGrpcService::new(grpc_handler);
+            let shutdown = self.shutdown.clone();
+            tokio::spawn(async move {
+                if let Ok(grpc_listener) = tokio::net::TcpListener::bind(grpc_addr).await {
+                    loop {
+                        if let Some(ref token) = shutdown {
+                            tokio::select! {
+                                result = grpc_listener.accept() => {
+                                    if let Ok((stream, _)) = result {
+                                        let io = hyper_util::rt::TokioIo::new(stream);
+                                        let svc = hyper_util::service::TowerToHyperService::new(grpc_service.clone());
+                                        tokio::spawn(async move {
+                                            let _ = hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new())
+                                                .serve_connection_with_upgrades(io, svc)
+                                                .await;
+                                        });
+                                    }
+                                }
+                                _ = token.cancelled() => {
+                                    break;
+                                }
+                            }
+                        } else {
+                            if let Ok((stream, _)) = grpc_listener.accept().await {
+                                let io = hyper_util::rt::TokioIo::new(stream);
+                                let svc = hyper_util::service::TowerToHyperService::new(
+                                    grpc_service.clone(),
+                                );
+                                tokio::spawn(async move {
+                                    let _ = hyper_util::server::conn::auto::Builder::new(
+                                        hyper_util::rt::TokioExecutor::new(),
+                                    )
+                                    .serve_connection_with_upgrades(io, svc)
+                                    .await;
+                                });
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        self.plugin_registry.on_startup_all().await?;
+
+        let chain = Arc::new(self.chain);
+        let static_dir = self.static_dir;
+        let metrics = self.metrics;
+        let plugin_registry = Arc::new(self.plugin_registry);
+        let wasm_middleware = self.wasm_middleware.clone();
+        #[cfg(feature = "ws")]
+        let ws_handler = self.ws_handler.clone();
+
+        #[cfg(feature = "tls")]
+        if self.tls.is_some() {
+            anyhow::bail!("TLS is not supported over Unix domain sockets");
+        }
+
+        tracing::info!("Listening on {} (plain HTTP/1.1, unix)", local_addr);
+        #[cfg(feature = "ws")]
+        let res = serve_unix(
+            listener,
+            chain,
+            static_dir,
+            self.static_mounts.clone(),
+            metrics,
+            self.shutdown,
+            wasm_middleware,
+            ws_handler,
+        )
+        .await;
+        #[cfg(not(feature = "ws"))]
+        let res = serve_unix(
             listener,
             chain,
             static_dir,
@@ -1124,6 +1271,274 @@ async fn try_serve_static(
     None
 }
 
+/// Drive a single accepted connection to completion: acquire a connection
+/// permit, run it through hyper, the middleware chain, WASM/WS hooks, and the
+/// graceful-shutdown path. Shared by `serve_http` (TCP) and `serve_unix` (UDS)
+/// so the per-connection logic lives in exactly one place.
+///
+/// `peer_addr` is `None` for Unix sockets (no client IP); WebSocket `client`
+/// info and request extensions degrade gracefully when it is absent.
+async fn serve_connection(
+    stream: impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+    peer_addr: Option<SocketAddr>,
+    chain: Arc<MiddlewareChain>,
+    static_dir: Option<StaticDir>,
+    static_mounts: Vec<StaticMount>,
+    conn_semaphore: std::sync::Arc<tokio::sync::Semaphore>,
+    metrics: Metrics,
+    shutdown: Option<CancellationToken>,
+    wasm_middleware: Option<Arc<crate::wasm::WasmEngine>>,
+    #[cfg(feature = "ws")] ws_handler: Option<WsHandler>,
+) {
+    // Bound concurrent connections: a permit is held for the life of
+    // the connection so a flood of accepts can't exhaust FDs/memory
+    // (connection-flood / slowloris resource exhaustion).
+    let _permit = conn_semaphore.acquire_owned().await.expect("connection semaphore closed");
+    let io = TokioIo::new(stream);
+    let arena = Arc::new(SharedArena::new());
+    let token_clone = shutdown.clone();
+    let spawn_metrics = metrics.clone();
+    let conn_metrics = metrics.clone();
+    conn_metrics.connection_opened();
+    let svc = service_fn(move |mut req| {
+        arena.reset();
+        let chain = chain.clone();
+        let arena = arena.clone();
+        let static_dir = static_dir.clone();
+        let static_mounts = static_mounts.clone();
+        let metrics = spawn_metrics.clone();
+        let wasm_middleware = wasm_middleware.clone();
+        #[cfg(feature = "ws")]
+        let ws_handler = ws_handler.clone();
+        async move {
+            let path = req.uri().path().to_string();
+            let method = req.method().clone();
+            let _arena_path = arena.alloc_str(&path);
+            let start = std::time::Instant::now();
+            req.extensions_mut().insert(peer_addr);
+
+            let span = tracing::info_span!(
+                "http.request",
+                http.method = method.as_str(),
+                http.path = %path,
+                http.status_code = tracing::field::Empty,
+            );
+
+            metrics.record_request();
+
+            #[cfg(feature = "ws")]
+            if let Some(ref handler) = ws_handler {
+                let is_ws = req
+                    .headers()
+                    .get(hyper::header::UPGRADE)
+                    .and_then(|v| v.to_str().ok())
+                    .map(|s| s.eq_ignore_ascii_case("websocket"))
+                    .unwrap_or(false);
+
+                if is_ws {
+                    if let Some(key) = req.headers().get("sec-websocket-key") {
+                        let key_str = key.to_str().unwrap_or("");
+                        let mut sha1 = sha1::Sha1::new();
+                        use sha1::Digest;
+                        sha1.update(key_str.as_bytes());
+                        sha1.update(b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
+                        use base64::Engine;
+                        let accept_key =
+                            base64::engine::general_purpose::STANDARD.encode(sha1.finalize());
+
+                        let mut res = crate::json_response(StatusCode::SWITCHING_PROTOCOLS, "");
+                        res.headers_mut().insert(
+                            hyper::header::UPGRADE,
+                            hyper::header::HeaderValue::from_static("websocket"),
+                        );
+                        res.headers_mut().insert(
+                            hyper::header::CONNECTION,
+                            hyper::header::HeaderValue::from_static("upgrade"),
+                        );
+                        res.headers_mut().insert(
+                            "sec-websocket-accept",
+                            hyper::header::HeaderValue::from_str(&accept_key).unwrap(),
+                        );
+
+                        let handler = handler.clone();
+                        let ws_info = WsConnInfo {
+                            path: path.clone(),
+                            query_string: req.uri().query().unwrap_or("").as_bytes().to_vec(),
+                            headers: req
+                                .headers()
+                                .iter()
+                                .map(|(k, v)| {
+                                    (k.as_str().as_bytes().to_vec(), v.as_bytes().to_vec())
+                                })
+                                .collect(),
+                            client: peer_addr.map(|a| (a.ip().to_string(), a.port())),
+                        };
+
+                        tokio::task::spawn(async move {
+                            match hyper::upgrade::on(&mut req).await {
+                                Ok(upgraded) => {
+                                    let upgraded_io = hyper_util::rt::TokioIo::new(upgraded);
+                                    let ws_stream =
+                                        tokio_tungstenite::WebSocketStream::from_raw_socket(
+                                            upgraded_io,
+                                            tokio_tungstenite::tungstenite::protocol::Role::Server,
+                                            None,
+                                        )
+                                        .await;
+                                    let (write, read) = ws_stream.split();
+                                    dispatch_ws(Box::new(read), Box::new(write), ws_info, &handler)
+                                        .await;
+                                }
+                                Err(e) => tracing::error!("WebSocket upgrade error: {}", e),
+                            }
+                        });
+                        return Ok(res);
+                    }
+                }
+            }
+
+            // WASM middleware (synchronous setup + one await)
+            if let Some(ref wasm) = wasm_middleware {
+                let wasm_span = tracing::debug_span!("wasm.middleware");
+                let mut hdrs = serde_json::Map::new();
+                for (k, v) in req.headers() {
+                    if let Ok(v_str) = v.to_str() {
+                        hdrs.insert(
+                            k.as_str().to_string(),
+                            serde_json::Value::String(v_str.to_string()),
+                        );
+                    }
+                }
+                let req_json = serde_json::json!({
+                    "path": path,
+                    "method": req.method().as_str(),
+                    "headers": hdrs,
+                })
+                .to_string();
+
+                let wasm_result = {
+                    let _ws = wasm_span.enter();
+                    wasm.execute_middleware(&req_json).await
+                };
+
+                match wasm_result {
+                    Ok(res_json) => {
+                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&res_json) {
+                            if let Some(status) = parsed.get("status") {
+                                if let Some(status_code) = status.as_u64() {
+                                    if status_code != 200 {
+                                        let body = parsed
+                                            .get("body")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("")
+                                            .to_string();
+                                        span.record("http.status_code", status_code);
+                                        metrics.record_status(
+                                            StatusCode::from_u16(status_code as u16)
+                                                .unwrap_or(StatusCode::FORBIDDEN),
+                                        );
+                                        metrics
+                                            .record_latency(start.elapsed().as_secs_f64() * 1000.0);
+                                        return Ok(json_response(
+                                            StatusCode::from_u16(status_code as u16)
+                                                .unwrap_or(StatusCode::FORBIDDEN),
+                                            &body,
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("WASM execution error: {:?}", e);
+                    }
+                }
+            }
+
+            // Run middleware chain (async, no entered span across await)
+            let resp = tokio::time::timeout(request_timeout(), chain.run(req)).await;
+
+            match resp {
+                Ok(r) => match r {
+                    Ok(response) => {
+                        let status = response.status();
+                        span.record("http.status_code", status.as_u16());
+                        metrics.record_status(status);
+                        metrics.record_latency(start.elapsed().as_secs_f64() * 1000.0);
+
+                        // If the response is 404, try serving static files.
+                        if status == StatusCode::NOT_FOUND {
+                            if let Some(resp) =
+                                try_serve_static(&path, &static_dir, &static_mounts).await
+                            {
+                                return Ok::<_, anyhow::Error>(resp);
+                            }
+                        }
+                        Ok(response)
+                    }
+                    Err(_) => {
+                        span.record("http.status_code", 404u16);
+                        metrics.record_status(StatusCode::NOT_FOUND);
+                        metrics.record_latency(start.elapsed().as_secs_f64() * 1000.0);
+
+                        // Middleware error — try static files
+                        if let Some(resp) =
+                            try_serve_static(&path, &static_dir, &static_mounts).await
+                        {
+                            return Ok::<_, anyhow::Error>(resp);
+                        }
+                        Ok(json_response(StatusCode::NOT_FOUND, r#"{"detail":"not found"}"#))
+                    }
+                },
+                Err(_) => {
+                    // Handler exceeded the request timeout.
+                    span.record("http.status_code", 504u16);
+                    metrics.record_status(StatusCode::GATEWAY_TIMEOUT);
+                    metrics.record_latency(start.elapsed().as_secs_f64() * 1000.0);
+                    tracing::warn!(
+                        "Request to {} {} timed out after {:?}",
+                        method,
+                        path,
+                        request_timeout()
+                    );
+                    Ok(json_response(
+                        StatusCode::GATEWAY_TIMEOUT,
+                        r#"{"detail":"request timeout"}"#,
+                    ))
+                }
+            }
+        }
+    });
+    let mut builder =
+        hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new());
+    builder
+        .http1()
+        .timer(hyper_util::rt::TokioTimer::new())
+        .header_read_timeout(HEADER_READ_TIMEOUT);
+    let mut conn = std::pin::pin!(builder.serve_connection_with_upgrades(io, svc));
+
+    if let Some(token) = token_clone {
+        tokio::select! {
+            res = &mut conn => {
+                if let Err(e) = res {
+                    tracing::warn!("Connection error: {}", e);
+                }
+            }
+            _ = token.cancelled() => {
+                conn.as_mut().graceful_shutdown();
+                if let Err(e) = conn.await {
+                    tracing::warn!("Connection error during shutdown: {}", e);
+                }
+            }
+        }
+    } else {
+        if let Err(e) = conn.await {
+            tracing::warn!("Connection error: {}", e);
+        }
+    }
+    conn_metrics.connection_closed();
+}
+
 async fn serve_http(
     listener: TcpListener,
     chain: Arc<MiddlewareChain>,
@@ -1157,9 +1572,6 @@ async fn serve_http(
         let chain = chain.clone();
         let static_dir = static_dir.clone();
         let static_mounts = static_mounts.clone();
-        let conn_metrics = metrics.clone();
-        conn_metrics.connection_opened();
-        let spawn_metrics = conn_metrics.clone();
         let wasm_middleware = wasm_middleware.clone();
         let peer_addr = peer;
 
@@ -1168,235 +1580,126 @@ async fn serve_http(
 
         let token_clone = shutdown.clone();
         let conn_semaphore = conn_semaphore.clone();
-        connections.spawn(async move {
-            // Bound concurrent connections: a permit is held for the life of
-            // the connection so a flood of accepts can't exhaust FDs/memory
-            // (connection-flood / slowloris resource exhaustion).
-            let _permit = conn_semaphore
-                .acquire_owned()
-                .await
-                .expect("connection semaphore closed");
-            let io = TokioIo::new(stream);
-            let arena = Arc::new(SharedArena::new());
-                        let svc = service_fn(move |mut req| {
-                            arena.reset();
-                            let chain = chain.clone();
-                            let arena = arena.clone();
-                            let static_dir = static_dir.clone();
-                            let static_mounts = static_mounts.clone();
-                            let metrics = spawn_metrics.clone();
-                let wasm_middleware = wasm_middleware.clone();
-                #[cfg(feature = "ws")]
-                let ws_handler = ws_handler.clone();
-                async move {
-                    let path = req.uri().path().to_string();
-                    let method = req.method().clone();
-                    let _arena_path = arena.alloc_str(&path);
-                    let start = std::time::Instant::now();
-                    req.extensions_mut().insert(peer_addr);
+        connections.spawn(serve_connection(
+            stream,
+            Some(peer_addr),
+            chain,
+            static_dir,
+            static_mounts,
+            conn_semaphore,
+            metrics.clone(),
+            token_clone,
+            wasm_middleware,
+            #[cfg(feature = "ws")]
+            ws_handler,
+        ));
+    }
 
-                    let span = tracing::info_span!(
-                        "http.request",
-                        http.method = method.as_str(),
-                        http.path = %path,
-                        http.status_code = tracing::field::Empty,
-                    );
+    if shutdown.is_some() {
+        tracing::info!("Waiting for {} active connections to drain...", connections.len());
+        tokio::select! {
+            _ = async { while connections.join_next().await.is_some() {} } => {
+                tracing::debug!("all connections closed gracefully");
+            }
+            _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => {
+                tracing::warn!("Graceful shutdown timeout exceeded. Dropping remaining connections.");
+            }
+        }
+    } else {
+        while connections.join_next().await.is_some() {}
+    }
 
-                    metrics.record_request();
+    Ok(())
+}
 
-                    #[cfg(feature = "ws")]
-                    if let Some(ref handler) = ws_handler {
-                        let is_ws = req.headers().get(hyper::header::UPGRADE)
-                            .and_then(|v| v.to_str().ok())
-                            .map(|s| s.eq_ignore_ascii_case("websocket"))
-                            .unwrap_or(false);
+/// Bind a Unix domain socket, removing any stale socket file left from a
+/// previous run (a common footgun — `bind` fails with EADDRINUSE on an existing
+/// socket path). The socket file is unlinked when the listener is dropped.
+#[cfg(unix)]
+pub async fn bind_unix_listener(path: &std::path::Path) -> Result<tokio::net::UnixListener> {
+    // Remove a leftover socket file so re-start doesn't fail with EADDRINUSE.
+    if path.exists() {
+        let _ = std::fs::remove_file(path);
+    }
+    let listener = tokio::net::UnixListener::bind(path)
+        .map_err(|e| anyhow::anyhow!("failed to bind unix socket {}: {e}", path.display()))?;
+    // Best-effort: clean up the socket file on process exit.
+    let cleanup = path.to_path_buf();
+    tokio::spawn(async move {
+        // Hold a guard so the file is removed when the process terminates.
+        let _guard = UnixSocketGuard { path: cleanup };
+        // Never resolve: kept alive for the process lifetime.
+        std::future::pending::<()>().await;
+    });
+    Ok(listener)
+}
 
-                        if is_ws {
-                            if let Some(key) = req.headers().get("sec-websocket-key") {
-                                let key_str = key.to_str().unwrap_or("");
-                                let mut sha1 = sha1::Sha1::new();
-                                use sha1::Digest;
-                                sha1.update(key_str.as_bytes());
-                                sha1.update(b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
-                                use base64::Engine;
-                                let accept_key = base64::engine::general_purpose::STANDARD.encode(sha1.finalize());
+#[cfg(unix)]
+struct UnixSocketGuard {
+    path: std::path::PathBuf,
+}
 
-                                let mut res = crate::json_response(StatusCode::SWITCHING_PROTOCOLS, "");
-                                res.headers_mut().insert(hyper::header::UPGRADE, hyper::header::HeaderValue::from_static("websocket"));
-                                res.headers_mut().insert(hyper::header::CONNECTION, hyper::header::HeaderValue::from_static("upgrade"));
-                                res.headers_mut().insert("sec-websocket-accept", hyper::header::HeaderValue::from_str(&accept_key).unwrap());
+#[cfg(unix)]
+impl Drop for UnixSocketGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
 
-                                let handler = handler.clone();
-                                let ws_info = WsConnInfo {
-                                    path: path.clone(),
-                                    query_string: req.uri().query().unwrap_or("").as_bytes().to_vec(),
-                                    headers: req
-                                        .headers()
-                                        .iter()
-                                        .map(|(k, v)| (k.as_str().as_bytes().to_vec(), v.as_bytes().to_vec()))
-                                        .collect(),
-                                    client: Some((peer_addr.ip().to_string(), peer_addr.port())),
-                                };
+/// Accept loop for a Unix domain socket. Identical to `serve_http` except it
+/// serves over a `UnixListener` and passes `peer_addr: None` to the shared
+/// per-connection handler (Unix peers have no IP).
+#[cfg(unix)]
+async fn serve_unix(
+    listener: tokio::net::UnixListener,
+    chain: Arc<MiddlewareChain>,
+    static_dir: Option<StaticDir>,
+    static_mounts: Vec<StaticMount>,
+    metrics: Metrics,
+    shutdown: Option<CancellationToken>,
+    wasm_middleware: Option<Arc<crate::wasm::WasmEngine>>,
+    #[cfg(feature = "ws")] ws_handler: Option<WsHandler>,
+) -> Result<()> {
+    let mut connections = tokio::task::JoinSet::new();
+    let conn_semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(max_connections()));
 
-                                tokio::task::spawn(async move {
-                                    match hyper::upgrade::on(&mut req).await {
-                                        Ok(upgraded) => {
-                                            let upgraded_io = hyper_util::rt::TokioIo::new(upgraded);
-                                            let ws_stream = tokio_tungstenite::WebSocketStream::from_raw_socket(
-                                                upgraded_io,
-                                                tokio_tungstenite::tungstenite::protocol::Role::Server,
-                                                None
-                                            ).await;
-                                            let (write, read) = ws_stream.split();
-                                            dispatch_ws(Box::new(read), Box::new(write), ws_info, &handler).await;
-                                        }
-                                        Err(e) => tracing::error!("WebSocket upgrade error: {}", e),
-                                    }
-                                });
-                                return Ok(res);
-                            }
-                        }
-                    }
+    loop {
+        let token = shutdown.as_ref().cloned();
 
-                    // WASM middleware (synchronous setup + one await)
-                    if let Some(ref wasm) = wasm_middleware {
-                        let wasm_span = tracing::debug_span!("wasm.middleware");
-                        let mut hdrs = serde_json::Map::new();
-                        for (k, v) in req.headers() {
-                            if let Ok(v_str) = v.to_str() {
-                                hdrs.insert(
-                                    k.as_str().to_string(),
-                                    serde_json::Value::String(v_str.to_string()),
-                                );
-                            }
-                        }
-                        let req_json = serde_json::json!({
-                            "path": path,
-                            "method": req.method().as_str(),
-                            "headers": hdrs,
-                        })
-                        .to_string();
-
-                        let wasm_result = {
-                            let _ws = wasm_span.enter();
-                            wasm.execute_middleware(&req_json).await
-                        };
-
-                        match wasm_result {
-                            Ok(res_json) => {
-                                if let Ok(parsed) =
-                                    serde_json::from_str::<serde_json::Value>(&res_json)
-                                {
-                                    if let Some(status) = parsed.get("status") {
-                                        if let Some(status_code) = status.as_u64() {
-                                            if status_code != 200 {
-                                                let body = parsed
-                                                    .get("body")
-                                                    .and_then(|v| v.as_str())
-                                                    .unwrap_or("")
-                                                    .to_string();
-                                                span.record("http.status_code", status_code);
-                                                metrics.record_status(
-                                                    StatusCode::from_u16(status_code as u16)
-                                                        .unwrap_or(StatusCode::FORBIDDEN),
-                                                );
-                                                metrics.record_latency(
-                                                    start.elapsed().as_secs_f64() * 1000.0,
-                                                );
-                                                return Ok(json_response(
-                                                    StatusCode::from_u16(status_code as u16)
-                                                        .unwrap_or(StatusCode::FORBIDDEN),
-                                                    &body,
-                                                ));
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                tracing::error!("WASM execution error: {:?}", e);
-                            }
-                        }
-                    }
-
-                    // Run middleware chain (async, no entered span across await)
-                    let resp = tokio::time::timeout(request_timeout(), chain.run(req)).await;
-
-                    match resp {
-                        Ok(r) => match r {
-                            Ok(response) => {
-                                let status = response.status();
-                                span.record("http.status_code", status.as_u16());
-                                metrics.record_status(status);
-                                metrics.record_latency(start.elapsed().as_secs_f64() * 1000.0);
-
-                                // If the response is 404, try serving static files.
-                                if status == StatusCode::NOT_FOUND {
-                                    if let Some(resp) = try_serve_static(&path, &static_dir, &static_mounts).await {
-                                        return Ok::<_, anyhow::Error>(resp);
-                                    }
-                                }
-                                Ok(response)
-                            }
-                            Err(_) => {
-                                span.record("http.status_code", 404u16);
-                                metrics.record_status(StatusCode::NOT_FOUND);
-                                metrics.record_latency(start.elapsed().as_secs_f64() * 1000.0);
-
-                                // Middleware error — try static files
-                                if let Some(resp) = try_serve_static(&path, &static_dir, &static_mounts).await {
-                                    return Ok::<_, anyhow::Error>(resp);
-                                }
-                                Ok(json_response(
-                                    StatusCode::NOT_FOUND,
-                                    r#"{"detail":"not found"}"#
-                                ))
-                            }
-                        },
-                        Err(_) => {
-                            // Handler exceeded the request timeout.
-                            span.record("http.status_code", 504u16);
-                            metrics.record_status(StatusCode::GATEWAY_TIMEOUT);
-                            metrics.record_latency(start.elapsed().as_secs_f64() * 1000.0);
-                            tracing::warn!(
-                                "Request to {} {} timed out after {:?}",
-                                method,
-                                path,
-                                request_timeout()
-                            );
-                            Ok(json_response(
-                                StatusCode::GATEWAY_TIMEOUT,
-                                r#"{"detail":"request timeout"}"#
-                            ))
-                        }
-                    }
-                }
-            });
-            let mut builder = hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new());
-            builder.http1().timer(hyper_util::rt::TokioTimer::new()).header_read_timeout(HEADER_READ_TIMEOUT);
-            let mut conn = std::pin::pin!(builder.serve_connection_with_upgrades(io, svc));
-
-            if let Some(token) = token_clone {
-                tokio::select! {
-                    res = &mut conn => {
-                        if let Err(e) = res {
-                            tracing::warn!("Connection error: {}", e);
-                        }
-                    }
-                    _ = token.cancelled() => {
-                        conn.as_mut().graceful_shutdown();
-                        if let Err(e) = conn.await {
-                            tracing::warn!("Connection error during shutdown: {}", e);
-                        }
-                    }
-                }
-            } else {
-                if let Err(e) = conn.await {
-                    tracing::warn!("Connection error: {}", e);
+        let (stream, _peer) = if let Some(token) = &token {
+            tokio::select! {
+                result = listener.accept() => result?,
+                _ = token.cancelled() => {
+                    tracing::info!("Shutdown signal received, stopping accept loop");
+                    break;
                 }
             }
-            conn_metrics.connection_closed();
-        });
+        } else {
+            listener.accept().await?
+        };
+
+        let chain = chain.clone();
+        let static_dir = static_dir.clone();
+        let static_mounts = static_mounts.clone();
+        let wasm_middleware = wasm_middleware.clone();
+
+        #[cfg(feature = "ws")]
+        let ws_handler = ws_handler.clone();
+
+        let conn_semaphore = conn_semaphore.clone();
+        connections.spawn(serve_connection(
+            stream,
+            None,
+            chain,
+            static_dir,
+            static_mounts,
+            conn_semaphore,
+            metrics.clone(),
+            shutdown.clone(),
+            wasm_middleware,
+            #[cfg(feature = "ws")]
+            ws_handler,
+        ));
     }
 
     if shutdown.is_some() {
@@ -1987,6 +2290,49 @@ mod tests {
         router.insert(Method::GET, "/metrics", Handler::Prometheus).unwrap();
         let m = router.at(&Method::GET, "/metrics").unwrap();
         assert!(matches!(m.handler, Handler::Prometheus));
+    }
+
+    // Bind a Unix socket, serve a trivial handler over it, and confirm a raw
+    // HTTP/1.1 request over the socket gets a 200 response. Exercises the
+    // shared `serve_connection` path through `serve_unix`.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_unix_socket_serves_http() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("justapi-test-uds-{}.sock", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+
+        let listener = bind_unix_listener(&path).await.expect("bind unix listener");
+
+        let chain = std::sync::Arc::new(MiddlewareChain::new(std::sync::Arc::new(
+            |_req: Request<Incoming>| {
+                Box::pin(async move { Ok(crate::json_response(StatusCode::OK, r#"{"uds":true}"#)) })
+            },
+        )));
+
+        let server = tokio::spawn(async move {
+            #[cfg(feature = "ws")]
+            let _ = serve_unix(listener, chain, None, Vec::new(), Metrics::new(), None, None, None)
+                .await;
+            #[cfg(not(feature = "ws"))]
+            let _ = serve_unix(listener, chain, None, Vec::new(), Metrics::new(), None, None).await;
+        });
+
+        // Give the acceptor a moment to start.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let mut stream = tokio::net::UnixStream::connect(&path).await.unwrap();
+        stream.write_all(b"GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n").await.unwrap();
+        let mut buf = Vec::new();
+        stream.read_to_end(&mut buf).await.unwrap();
+        let resp = String::from_utf8_lossy(&buf);
+        assert!(resp.contains("200"), "expected 200, got: {resp}");
+        assert!(resp.contains("\"uds\":true"), "expected uds body, got: {resp}");
+
+        server.abort();
+        let _ = std::fs::remove_file(&path);
     }
 }
 
