@@ -1518,3 +1518,21 @@ via `listener_from_unix_fd`).
 
 No request-path perf regression vs TCP (shared `serve_connection`). Unit test
 `test_unix_socket_serves_http` added. Gates green.
+
+### ADR-063 — Route-lookup cache (`Router::resolve`)
+
+A bounded, always-on memoization of route lookups. Static-route hits and
+definitive `NotFound`s are cached (removing the `matchit` traversal + the
+cross-method `MethodNotAllowed` scan on repeat hits/misses). Param routes and
+`MethodNotAllowed` bypass the cache (fresh full match each request, no stale
+data). Bounded FIFO eviction (default 1024 keys), `Arc<Mutex<HashMap>>`.
+
+| Property | Result |
+|---|---|
+| Repeat GET on a static route | served from cache after first match |
+| Repeat miss (NotFound) | memoized; no re-scan |
+| Param route (`/users/{id}`) | resolves fresh each time, params intact |
+| `--workers N` | per-worker router cache (no cross-process sharing needed) |
+
+No routing-semantics change (param/method-not-allowed/fallback identical).
+Unit tests added. Gates green. Negligible fixed memory per key.

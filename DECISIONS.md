@@ -2350,3 +2350,42 @@ http://localhost/` → 404 (no route). Prefork: `justapi serve --unix /tmp/j.soc
 exited cleanly"), tree reaped. Gates green: `cargo test --workspace
 --features justapi-core/db`, clippy `-D warnings`, `cargo fmt --check`. (UDS is
 Unix-only; on non-unix `--unix` errors clearly.)
+
+## ADR-063 — 2026-07-17 — Route-lookup cache (`Router::resolve` memoization)
+
+**Context:** `Router::at` does a `HashMap` lookup + a `matchit` radix traversal on
+every request, then (for non-matches) a second scan across all methods to
+distinguish `NotFound` from `MethodNotAllowed`. At high RPS this is pure,
+repeatable work for stable URLs. The feature list calls for a "route cache".
+
+**Decision / change:**
+- `crates/justapi-core/src/router.rs`: added `RouteResolution<T> { handler, params }`
+  (owned, no borrow into the router) and `Router::resolve(&self, method, path)`
+  which memoizes lookups through a bounded `RouteCache<T>` (`Mutex<HashMap>` +
+  FIFO `order` vec for eviction; default capacity 1024, always-on).
+  - **Caching policy (safety):** only *stable* outcomes are cached — static-route
+    hits (no path params) and definitive `NotFound`s. **Param routes and
+    `MethodNotAllowed` are never cached**, because they require a fresh full match
+    (param extraction / cross-method scan) each request and could otherwise
+    return stale data. The cache is per-`Router` (`Arc<RouteCache>` so `Router`
+    stays `Clone`); negative entries avoid re-scanning on repeat misses.
+  - `Router::new()` keeps an always-on cache; `without_cache()` and
+    `with_cache_capacity(0)` disable it (useful for tests/benchmarks).
+- `crates/justapi-core/src/server/mod.rs`: `execute_handler` now takes an owned
+  `Handler` + `params: Vec<(String,String)>` (replacing the borrowed `Match`),
+  eliminating the router borrow on the hot path and letting `make_handler` call
+  `router.resolve(...)` and forward owned params to `ParamsEcho`/custom handlers
+  via request extensions. The existing `Match`/`at` API is retained for tests and
+  `gateway.rs` (no behavior change there).
+
+**Evidence:** 4 new router unit tests (`test_resolve_static_hit_and_cache`,
+`test_resolve_not_found_is_cached`, `test_resolve_param_route_bypasses_cache`,
+`test_without_cache_still_resolves`). Full suite green (266 core tests). clippy
+`-D warnings` + `fmt` clean. The cache is hit on every repeat request to a static
+route / miss, removing the matchit traversal and the cross-method `MethodNotAllowed`
+scan (which the pre-existing benchmark test still bounds at <100ns release / <1µs
+debug). No change to routing semantics: param routes, method-not-allowed, and
+fallback all resolve identically.
+
+**Trade-off:** small fixed memory per cached `(method, path)` key (bounded by
+capacity, FIFO-evicted). No new dependency.
