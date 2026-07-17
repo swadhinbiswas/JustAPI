@@ -1810,6 +1810,7 @@ async fn serve_with_tls(
                                 }
                             }
 
+                            let method = req.method().clone();
                             let resp = tokio::time::timeout(request_timeout(), chain.run(req)).await;
 
                             match resp {

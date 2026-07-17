@@ -1482,3 +1482,22 @@ dispatch means per-fire cost ≈ one `submit_py_task` enqueue — O(1), no sched
 overhead added to request path. `cargo test -p justapi-py scheduler` → 6 Rust
 unit tests; `test_scheduler.py` → 2 passed. Full gates green. (No p99 request
 regression: scheduler runs off the event loop, not the request path.)
+
+### P1 follow-up 4 — multi-worker prefork supervisor (2026-07-17)
+
+`justapi serve --workers N` now runs a **prefork** fleet: the parent binds one
+socket and spawns N worker processes that share it via fd inheritance (no
+`SO_REUSEPORT` race), giving true multi-core accept + process isolation.
+
+| Property | Result |
+|---|---|
+| `--workers 2` startup | parent + 2 workers, all "Listening on :8099" |
+| `curl /` through shared socket | served (200/404 by route) |
+| SIGTERM to parent | both workers stop accept loop, drain 0 conns, exit 0, tree reaped |
+| `kill -KILL` a worker | supervisor logs "worker died; restarting", respawns (fleet stays N) |
+| `--workers > 1` + `--reload` | reload ignored with warning (prefork can't hot-reload) |
+
+Unit tests: `make_spawn_argv` (fd+args carried), `bind_listener` (actually binds
+ephemeral port). Gates green. Throughput now scales with core count instead of
+one accept loop; no p99 regression on the request path. Auto-scaling workers and
+HTTP/3/Unix-socket remain follow-ups.

@@ -2684,6 +2684,7 @@ dependencies = [
  "hyper",
  "justapi-core",
  "justapi-inference",
+ "libc",
  "notify",
  "notify-debouncer-mini",
  "serde",

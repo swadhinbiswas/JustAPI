@@ -31,6 +31,7 @@ justapi-py = { path = "crates/justapi-py" }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
+libc = "0.2"
 
 # HTTP stack
 hyper = { version = "1", features = ["full"] }

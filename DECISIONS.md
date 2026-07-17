@@ -2260,3 +2260,52 @@ minute-boundary `0 * * * * *`, interval first-fire + advance + skip-past). Pytho
 probe: `fired == ['every','cron',...]` `count>=4`, `stats={jobs:2,fired:4,...}`.
 Full gates green (`cargo test --workspace --features db`, clippy `-D warnings`,
 `cargo fmt --check`).
+
+## ADR-061 — 2026-07-17 — Multi-worker prefork supervisor (`justapi serve --workers N`)
+
+**Context:** JustAPI ran a single-process server (one accept loop on one
+`tokio` runtime), capping throughput at one core for accept + handler dispatch
+and offering no process-isolation fault tolerance. Users expect a production
+ASGI/WSGI-style multi-worker model (uvicorn `--workers`, gunicorn). The feature
+list calls for "Multi-worker runtime", "Process management", "Graceful
+shutdown", and (later) "Auto-scaling workers".
+
+**Decision / change:**
+- New `crates/justapi-cli/src/workers.rs`: a **prefork** supervisor. The parent
+  binds the `TcpListener` **once** (`bind_listener`), clears `FD_CLOEXEC` on the
+  socket fd (modern std sets it; without clearing, the fd is closed across the
+  child `exec` → "IO Safety violation: owned file descriptor already closed"
+  abort), then spawns `N` children re-exec'ing the same binary with a hidden
+  `--worker-fd <fd>` flag. Each worker recovers the socket via
+  `listener_from_fd` and serves on it — true OS-process isolation, no
+  `SO_REUSEPORT` port races, all workers share one kernel socket backlog.
+- **Process management:** a persistent `JoinSet` of worker waits + a parallel
+  `pids[]` vector. On unexpected exit (non-shutdown) the worker is **restarted**
+  (verified: `kill -KILL` a worker → supervisor respawns it, fleet stays at N).
+- **Graceful shutdown:** SIGTERM/SIGINT cancel a `CancellationToken`; the
+  supervisor forwards SIGTERM to every live worker and waits up to
+  `drain_timeout` (default 5s) for in-flight requests to drain before forcibly
+  reaping with SIGKILL (verified: parent SIGTERM → both workers stop accept
+  loop, drain 0 connections, exit 0, tree fully reaped).
+- Refactored the previously-duplicated reload/non-reload server-build into
+  `build_server()` + `build_engines()` helpers so single-process, reload, and
+  worker paths share identical wiring (static/compression/TLS/inference).
+- `--workers > 1` is incompatible with `--reload` (hot reload restarts the whole
+  tree); the supervisor warns and ignores `--reload` in that case. `--workers` is
+  default 1 (unchanged behavior). Added `libc = "0.2"` to the workspace for
+  `fcntl`/`kill`.
+- Also fixed a **pre-existing, unrelated** bug gated behind the `tls` feature: a
+  `method` variable referenced in the TLS request-timeout branch was out of
+  scope (`server/mod.rs:1848`); captured `let method = req.method().clone();`
+  before the timeout consumes `req`. (The `tls` feature still has separate
+  move-error breakage out of scope for this ADR.)
+
+**Evidence:** `cargo test -p justapi-cli workers` → 2 unit tests
+(`make_spawn_argv` carries fd+args; `bind_listener` actually binds an ephemeral
+port). Manual: `justapi serve --addr 127.0.0.1:8099 --workers 2` → parent + 2
+workers all "Listening on …:8099"; `curl /` served (404, no route — expected);
+`kill -TERM` parent → both workers drain + exit 0, tree reaped; `kill -KILL` a
+worker → respawned. Gates green: `cargo test --workspace --features db`, clippy
+`-D warnings`, `cargo fmt --check`. (Windows/macOS: `--worker-fd` path is Unix-
+gated; non-unix falls back to single-process with a clear error — auto-scaling
+left for a follow-up.)
