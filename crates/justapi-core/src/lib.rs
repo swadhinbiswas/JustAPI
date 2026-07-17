@@ -32,6 +32,7 @@ pub mod trace_context;
 pub mod tracing_setup;
 pub mod validate;
 pub mod wasm;
+pub mod xml;
 
 pub use server::{serve, Server};
 
