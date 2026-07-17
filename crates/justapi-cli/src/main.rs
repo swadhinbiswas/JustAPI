@@ -26,6 +26,11 @@ enum Commands {
         #[arg(short, long, default_value = "127.0.0.1:8080")]
         addr: SocketAddr,
 
+        /// Bind to a Unix domain socket instead of TCP (e.g. `/run/justapi.sock`).
+        /// Takes precedence over `--addr` when both are given. Unix only.
+        #[arg(long)]
+        unix: Option<String>,
+
         /// Serve static files from this directory
         #[arg(long)]
         static_dir: Option<String>,
@@ -531,7 +536,7 @@ fn build_engines(
 /// wiring is applied uniformly for both the single-process and worker paths,
 /// eliminating the previous duplication between the reload/non-reload branches.
 fn build_server(
-    addr: SocketAddr,
+    listen_addr: &justapi_core::server::ListenAddr,
     static_dir: &Option<String>,
     #[cfg(feature = "compression")] compress: bool,
     #[cfg(feature = "tls")] tls_cert: &Option<String>,
@@ -542,7 +547,7 @@ fn build_server(
     >,
     token: tokio_util::sync::CancellationToken,
 ) -> justapi_core::Server {
-    let mut server = justapi_core::Server::new(addr).with_shutdown(token);
+    let mut server = justapi_core::Server::new(listen_addr.clone()).with_shutdown(token);
 
     if let Some(dir) = static_dir.clone() {
         server = server.with_static_dir(dir);
@@ -609,6 +614,7 @@ async fn run() -> anyhow::Result<()> {
     match cli.command {
         Commands::Serve {
             addr,
+            unix,
             static_dir,
             #[cfg(feature = "compression")]
             compress,
@@ -639,6 +645,15 @@ async fn run() -> anyhow::Result<()> {
         } => {
             let drain_duration = Duration::from_secs(drain_timeout);
 
+            // Resolve the listen address: a Unix socket takes precedence over TCP.
+            let is_unix = unix.is_some();
+            let listen_addr = match &unix {
+                Some(path) => {
+                    justapi_core::server::ListenAddr::Unix(std::path::PathBuf::from(path))
+                }
+                None => justapi_core::server::ListenAddr::Tcp(addr),
+            };
+
             // Build the inference engines (no-op unless --model supplied).
             #[cfg(feature = "inference")]
             let (engine, scheduler_engine) =
@@ -648,11 +663,10 @@ async fn run() -> anyhow::Result<()> {
             if let Some(fd) = worker_fd {
                 #[cfg(unix)]
                 {
-                    let listener = workers::listener_from_fd(fd)?;
                     let token = tokio_util::sync::CancellationToken::new();
                     wire_shutdown_signals(token.clone());
                     let server = build_server(
-                        addr,
+                        &listen_addr,
                         &static_dir,
                         #[cfg(feature = "compression")]
                         compress,
@@ -666,7 +680,11 @@ async fn run() -> anyhow::Result<()> {
                         &scheduler_engine,
                         token,
                     );
-                    let result = server.run_on(listener).await;
+                    let result = if is_unix {
+                        server.run_on_uds(workers::listener_from_unix_fd(fd)?).await
+                    } else {
+                        server.run_on(workers::listener_from_fd(fd)?).await
+                    };
                     justapi_core::tracing_setup::shutdown_tracing();
                     return result;
                 }
@@ -685,10 +703,27 @@ async fn run() -> anyhow::Result<()> {
                 }
                 anyhow::ensure!(workers <= 256, "worker count must be <= 256");
 
-                let std_listener = workers::bind_listener(addr)?;
-                let raw_fd = {
+                // Bind the shared listener (TCP or Unix) once in the parent and
+                // hand its fd to each worker child. The listener is kept alive in
+                // the parent for the whole supervisor lifetime so its fd is not
+                // closed before the children inherit it.
+                #[cfg(unix)]
+                let (raw_fd, _keep_alive) = {
                     use std::os::fd::AsRawFd;
-                    std_listener.as_raw_fd()
+                    if is_unix {
+                        let listener = workers::bind_unix_listener(unix.as_deref().unwrap())?;
+                        (listener.as_raw_fd(), Box::new(listener) as Box<dyn std::any::Any>)
+                    } else {
+                        let listener = workers::bind_listener(addr)?;
+                        (listener.as_raw_fd(), Box::new(listener) as Box<dyn std::any::Any>)
+                    }
+                };
+                #[cfg(not(unix))]
+                let (raw_fd, _keep_alive) = {
+                    anyhow::ensure!(!is_unix, "Unix sockets require a Unix platform");
+                    use std::os::fd::AsRawFd;
+                    let listener = workers::bind_listener(addr)?;
+                    (listener.as_raw_fd(), Box::new(listener) as Box<dyn std::any::Any>)
                 };
 
                 // Original argv (minus program name) so each child reconstructs
@@ -699,7 +734,7 @@ async fn run() -> anyhow::Result<()> {
                 wire_shutdown_signals(shutdown.clone());
 
                 let spawn = workers::make_spawn_argv(&base_argv, raw_fd, drain_duration);
-                tracing::info!(addr = %addr, workers, "starting prefork server");
+                tracing::info!(addr = %listen_addr.display(), workers, "starting prefork server");
                 let result = workers::supervise(workers, spawn, shutdown).await;
                 justapi_core::tracing_setup::shutdown_tracing();
                 return result;
@@ -758,7 +793,7 @@ async fn run() -> anyhow::Result<()> {
                     });
 
                     let server = build_server(
-                        addr,
+                        &listen_addr,
                         &static_dir,
                         #[cfg(feature = "compression")]
                         compress,
@@ -773,9 +808,21 @@ async fn run() -> anyhow::Result<()> {
                         token.clone(),
                     );
 
-                    let std_listener = workers::bind_listener(addr)?;
-                    let listener = tokio::net::TcpListener::from_std(std_listener)?;
-                    let result = server.run_on(listener).await;
+                    let result = if is_unix {
+                        #[cfg(unix)]
+                        {
+                            let listener = workers::bind_unix_listener(unix.as_deref().unwrap())?;
+                            server.run_on_uds(tokio::net::UnixListener::from_std(listener)?).await
+                        }
+                        #[cfg(not(unix))]
+                        {
+                            anyhow::bail!("Unix sockets require a Unix platform")
+                        }
+                    } else {
+                        let std_listener = workers::bind_listener(addr)?;
+                        let listener = tokio::net::TcpListener::from_std(std_listener)?;
+                        server.run_on(listener).await
+                    };
 
                     // Recover the watcher receiver for the next iteration.
                     if let Ok(recovered) = return_rx.await {
@@ -800,7 +847,7 @@ async fn run() -> anyhow::Result<()> {
 
                 // Non-reload path: run server once and exit.
                 let server = build_server(
-                    addr,
+                    &listen_addr,
                     &static_dir,
                     #[cfg(feature = "compression")]
                     compress,
@@ -910,7 +957,9 @@ async fn run() -> anyhow::Result<()> {
                     }
                 }
             } else {
-                let router = justapi_core::Server::new("127.0.0.1:0".parse().unwrap());
+                let router = justapi_core::Server::new(justapi_core::server::ListenAddr::Tcp(
+                    "127.0.0.1:0".parse().unwrap(),
+                ));
                 let _ = router;
                 println!("Use --spec-file to load an OpenAPI spec for route listing.");
                 println!("For built-in routes, access /openapi.json on a running server.");

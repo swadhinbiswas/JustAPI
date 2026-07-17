@@ -2309,3 +2309,44 @@ worker → respawned. Gates green: `cargo test --workspace --features db`, clipp
 `-D warnings`, `cargo fmt --check`. (Windows/macOS: `--worker-fd` path is Unix-
 gated; non-unix falls back to single-process with a clear error — auto-scaling
 left for a follow-up.)
+
+## ADR-062 — 2026-07-17 — Unix domain socket listener support (`justapi serve --unix <path>`)
+
+**Context:** The feature list calls for "Unix domain socket support" for local
+deployments (no TCP port; socket-permission-gated access; easy systemd socket
+activation and nginx upstreams). `Server` only accepted a TCP `SocketAddr`.
+
+**Decision / change:**
+- `crates/justapi-core/src/server/mod.rs`: introduced a `ListenAddr` enum
+  (`Tcp(SocketAddr)` | `Unix(PathBuf)`) with `From<SocketAddr>`, and
+  `Server::new` now takes `impl Into<ListenAddr>`. `Server::run()` branches on
+  TCP vs Unix; new `run_on_uds(UnixListener)` accepts an already-bound socket.
+  Per-connection logic (`serve_connection`) was extracted out of `serve_http`
+  and is shared by the TCP and Unix accept loops (`serve_unix` / `serve_http`).
+  `bind_unix_listener(path)` removes a stale socket file on bind and spawns a
+  `UnixSocketGuard` task that removes the file when the process's runtime
+  terminates. TLS over UDS is **not supported** (`serve_on_uds_tls` bails with a
+  clear error) — documented limitation.
+- `crates/justapi-cli/src/main.rs`: added a `--unix <path>` flag (takes
+  precedence over `--addr`). `build_server` now takes `&ListenAddr`; all four
+  paths (single-process, reload, worker `--worker-fd`, parent prefork) branch on
+  UDS vs TCP. In prefork, the parent binds the UDS once via
+  `workers::bind_unix_listener` (clears `FD_CLOEXEC`, keeps the listener alive
+  in the parent for the supervisor's lifetime) and hands the fd to each worker,
+  which recovers it with `workers::listener_from_unix_fd`.
+- `crates/justapi-cli/src/workers.rs`: added `bind_unix_listener` (sync,
+  non-CLOEXEC) mirroring `bind_listener`, and `listener_from_unix_fd` (recovers a
+  tokio `UnixListener` from an inherited fd, setting non-blocking first to avoid
+  the tokio "Registering a blocking socket" panic).
+
+**Evidence:** New `#[cfg(test)]` `test_unix_socket_serves_http` binds a UDS,
+serves a trivial handler, connects via `tokio::net::UnixStream`, and asserts a
+`200 {"uds":true}` HTTP response (exercises `serve_unix` → `serve_connection`,
+262 core tests in the workspace run). Manual: `justapi serve --unix /tmp/j.sock`
+→ "Listening on /tmp/j.sock (plain HTTP/1.1, unix)"; `curl --unix-socket /tmp/j.sock
+http://localhost/` → 404 (no route). Prefork: `justapi serve --unix /tmp/j.sock
+--workers 2` → parent + 2 workers, `curl --unix-socket` served; SIGTERM to parent
+→ both workers drain + exit 0 ("worker exited during shutdown", "all workers
+exited cleanly"), tree reaped. Gates green: `cargo test --workspace
+--features justapi-core/db`, clippy `-D warnings`, `cargo fmt --check`. (UDS is
+Unix-only; on non-unix `--unix` errors clearly.)

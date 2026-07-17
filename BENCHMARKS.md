@@ -1501,3 +1501,20 @@ Unit tests: `make_spawn_argv` (fd+args carried), `bind_listener` (actually binds
 ephemeral port). Gates green. Throughput now scales with core count instead of
 one accept loop; no p99 regression on the request path. Auto-scaling workers and
 HTTP/3/Unix-socket remain follow-ups.
+
+### ADR-062 — Unix domain socket listener (`--unix <path>`)
+
+`justapi serve` now accepts `--unix <path>` (precedes `--addr`), serving HTTP/1.1
+over an AF_UNIX socket with the same middleware/handler pipeline as TCP. Works
+with `--workers N` prefork via fd inheritance (parent binds once, workers recover
+via `listener_from_unix_fd`).
+
+| Property | Result |
+|---|---|
+| `--unix /tmp/j.sock` single-process | "Listening on /tmp/j.sock (plain HTTP/1.1, unix)"; curl `--unix-socket` served |
+| `--unix /tmp/j.sock --workers 2` | parent + 2 workers share the UDS fd; curl served |
+| UDS + SIGTERM (parent) | both workers drain + exit 0, tree reaped |
+| TLS over UDS | unsupported (clear error) — documented limitation |
+
+No request-path perf regression vs TCP (shared `serve_connection`). Unit test
+`test_unix_socket_serves_http` added. Gates green.
