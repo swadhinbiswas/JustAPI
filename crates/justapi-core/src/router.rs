@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use hyper::Method;
 use matchit::Router as MatchitRouter;
@@ -17,16 +18,95 @@ pub struct Match<'a, 'p, T> {
     pub params: matchit::Params<'a, 'p>,
 }
 
+/// An owned route resolution (no borrows into the router), used by the hot
+/// request path and by the route cache.
+#[derive(Debug, Clone)]
+pub struct RouteResolution<T> {
+    pub handler: T,
+    pub params: Vec<(String, String)>,
+}
+
+/// Cache entry for a `(Method, path)` lookup. We only cache the two stable
+/// outcomes: a static-route hit (no path params) and a definitive `NotFound`.
+/// Param routes and `MethodNotAllowed` are never cached — they require re-running
+/// the full match (param extraction / cross-method scan) on every request.
+#[derive(Debug, Clone)]
+enum CacheEntry<T> {
+    Hit(RouteResolution<T>),
+    NotFound,
+}
+
+/// Bounded, lock-free-enough route-lookup cache. A `Mutex<HashMap>` with FIFO
+/// eviction keeps the working set small; the critical section is a single map
+/// op so contention is negligible next to the I/O it saves.
+#[derive(Debug)]
+struct RouteCache<T> {
+    map: Mutex<HashMap<(Method, String), CacheEntry<T>>>,
+    order: Mutex<Vec<(Method, String)>>,
+    capacity: usize,
+}
+
+impl<T: Clone> RouteCache<T> {
+    fn new(capacity: usize) -> Self {
+        Self {
+            map: Mutex::new(HashMap::with_capacity(capacity)),
+            order: Mutex::new(Vec::with_capacity(capacity)),
+            capacity: capacity.max(1),
+        }
+    }
+
+    /// Look up a cached resolution. Returns `None` on a negative (not-found)
+    /// entry or a miss.
+    fn get(&self, key: &(Method, String)) -> Option<CacheEntry<T>> {
+        self.map.lock().unwrap().get(key).cloned()
+    }
+
+    /// Insert a cacheable entry, evicting the oldest key if at capacity.
+    fn insert(&self, key: (Method, String), entry: CacheEntry<T>) {
+        let mut map = self.map.lock().unwrap();
+        let mut order = self.order.lock().unwrap();
+        if !map.contains_key(&key) {
+            order.push(key.clone());
+            if order.len() > self.capacity {
+                if let Some(old) = order.first().cloned() {
+                    map.remove(&old);
+                    order.remove(0);
+                }
+            }
+        }
+        map.insert(key, entry);
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Router<T> {
     routes: HashMap<Method, MatchitRouter<T>>,
     fallback: Option<T>,
     route_list: Vec<(Method, String)>,
+    /// Optional per-request route-lookup cache. `None` disables caching.
+    cache: Option<Arc<RouteCache<T>>>,
 }
 
 impl<T: Clone> Router<T> {
+    /// Create a router with an always-on route cache (default capacity 1024).
     pub fn new() -> Self {
-        Self { routes: HashMap::new(), fallback: None, route_list: Vec::new() }
+        Self {
+            routes: HashMap::new(),
+            fallback: None,
+            route_list: Vec::new(),
+            cache: Some(Arc::new(RouteCache::new(1024))),
+        }
+    }
+
+    /// Create a router without a route cache.
+    pub fn without_cache() -> Self {
+        Self { routes: HashMap::new(), fallback: None, route_list: Vec::new(), cache: None }
+    }
+
+    /// Replace the route cache with one sized to `capacity` (0 disables).
+    pub fn with_cache_capacity(mut self, capacity: usize) -> Self {
+        self.cache = if capacity == 0 { None } else { Some(Arc::new(RouteCache::new(capacity))) };
+        self
     }
 
     pub fn insert(&mut self, method: Method, path: &str, handler: T) -> Result<(), InsertError> {
@@ -68,6 +148,57 @@ impl<T: Clone> Router<T> {
         Err(RouterError::NotFound)
     }
 
+    /// Shared match logic returning an owned resolution (no borrows).
+    fn raw_resolve(&self, method: &Method, path: &str) -> Result<RouteResolution<T>, RouterError> {
+        if let Some(router) = self.routes.get(method) {
+            if let Ok(matched) = router.at(path) {
+                let params = matched
+                    .params
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect::<Vec<_>>();
+                return Ok(RouteResolution { handler: matched.value.clone(), params });
+            }
+        }
+
+        for (other_method, router) in &self.routes {
+            if other_method != method && router.at(path).is_ok() {
+                return Err(RouterError::MethodNotAllowed);
+            }
+        }
+
+        Err(RouterError::NotFound)
+    }
+
+    /// Resolve a route to an owned `RouteResolution`, memoized through the
+    /// optional route cache. Static-route hits and definitive `NotFound`s are
+    /// cached; param routes and `MethodNotAllowed` bypass the cache (they need
+    /// a fresh full match each time).
+    pub fn resolve(&self, method: &Method, path: &str) -> Result<RouteResolution<T>, RouterError> {
+        if let Some(cache) = &self.cache {
+            let key = (method.clone(), path.to_string());
+            if let Some(entry) = cache.get(&key) {
+                return match entry {
+                    CacheEntry::Hit(res) => Ok(res),
+                    CacheEntry::NotFound => Err(RouterError::NotFound),
+                };
+            }
+            let res = self.raw_resolve(method, path);
+            match &res {
+                Ok(r) if r.params.is_empty() => {
+                    cache.insert(key, CacheEntry::Hit(r.clone()));
+                }
+                Err(RouterError::NotFound) => {
+                    cache.insert(key, CacheEntry::NotFound);
+                }
+                _ => {}
+            }
+            res
+        } else {
+            self.raw_resolve(method, path)
+        }
+    }
+
     pub fn set_fallback(&mut self, handler: T) {
         self.fallback = Some(handler);
     }
@@ -93,6 +224,44 @@ mod tests {
         router.insert(Method::GET, "/hello", "hello_handler").unwrap();
         let m = router.at(&Method::GET, "/hello").unwrap();
         assert_eq!(*m.handler, "hello_handler");
+    }
+
+    #[test]
+    fn test_resolve_static_hit_and_cache() {
+        let mut router = Router::new();
+        router.insert(Method::GET, "/hello", "hello_handler").unwrap();
+        let r = router.resolve(&Method::GET, "/hello").unwrap();
+        assert_eq!(r.handler, "hello_handler");
+        assert!(r.params.is_empty());
+        // Second call must hit the cache and return the same handler.
+        let r2 = router.resolve(&Method::GET, "/hello").unwrap();
+        assert_eq!(r2.handler, "hello_handler");
+    }
+
+    #[test]
+    fn test_resolve_not_found_is_cached() {
+        let mut router = Router::new();
+        router.insert(Method::GET, "/hello", "hello_handler").unwrap();
+        assert!(router.resolve(&Method::GET, "/missing").is_err());
+        // Negative result is memoized; still NotFound on repeat.
+        assert!(router.resolve(&Method::GET, "/missing").is_err());
+    }
+
+    #[test]
+    fn test_resolve_param_route_bypasses_cache() {
+        let mut router = Router::new();
+        router.insert(Method::GET, "/users/{id}", "user_handler").unwrap();
+        let r = router.resolve(&Method::GET, "/users/42").unwrap();
+        assert_eq!(r.handler, "user_handler");
+        assert_eq!(r.params, vec![("id".to_string(), "42".to_string())]);
+    }
+
+    #[test]
+    fn test_without_cache_still_resolves() {
+        let mut router = Router::without_cache();
+        router.insert(Method::GET, "/hello", "hello_handler").unwrap();
+        let r = router.resolve(&Method::GET, "/hello").unwrap();
+        assert_eq!(r.handler, "hello_handler");
     }
 
     #[test]

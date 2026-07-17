@@ -21,7 +21,7 @@ use crate::middleware::{
 };
 use crate::openapi;
 use crate::plugin::PluginRegistry;
-use crate::router::{Match, Router};
+use crate::router::Router;
 use crate::static_files::{StaticDir, StaticMount};
 use crate::{json_response, streaming_response, ResponseBody};
 #[cfg(feature = "ws")]
@@ -1156,10 +1156,11 @@ fn make_handler(
         Box::pin(async move {
             let method = req.method().clone();
             let path = req.uri().path().to_string();
-            match router.at(&method, &path) {
-                Ok(m) => {
+            match router.resolve(&method, &path) {
+                Ok(res) => {
                     execute_handler(
-                        m,
+                        res.handler,
+                        res.params,
                         req,
                         &pool,
                         &metrics,
@@ -1176,9 +1177,9 @@ fn make_handler(
                 )),
                 Err(crate::router::RouterError::NotFound) => match router.fallback() {
                     Some(fb) => {
-                        let m = Match { handler: fb, params: matchit::Params::new() };
                         execute_handler(
-                            m,
+                            fb.clone(),
+                            Vec::new(),
                             req,
                             &pool,
                             &metrics,
@@ -1724,7 +1725,8 @@ async fn serve_unix(
 // ---------------------------------------------------------------------------
 
 async fn execute_handler(
-    m: Match<'_, '_, Handler>,
+    handler: Handler,
+    params: Vec<(String, String)>,
     req: Request<Incoming>,
     pool: &BufferPool,
     metrics: &Metrics,
@@ -1733,7 +1735,7 @@ async fn execute_handler(
     openapi_spec: Option<&str>,
     max_body_size: usize,
 ) -> Result<Response<ResponseBody>> {
-    let handler_name = match m.handler {
+    let handler_name = match handler {
         Handler::Static { .. } => "static",
         Handler::Echo => "echo",
         Handler::ParamsEcho => "params_echo",
@@ -1750,8 +1752,8 @@ async fn execute_handler(
     };
     let _handler_span = tracing::debug_span!("handler.execute", name = handler_name);
 
-    match m.handler {
-        Handler::Static { status, body } => Ok(json_response(*status, body)),
+    match handler {
+        Handler::Static { status, body } => Ok(json_response(status, body)),
         Handler::Echo => {
             let body_bytes = match http_body_util::Limited::new(req.into_body(), max_body_size)
                 .collect()
@@ -1783,7 +1785,7 @@ async fn execute_handler(
         }
         Handler::ParamsEcho => {
             let params_str: Vec<String> =
-                m.params.iter().map(|(k, v)| format!(r#""{}":"{}""#, k, v)).collect();
+                params.iter().map(|(k, v)| format!(r#""{}":"{}""#, k, v)).collect();
             let body = format!("{{{}}}", params_str.join(","));
             Ok(json_response(StatusCode::OK, &body))
         }
@@ -1857,9 +1859,7 @@ async fn execute_handler(
         Handler::Custom(f) => {
             // Expose matched path params to custom handlers (e.g. the Rust-native
             // CRUD handlers read `{id}` from here) via request extensions.
-            // `m.params` borrows the router, so collect into an owned Vec first.
-            let path_params: Vec<(String, String)> =
-                m.params.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+            let path_params: Vec<(String, String)> = params;
             let mut req = req;
             req.extensions_mut().insert(path_params);
             f(req).await
