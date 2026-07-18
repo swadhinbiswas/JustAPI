@@ -2477,3 +2477,34 @@ to 3 (log: "scaled up load=0.08 workers=2/3"); `--workers 3 --min-workers 1
 (graceful, not restarted). SIGTERM in both cases drains the tree to exit 0.
 Clippy `-D warnings` + `fmt` clean. No new dependency (reuses `libc`,
 `available_parallelism`).
+
+## ADR-066 — 2026-07-18 — Fix pre-existing `tls` feature breakage in `justapi-core`
+
+**Context:** `cargo build -p justapi-core --features tls` failed to compile
+before any of ADR-060..065 touched it — a pre-existing defect in
+`serve_with_tls` (the TCP+TLS accept loop in `crates/justapi-core/src/server/mod.rs`),
+not caused by the worker/UDS/XML work. The function param `static_mounts:
+Vec<StaticMount>` was captured by the per-request `service_fn(move |req| ...)`
+closure (an `Fn`, invoked for every request) and referenced by move, producing
+`E0507` ("cannot move out of `static_mounts`, a captured variable in an `Fn`
+closure") and `E0382` ("use of moved value: `static_mounts` in previous
+iteration of the loop"). A second latent clippy lint (`if let Some(_) =
+shutdown`) in the same function also broke `-D warnings`.
+
+**Decision / change:**
+- Mirror the already-correct pattern in non-TLS `serve_connection`:
+  - Clone `static_mounts` once per loop iteration from the function param (alongside
+    `chain`/`static_dir`/`metrics`) so the value is re-acquired each iteration and
+    never moved out of the per-iteration scope.
+  - Inside the `service_fn` closure, `let static_mounts = static_mounts.clone();`
+    so the `Fn` closure borrows its own copy to `.clone()` per request instead of
+    moving a `Vec` out of a captured variable.
+- Replace `if let Some(_) = shutdown` with `if shutdown.is_some()` to satisfy
+  `clippy::redundant_pattern_matching` under `-D warnings`.
+
+**Evidence:** `cargo build -p justapi-core --features tls` now compiles.
+`cargo test -p justapi-core --features "tls,db"` green (274 core + 8 xml + 15
+wasm + 1 tracer). `cargo clippy --workspace --tests --features
+"justapi-core/db,justapi-core/tls" -- -D warnings` clean; `cargo fmt --check`
+clean. No new dependency, no public API change (internal function only).
+
