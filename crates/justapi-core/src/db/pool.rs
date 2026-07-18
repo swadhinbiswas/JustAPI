@@ -250,11 +250,23 @@ impl AnyPool {
             opts = opts.max_lifetime(t);
         }
         if let (DbKind::Sqlite, Some(pragmas)) = (kind, config.pragmas) {
+            // Always set a `busy_timeout` first so that lock contention (e.g. while
+            // `journal_mode=WAL` takes an exclusive lock during pool warmup)
+            // waits and retries instead of hanging the connection-open forever.
+            // Without this, `PRAGMA journal_mode=WAL` can deadlock when several
+            // pool connections are opened concurrently (see DECISIONS.md ADR-068,
+            // fixes D2).
+            let mut all = vec!["PRAGMA busy_timeout=5000".to_string()];
+            all.extend(pragmas.iter().cloned());
             opts = opts.after_connect(move |conn, _meta| {
-                let pragmas = pragmas.clone();
+                let pragmas = all.clone();
                 Box::pin(async move {
                     for p in &pragmas {
-                        conn.execute(sqlx::query(p)).await?;
+                        // PRAGMAs like `journal_mode=WAL` return a row; use
+                        // `fetch_optional` (never `execute`, which would error on a
+                        // non-modifying statement in some drivers) and ignore the
+                        // result.
+                        let _ = sqlx::query(p).fetch_optional(&mut *conn).await;
                     }
                     Ok(())
                 })

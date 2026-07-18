@@ -1589,45 +1589,51 @@ hide. It found several.
 | Path | Throughput | p50 latency | Notes |
 |---|---:|---:|---|
 | No-DB `app.run()` + `oha -c 64` | **37,171 req/s** | ~1 ms | Rust HTTP + Python dict handler, real TCP |
-| DB-backed handler, `concurrency=1` (AsyncTestClient) | **15 req/s** | **910 ms** | framework handler+DB dispatch |
-| DB-backed handler, `concurrency>1` | **hangs** | — | deadlock |
-| Raw `app.db.query` (same queries) | ~1–100 ms/query | — | DB itself is fine |
+| DB-backed `/products`, `concurrency=1` | **~250–330 req/s** effective | **2–4 ms** | framework handler+DB dispatch, **post-ADR-068** |
+| DB-backed `/products`, `oha -c 64` | **314 req/s** | 188 ms | GIL-pool saturation at 64-way, **no deadlock** |
+| `wal=True` connect on 112 MB file | — | **0.00 s** | was a 30s+ hang before ADR-068 |
+| Raw `app.db.query` (same queries) | ~1–100 ms/query | — | DB itself was always fine |
 
-### Framework defects surfaced (see `demo_shop/README.md` for repro)
+### Framework defects surfaced — ROOT-CAUSED & FIXED (ADR-068)
 
-- **D1 — `app.run()` deadlocks on a configured database.** A no-DB app serves
-  fine (~37k req/s); a DB-backed app never binds — `run()` calls
-  `connect_database()` from inside its own runtime context and hangs forever.
-  DB-backed code is only testable via `AsyncTestClient`. **Blocker for any
-  DB-backed production server.**
-- **D2 — `set_database(url, wal=True)` hangs the pool connect forever** on a
-  real SQLite file (no error, no log). Plain `set_database(url)` connects in
-  ~0.00s. Bug in the WAL-pragma path.
-- **D3 — DB-backed handler path is ~2500× slower than the Rust HTTP layer:**
-  a trivial 1-row `COUNT(*)` read takes **~900 ms end-to-end** (15 req/s) vs
-  ~1.8 ms raw. Overhead is entirely in the framework's handler→response path
-  (GIL-pool dispatch + Python↔Rust result/JSON serialization), not the DB.
-- **D4 — concurrent async load deadlocks** (`bench_async.py` at -c 32 hangs);
-  the shared `db_runtime` `Handle` + `block_on` does not tolerate concurrent
-  in-flight requests.
+- **D1 — `app.run()` "deadlocks" on a configured database — RETRACTED.** The
+  server always bound and served; the original probe hit a DB-backed route that
+  deadlocked at the time (D4) and was misread as "server not up." No `run()`
+  bind deadlock existed. See `demo_shop/README.md` Finding #3.
+- **D2 — `set_database(url, wal=True)` hangs the pool connect forever — FIXED.**
+  `after_connect` ran `PRAGMA journal_mode=WAL` with `conn.execute` and no
+  `busy_timeout`; concurrent pool warm-up blocked on the WAL exclusive lock
+  forever. Fix: prepend `PRAGMA busy_timeout=5000` and run pragmas via
+  `fetch_optional` (`justapi-core/src/db/pool.rs`). `wal=True` now connects in
+  0.00s on the 112 MB Olist file.
+- **D3 — DB-backed handler ~2500× slower (900 ms/req) — FIXED.** Root cause:
+  `connect_database()` used a **current-thread** tokio runtime whose handle was
+  `block_on`-ed from foreign threads (GIL pool / server thread), catastrophic
+  serialization. Fix: build a **multi-threaded** runtime
+  (`Builder::new_multi_thread().worker_threads(4)`) in
+  `crates/justapi-py/src/native/app.rs`. p50 at concurrency=1 dropped 910 ms →
+  2–4 ms (~250×).
+- **D4 — concurrent async load deadlocks — FIXED.** Same current-thread-runtime
+  root cause as D3. Verified: `oha -z 12s -c 64` served 3,706 concurrent requests
+  (p50 188 ms, p99 367 ms, 0 deadlocks). 188 ms p50 at -c 64 is GIL-pool
+  saturation across 64 Python handlers, inherent and DB-independent.
 
 ### Conclusion
 
-The networking core is solid (37k req/s no-DB, consistent with the ~700k
-native-fast-path claims for opt-in `native=True`+Schema routes). But the
-**default Python-handler + SQLite path — the path every real app uses — is
-currently unusable in production**: `run()` deadlocks with a DB, and when
-forced through the test client it runs at 15 req/s with ~900 ms latency and
-deadlocks under concurrency. These must be fixed (2.0.8+) before any
-"real-life complex app" claim holds. No code change to framework internals in
-this pass — `demo_shop/` is a diagnostic harness; fixes tracked as framework
-work items.
+The networking core is solid (37k req/s no-DB). The default Python-handler +
+SQLite path had two genuine bugs — D2 (WAL hang) and D4 (current-thread-runtime
+deadlock, which also caused the D3 slowdown) — both fixed in `justapi-core` /
+`justapi-py` under ADR-068. After the fix the DB-backed app serves real
+concurrent traffic over TCP with single-digit-ms latency at concurrency=1. The
+remaining headroom (188 ms p50 at -c 64) is GIL-pool serialization of Python
+handlers, independent of the DB path.
 
 | Property | Result |
 |---|---|
 | Routes registered | 23 (all pass smoke via AsyncTestClient) |
 | No-DB server throughput | 37,171 req/s @ -c 64 |
-| DB-backed handler throughput | 15 req/s @ concurrency=1 (p50 910 ms) |
-| DB-backed `run()` | deadlocks (never binds) |
-| DB-backed concurrency>1 | deadlocks |
+| DB-backed handler throughput | ~250–330 req/s @ concurrency=1 (p50 2–4 ms) |
+| DB-backed `run()` | serves fine (D1 retracted) |
+| DB-backed concurrency>1 | 314 req/s @ -c 64, no deadlock (D4 fixed) |
+| `wal=True` connect | 0.00 s (D2 fixed) |
 

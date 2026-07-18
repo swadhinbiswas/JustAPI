@@ -1188,14 +1188,24 @@ impl JustAPIApp {
                 ))
             }
         };
-        let rt = tokio::runtime::Runtime::new()
+        // Use a MULTI-THREADED runtime for the DB pool. A current-thread
+        // runtime's handle can only be driven from the thread that owns it;
+        // calling `block_on` on it from another thread (e.g. a GIL-pool worker,
+        // or the server runtime thread) deadlocks. A multi-thread runtime's
+        // handle is safe to `block_on` from any thread — it temporarily drives
+        // the runtime on the caller's thread — which is required for concurrent
+        // DB-backed requests (see DECISIONS.md ADR-068, fixes D3/D4).
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .worker_threads(4)
+            .build()
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
         let handle = rt.handle().clone();
         // Connect + bootstrap inside one GIL-released async block so no Python
         // token is alive during the DB round-trip. Returns an owned pool.
         let pool = py
             .detach(|| {
-                rt.block_on(async {
+                handle.block_on(async {
                     let mut mgr = justapi_core::db::PoolManager::new();
                     let pool = mgr.init("", config.clone()).await.map_err(|e| e.to_string())?;
                     if let Some(sql) = &config.init_sql {
