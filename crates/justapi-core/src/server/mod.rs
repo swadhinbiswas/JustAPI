@@ -1965,6 +1965,7 @@ async fn serve_with_tls(
         let acceptor = acceptor.clone();
         let chain = chain.clone();
         let static_dir = static_dir.clone();
+        let static_mounts = static_mounts.clone();
         let conn_metrics = metrics.clone();
         let wasm_middleware = wasm_middleware.clone();
 
@@ -1990,6 +1991,7 @@ async fn serve_with_tls(
                         let chain = chain.clone();
                         let arena = arena.clone();
                         let static_dir = static_dir.clone();
+                        let static_mounts = static_mounts.clone();
                         let metrics = spawn_metrics.clone();
                         let wasm_middleware = wasm_middleware.clone();
                         #[cfg(feature = "ws")]
@@ -2194,7 +2196,7 @@ async fn serve_with_tls(
         });
     }
 
-    if let Some(_) = shutdown {
+    if shutdown.is_some() {
         tracing::info!("Waiting for {} active TLS connections to drain...", connections.len());
         tokio::select! {
             _ = async { while connections.join_next().await.is_some() {} } => {
