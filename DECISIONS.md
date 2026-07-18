@@ -2508,3 +2508,31 @@ wasm + 1 tracer). `cargo clippy --workspace --tests --features
 "justapi-core/db,justapi-core/tls" -- -D warnings` clean; `cargo fmt --check`
 clean. No new dependency, no public API change (internal function only).
 
+## ADR-067 — 2026-07-18 — Freeze all AI/inference work until release 2.0.8
+
+**Context:** We spent effort on the Phase 52 GPU Benchmark Gate (real-model
+inference via `justapi-inference`/`justapi-bench`, CUDA PTX mismatch, Needle
+26M encoder-decoder weights downloaded to `~/needle-bucket`). The user has
+decided to **skip all AI / inference / LLM work for now** and defer it to the
+next release, **2.0.8**. This includes the CUDA driver upgrade (NVIDIA 610.43.03
+was available and matched the running kernel `7.1.3-2-cachyos` but was
+deliberately NOT applied), the real-GPU benchmark run, and any Needle
+integration.
+
+**Decision:**
+- No AI/inference features will be touched until release **2.0.8**.
+- The CUDA driver stays at 580.173.02 (CUDA 13.0 runtime) and the toolkit at
+  13.3.1 — the PTX mismatch is intentionally left unresolved for now.
+- The Phase 52 GPU Benchmark Gate remains **🔴 blocked**; its exit criteria
+  (real weights on real GPU, tokens/sec + TTFT/ITL) are deferred to 2.0.8.
+- The Needle weights in `~/needle-bucket` are kept as reference material only;
+  no encoder-decoder loader will be added to `justapi-inference` yet (it
+  currently supports Llama-family GGUF/safetensors only).
+- `justapi-gpu-bench` MockModel (CPU) run is recorded as non-gate plumbing
+  validation only (see PLAN.md Phase 52 update, commit `a6c8cac`).
+
+**Evidence:** User directive 2026-07-18 ("skip this AI stuff, work it on next
+release 2.0.8, until then don't touch AI stuff"). PLAN.md Phase 52 updated to
+reflect the opt-out and committed (`a6c8cac`). No code change in this ADR.
+
+
