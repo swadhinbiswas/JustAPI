@@ -1573,3 +1573,61 @@ restart-on-death. No new dependency.
 
 Unit tests: `decide_scale` (in-band/up/down/clamp/step) + `next_free_slot`.
 Gates green. Worker isolation (fd-sharing) preserved at every size.
+
+---
+
+## Real-life e-commerce API stress test — `demo_shop/` (recorded 2026-07-18)
+
+Built a complex, join-heavy online-shop API (`demo_shop/`, Olist SQLite
+`olist.sqlite` ~112 MB: 99k orders, 33k products, 3k sellers, 100k reviews,
+1M geo rows; 23 endpoints: catalog, orders aggregate, sellers, analytics,
+search). Purpose: find framework problems the echo/hello micro-benchmarks
+hide. It found several.
+
+### Path throughput (what a real app actually hits)
+
+| Path | Throughput | p50 latency | Notes |
+|---|---:|---:|---|
+| No-DB `app.run()` + `oha -c 64` | **37,171 req/s** | ~1 ms | Rust HTTP + Python dict handler, real TCP |
+| DB-backed handler, `concurrency=1` (AsyncTestClient) | **15 req/s** | **910 ms** | framework handler+DB dispatch |
+| DB-backed handler, `concurrency>1` | **hangs** | — | deadlock |
+| Raw `app.db.query` (same queries) | ~1–100 ms/query | — | DB itself is fine |
+
+### Framework defects surfaced (see `demo_shop/README.md` for repro)
+
+- **D1 — `app.run()` deadlocks on a configured database.** A no-DB app serves
+  fine (~37k req/s); a DB-backed app never binds — `run()` calls
+  `connect_database()` from inside its own runtime context and hangs forever.
+  DB-backed code is only testable via `AsyncTestClient`. **Blocker for any
+  DB-backed production server.**
+- **D2 — `set_database(url, wal=True)` hangs the pool connect forever** on a
+  real SQLite file (no error, no log). Plain `set_database(url)` connects in
+  ~0.00s. Bug in the WAL-pragma path.
+- **D3 — DB-backed handler path is ~2500× slower than the Rust HTTP layer:**
+  a trivial 1-row `COUNT(*)` read takes **~900 ms end-to-end** (15 req/s) vs
+  ~1.8 ms raw. Overhead is entirely in the framework's handler→response path
+  (GIL-pool dispatch + Python↔Rust result/JSON serialization), not the DB.
+- **D4 — concurrent async load deadlocks** (`bench_async.py` at -c 32 hangs);
+  the shared `db_runtime` `Handle` + `block_on` does not tolerate concurrent
+  in-flight requests.
+
+### Conclusion
+
+The networking core is solid (37k req/s no-DB, consistent with the ~700k
+native-fast-path claims for opt-in `native=True`+Schema routes). But the
+**default Python-handler + SQLite path — the path every real app uses — is
+currently unusable in production**: `run()` deadlocks with a DB, and when
+forced through the test client it runs at 15 req/s with ~900 ms latency and
+deadlocks under concurrency. These must be fixed (2.0.8+) before any
+"real-life complex app" claim holds. No code change to framework internals in
+this pass — `demo_shop/` is a diagnostic harness; fixes tracked as framework
+work items.
+
+| Property | Result |
+|---|---|
+| Routes registered | 23 (all pass smoke via AsyncTestClient) |
+| No-DB server throughput | 37,171 req/s @ -c 64 |
+| DB-backed handler throughput | 15 req/s @ concurrency=1 (p50 910 ms) |
+| DB-backed `run()` | deadlocks (never binds) |
+| DB-backed concurrency>1 | deadlocks |
+
