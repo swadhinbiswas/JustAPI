@@ -1555,3 +1555,21 @@ so Python handlers receive uniform JSON. Content negotiation via `negotiate` /
 | Gates | 274 core tests (8 new); clippy `-D warnings`; fmt clean |
 
 Limitation: attributes only as `@name`; namespaces/comments/DTD ignored.
+
+### ADR-065 — Worker auto-scaling (`justapi serve --scale`)
+
+The prefork supervisor now auto-scales the worker fleet between `--min-workers`
+and `--max-workers` based on normalized system load (1-min load avg /
+parallelism via `getloadavg`). Pure, tested `decide_scale` controller; cooldown
+prevents flapping; scale-down uses graceful SIGTERM and is excluded from
+restart-on-death. No new dependency.
+
+| Property | Result |
+|---|---|
+| `--scale --workers 1 --max-workers 3 --scale-high 0.0` | 1 → 2 → 3 workers (log: "scaled up") |
+| `--workers 3 --min-workers 1 --scale-low 1.0` | 3 → 2 → 1 (log: "scaled down", graceful) |
+| SIGTERM during scaling | drains whole tree, all exit 0 |
+| `--scale` without bounds | min=--workers, max=workers*2 (floored +1) |
+
+Unit tests: `decide_scale` (in-band/up/down/clamp/step) + `next_free_slot`.
+Gates green. Worker isolation (fd-sharing) preserved at every size.

@@ -1,5 +1,6 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
@@ -61,6 +62,37 @@ enum Commands {
         /// `--reload` (hot reload restarts the whole process tree).
         #[arg(long, default_value_t = 1)]
         workers: usize,
+
+        /// Minimum worker count for auto-scaling (`--scale`). Defaults to
+        /// `--workers` when auto-scaling is enabled without an explicit value.
+        #[arg(long)]
+        min_workers: Option<usize>,
+
+        /// Maximum worker count for auto-scaling (`--scale`). Defaults to
+        /// `--workers` (or `workers * 2` if only `--workers` is set) when
+        /// auto-scaling is enabled without an explicit value.
+        #[arg(long)]
+        max_workers: Option<usize>,
+
+        /// Enable load-based auto-scaling between `--min-workers` and
+        /// `--max-workers` (prefork only). Scales the fleet up under high load
+        /// and down when idle, with a cooldown to avoid flapping.
+        #[arg(long, default_value_t = false)]
+        scale: bool,
+
+        /// Auto-scaling scale-down threshold (normalized load 0..1+). Below this
+        /// the fleet shrinks toward `--min-workers`.
+        #[arg(long, default_value_t = 0.3)]
+        scale_low: f64,
+
+        /// Auto-scaling scale-up threshold (normalized load 0..1+). At/above this
+        /// the fleet grows toward `--max-workers`.
+        #[arg(long, default_value_t = 0.7)]
+        scale_high: f64,
+
+        /// Auto-scaling cooldown in seconds between scaling actions.
+        #[arg(long, default_value_t = 15)]
+        scale_cooldown: u64,
 
         /// Hidden: internal flag used by the prefork supervisor to hand a bound
         /// listening socket fd to a worker child. Do not pass manually.
@@ -623,6 +655,12 @@ async fn run() -> anyhow::Result<()> {
             watch_ext,
             drain_timeout,
             workers,
+            min_workers,
+            max_workers,
+            scale,
+            scale_low,
+            scale_high,
+            scale_cooldown,
             worker_fd,
             #[cfg(feature = "tls")]
             tls_cert,
@@ -695,13 +733,19 @@ async fn run() -> anyhow::Result<()> {
             }
 
             // ---- Prefork multi-worker mode: parent binds + supervises. ----
-            if workers > 1 {
+            // Enter the prefork path when the user asked for multiple workers,
+            // OR when auto-scaling is enabled with a max above 1 (we may start at
+            // `min_workers` which can be 1, but still need the supervisor).
+            let prefork_max = max_workers.unwrap_or(workers);
+            let prefork = workers > 1 || (scale && prefork_max > 1);
+            if prefork {
                 if reload {
                     tracing::warn!(
                         "--reload is ignored when --workers > 1 (prefork cannot hot-reload)"
                     );
                 }
                 anyhow::ensure!(workers <= 256, "worker count must be <= 256");
+                anyhow::ensure!(prefork_max <= 256, "max worker count must be <= 256");
 
                 // Bind the shared listener (TCP or Unix) once in the parent and
                 // hand its fd to each worker child. The listener is kept alive in
@@ -734,8 +778,29 @@ async fn run() -> anyhow::Result<()> {
                 wire_shutdown_signals(shutdown.clone());
 
                 let spawn = workers::make_spawn_argv(&base_argv, raw_fd, drain_duration);
+
+                // Assemble the auto-scaling policy (if enabled). When `--scale`
+                // is set without explicit bounds, min = `--workers`, max =
+                // `workers * 2` (capped so a lone `--workers 1` still scales to 2).
+                let scaling: Option<(workers::ScalingPolicy, Arc<dyn workers::LoadProbe>)> =
+                    if scale {
+                        let min = min_workers.unwrap_or(workers);
+                        let max = max_workers.unwrap_or_else(|| (workers * 2).max(min + 1));
+                        let policy = workers::ScalingPolicy {
+                            min_workers: min,
+                            max_workers: max,
+                            low: scale_low,
+                            high: scale_high,
+                            cooldown: Duration::from_secs(scale_cooldown),
+                            step: 1,
+                        };
+                        Some((policy, Arc::new(workers::SystemLoadProbe::new())))
+                    } else {
+                        None
+                    };
+
                 tracing::info!(addr = %listen_addr.display(), workers, "starting prefork server");
-                let result = workers::supervise(workers, spawn, shutdown).await;
+                let result = workers::supervise(workers, spawn, shutdown, scaling).await;
                 justapi_core::tracing_setup::shutdown_tracing();
                 return result;
             }
