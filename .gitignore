@@ -130,3 +130,6 @@ heaptrack.*
 /generate_commits.sh
 /demo_app.py
 /protection.json
+
+# Olist dataset (large, download separately)
+demo_shop/olist.sqlite
