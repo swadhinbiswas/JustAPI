@@ -2435,3 +2435,45 @@ Only the `serialize` feature is enabled; no transitive heavy deps.
 content-negotiated `respond`. Full workspace suite green (274 core tests). clippy
 `-D warnings` + `fmt` clean. Limitation documented: XML attributes survive only
 as `@name` keys; namespaces/comments/DTDs are ignored by the converter.
+
+## ADR-065 — 2026-07-18 — Load-based worker auto-scaling (`justapi serve --scale`)
+
+**Context:** The feature list calls for "Auto-scaling workers". The prefork
+supervisor (ADR-061) runs a fixed `N` workers; operators had to edit `--workers`
+by hand as load changed. We need the fleet to grow under load and shrink when
+idle, with true OS-process isolation preserved.
+
+**Decision / change:**
+- `crates/justapi-cli/src/workers.rs`:
+  - `LoadProbe` trait (`Send + Sync`, `fn sample() -> f64` returning normalized
+    load, 0.0 = idle, 1.0 = saturated). `SystemLoadProbe` (unix) reads the
+    1-minute load average via `libc::getloadavg` normalized by
+    `available_parallelism`; `NoProbe` (0.0) is the no-policy fallback.
+  - `ScalingPolicy { min_workers, max_workers, low, high, cooldown, step }` and a
+    **pure** `decide_scale(current, load, &policy) -> usize` (scale up by `step`
+    when `load >= high`, down by `step` when `load <= low`, else hold, clamped to
+    `[min, max]`). This is the testable core — no processes, no OS.
+  - `supervise` now takes `Option<(ScalingPolicy, Arc<dyn LoadProbe>)>`. A
+    `tokio::time::interval` re-samples load each tick; when the cooldown has
+    elapsed and `decide_scale` differs from the live active count, it scales:
+    **up** spawns into free/reused slots (`next_free_slot`); **down** gracefully
+    `SIGTERM`s live, non-stopping workers and records them in a `stopping`
+    `HashSet` so the restart-on-death path does NOT respawn them. The drain logic
+    ignores `stopping` slots when checking "all exited".
+- `crates/justapi-cli/src/main.rs`: new flags `--scale`, `--min-workers`,
+  `--max-workers`, `--scale-low`, `--scale-high`, `--scale-cooldown`. Prefork now
+  also triggers when `--scale` is set with `max > 1` (so a fleet can start at
+  `min_workers == 1` and grow). Bounds capped at 256. When `--scale` is set
+  without explicit `--min/--max`, min = `--workers`, max = `workers * 2`
+  (min+1 floor). Builds the policy + `SystemLoadProbe` and passes it to
+  `supervise`. The `tls` feature still excluded (separate breakage).
+
+**Evidence:** 7 new `workers::tests`: `decide_scale` holds-in-band / up-at-high /
+down-at-low / clamps-to-bounds / respects-step, plus `next_free_slot` reuse+grow.
+Full suite green (274 core + 8 workers tests). Manual: `--scale --workers 1
+--max-workers 3 --scale-high 0.0` → supervisor starts at 1 worker then scales up
+to 3 (log: "scaled up load=0.08 workers=2/3"); `--workers 3 --min-workers 1
+--max-workers 3 --scale-low 1.0` → scales 3→2→1 with "scaled-down worker exited"
+(graceful, not restarted). SIGTERM in both cases drains the tree to exit 0.
+Clippy `-D warnings` + `fmt` clean. No new dependency (reuses `libc`,
+`available_parallelism`).
