@@ -998,6 +998,19 @@ k8s guides, OpenAPI.
   supports CUDA >= 13.3, OR install CUDA toolkit 13.0. Setting
   `CUDARC_CUDA_VERSION=13000` alone is insufficient because nvcc still emits
   13.3 PTX.
+- **2026-07-18 update:** A `nvidia-utils 610.43.03` + `linux-cachyos-nvidia-open 7.1.3-2`
+  driver (CUDA 13.3 runtime) is available in the repos and matches the running
+  kernel `7.1.3-2-cachyos`. User chose **not** to perform the driver upgrade
+  (system change + reboot). Separately, the Needle 26M encoder-decoder weights
+  were downloaded to `~/needle-bucket` (safetensors/pkl) but are NOT loadable by
+  `justapi-inference` (which only supports Llama-family GGUF/safetensors), so
+  they do not unblock this gate. As a non-gate validation, `justapi-gpu-bench`
+  was run with `MockModel` (CPU, no `--model-path`) — both naive and
+  SchedulerEngine paths execute; the 813k tok/s "naive" figure is mock-only and
+  does NOT satisfy the real-GPU acceptance criteria. Phase 52 remains 🔴 blocked
+  on the CUDA driver fix + a Llama-family GGUF (real file is
+  `~/models/tinyllama/llama-3.2-1b-q4_k_m.gguf`; the `tinyllama-1.1b.q4_k_m.gguf`
+  is a 29-byte placeholder).
 
 ### Phase 53: HTTP/3 (QUIC) Transport (Status: ⚠️ reverted — dead code removed 2026-07-15)
 - **Objective:** Serve the same Python routes over HTTP/3 (QUIC) in addition to
