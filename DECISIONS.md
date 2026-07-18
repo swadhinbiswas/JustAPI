@@ -2536,3 +2536,57 @@ release 2.0.8, until then don't touch AI stuff"). PLAN.md Phase 52 updated to
 reflect the opt-out and committed (`a6c8cac`). No code change in this ADR.
 
 
+
+## ADR-068 — 2026-07-18 — Fix DB-backed handler deadlock + WAL hang (D2/D3/D4)
+
+**Context:** Building `demo_shop/` (23-route Olist SQLite e-commerce API) on the
+framework surfaced four defects in the Python-handler + SQLite path. Two were
+genuine framework bugs, one was a misdiagnosis, one was a usage note.
+
+- **D2 — `set_database(wal=True)` hung the pool connect forever** on the 112 MB
+  Olist file. Reproduced deterministically (30s+ no output).
+- **D3 — DB-backed handler ~2500× slower:** ~900 ms/req (15 req/s) for a trivial
+  `COUNT(*)`, vs ~1.8 ms raw query.
+- **D4 — concurrent async load deadlocked:** `bench_async.py -c 32` hung (90s+
+  timeout); only the no-DB path survived concurrency.
+- **D1 — `app.run()` "never binds" with a DB:** on re-test this was RETRACTED —
+  the server always bound; the failure was the D4 deadlock on the probing
+  DB route, misread as "server down" (see `demo_shop/README.md` Finding #3).
+
+**Root cause (D2):** `justapi-core/src/db/pool.rs` `after_connect` ran
+`PRAGMA journal_mode=WAL` with `conn.execute` and **no `busy_timeout`**. WAL
+requires an exclusive lock; during pool warm-up several connections open
+concurrently and the second opener blocks on the WAL lock with no timeout →
+infinite wait.
+
+**Root cause (D3/D4):** `crates/justapi-py/src/native/app.rs::connect_database`
+built a **`tokio::runtime::Runtime::new()` (current-thread)** runtime and stored
+its handle for `DbPool::query/execute` to `block_on`. A current-thread runtime's
+handle can only be driven from the owning thread; calling `block_on` on it from a
+**foreign thread** (a GIL-pool worker or the server-runtime thread) silently
+deadlocks or serializes catastrophically — producing ~900 ms/req at concurrency=1
+(D3) and a full hang at concurrency>1 (D4).
+
+**Decision:**
+- D2 fix: in `justapi-core/src/db/pool.rs`, for SQLite always prepend
+  `PRAGMA busy_timeout=5000` to the pragma list and run every pragma (including
+  `journal_mode=WAL`) via `fetch_optional` instead of `execute`, ignoring the
+  returned row.
+- D3/D4 fix: in `crates/justapi-py/src/native/app.rs::connect_database`, build a
+  **multi-threaded** runtime — `tokio::runtime::Builder::new_multi_thread()
+  .worker_threads(4).enable_all().build()` — and use its `Handle` (which is safe
+  to `block_on` from any thread, as it temporarily drives the runtime on the
+  caller's thread) for the bootstrap block_on and for `DbPool`'s queries.
+- D1: no code change — confirmed server binds; the report was a misread of D4.
+
+**Evidence:**
+- `wal=True` connect on 112 MB Olist file: **0.00 s** (was 30s+ hang).
+- `/products` at concurrency=1: p50 **2–4 ms** (was 910 ms) — ~250× faster.
+- `oha -z 12s -c 64 /products?size=20`: **3,706** successful concurrent requests,
+  p50 188 ms, p99 367 ms, **0 deadlocks** (was a full hang at -c 32). The 188 ms
+  p50 at -c 64 is GIL-pool saturation across 64 parallel Python handlers — a
+  Python-GIL effect, not a DB-path defect.
+- `demo_shop/test_app.py`: 23/23 routes pass via AsyncTestClient.
+- `cargo test --workspace --features justapi-core/db` green; `cargo clippy
+  --workspace --tests --features justapi-core/db -- -D warnings` clean;
+  `cargo fmt --check` clean. No new dependency; internal change only.
