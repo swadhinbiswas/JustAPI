@@ -956,7 +956,8 @@ impl Server {
             return res;
         }
 
-        tracing::info!("Listening on {} (plain HTTP/1.1)", local_addr);
+        tracing::info!("🚀 JustAPI serving on http://{}", local_addr);
+        tracing::info!("   ready — endpoints live at http://{}/", local_addr);
         #[cfg(feature = "ws")]
         let res = serve_http(
             listener,
@@ -1465,7 +1466,17 @@ async fn serve_connection(
                         let status = response.status();
                         span.record("http.status_code", status.as_u16());
                         metrics.record_status(status);
-                        metrics.record_latency(start.elapsed().as_secs_f64() * 1000.0);
+                        let latency_ms = start.elapsed().as_secs_f64() * 1000.0;
+                        metrics.record_latency(latency_ms);
+
+                        // Access log: one structured line per completed request.
+                        tracing::info!(
+                            http.method = %method,
+                            http.path = %path,
+                            http.status_code = status.as_u16(),
+                            latency_ms = format!("{latency_ms:.2}"),
+                            "request completed"
+                        );
 
                         // If the response is 404, try serving static files.
                         if status == StatusCode::NOT_FOUND {

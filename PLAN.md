@@ -602,6 +602,32 @@ Don't duplicate that reasoning here — just reference the entry.
 
 2. Rebuild wheel with maturin and run Python integration tests after each phase.
 
+## Production-readiness plan (2.0.8 pre-release hardening)
+
+Full plan in `PRODUCTION_PLAN.md` (written 2026-07-20 from the audit + live
+reproductions). Blockers tracked there; summary:
+
+- **P0.1 BUG-2a (CRITICAL, availability):** `normalize_db_url` (`justapi-core/src/db/pool.rs:93`)
+  mangles SQLite paths — `sqlite:///x.db`→`sqlite:/x.db` (root) and
+  `sqlite:////abs`→`sqlite://abs` (mangled). `app.run()` with a DB crashes with
+  `code 14 / unable to open database file` for *every* path. Reproduced 2026-07-20.
+  Fix: strip-prefix matcher matching the SQLAlchemy 3/4-slash convention.
+- **P0.2 BUG-2b/D3 (CRITICAL, perf):** SQLite pragmas are opt-in
+  (`pool.rs:252` only runs when caller passes `pragmas`); default pool = rollback
+  journal + `busy_timeout=0` → constant `SQLITE_BUSY` under the 10-conn default
+  pool → ~15 req/s / ~900 ms p50 (stress test). Fix: unconditional
+  `busy_timeout=5000` + `journal_mode=WAL` + `synchronous=NORMAL` for SQLite.
+- **P0.3 BUG-1 (CRITICAL, correctness):** any response dict with a top-level
+  `"status"` key is misclassified as a legacy envelope and returned with an
+  **empty body** (`justapi-py/src/native/handlers.rs:322-348`). Reproduced.
+  Fix: envelope detection requires `"body"`, not just `"status"`.
+- **P1.1 BUG-3:** `body_schema=` delivers raw `bytes` to the Python handler, not
+  a parsed Schema/dict (demo_shop workaround).
+- **P1.3:** pytest gate 5 failed/115 passed (missing `pydantic`/`jinja2`/`websockets`).
+- **P2.1:** no real DB-backed CRUD benchmark vs FastAPI/Robyn exists — the only
+  fair "real life" number is missing.
+- **P3.1:** wheel built + `twine check` PASSED but **unpublished** to PyPI.
+
 ## Open issues / follow-ups (2026-07-11)
 
 - [x] **Python test gate fixed.** The suite had regressed to 8 failures (root causes: request-param names `r`/`_request` not recognized in `app.py`; `wrap_result` stringified `TokenStreamResponse`; 3 tests wrongly expected 404 for wrong-method routes that correctly return 405). All 57 pass / 1 skipped now.

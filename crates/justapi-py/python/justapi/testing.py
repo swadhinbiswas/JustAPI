@@ -124,6 +124,9 @@ class AsyncTestClient:
     async def put(self, path: str, body: bytes = b"") -> dict:
         return await self._run("PUT", path, body)
 
+    async def patch(self, path: str, body: bytes = b"") -> dict:
+        return await self._run("PATCH", path, body)
+
     async def delete(self, path: str) -> dict:
         return await self._run("DELETE", path)
 

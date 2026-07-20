@@ -3,6 +3,7 @@ use std::sync::{Mutex, OnceLock};
 
 use anyhow::Result;
 use tracing_appender::non_blocking::WorkerGuard;
+use tracing_subscriber::fmt::time::FormatTime;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer};
@@ -50,7 +51,7 @@ impl Default for LoggingConfig {
             level: "info".to_string(),
             file_path: None,
             file_rotation: FileRotation::Daily,
-            otel_exporter: Some(OtelExporter::Stdout),
+            otel_exporter: None,
             otlp_endpoint: None,
             service_name: "justapi".to_string(),
         }
@@ -70,6 +71,20 @@ fn set_guard(guard: WorkerGuard) {
 static TRACER_GUARD: OnceLock<Mutex<Option<opentelemetry_sdk::trace::TracerProvider>>> =
     OnceLock::new();
 
+/// Compact `HH:MM:SS` timer for the CLI formatter (no date / no nanos).
+struct UptimeTimer;
+
+impl FormatTime for UptimeTimer {
+    fn format_time(&self, w: &mut tracing_subscriber::fmt::format::Writer<'_>) -> std::fmt::Result {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap_or_default();
+        let secs = now.as_secs();
+        let (h, m, s) = (secs / 3600 % 24, (secs / 60) % 60, secs % 60);
+        write!(w, "{h:02}:{m:02}:{s:02}")
+    }
+}
+
 /// Initialize tracing with the given configuration.
 pub fn init_logging(config: &LoggingConfig) -> Result<()> {
     let env_filter =
@@ -79,16 +94,25 @@ pub fn init_logging(config: &LoggingConfig) -> Result<()> {
         LogFormat::Json => tracing_subscriber::fmt::layer()
             .json()
             .with_target(true)
-            .with_thread_ids(true)
-            .with_file(true)
-            .with_line_number(true)
+            .with_thread_ids(false)
+            .with_file(false)
+            .with_line_number(false)
             .boxed(),
-        LogFormat::Text => tracing_subscriber::fmt::layer()
-            .with_target(true)
-            .with_thread_ids(true)
-            .with_file(true)
-            .with_line_number(true)
-            .boxed(),
+        LogFormat::Text => {
+            // Clean, colored CLI style on stdout:
+            //   HH:MM:SS  INFO  justapi_core::server  <message>
+            // Level is colored by default; target is shown dim via the timer's
+            // dim wrapping below. Thread/file/line noise is off.
+            tracing_subscriber::fmt::layer()
+                .with_ansi(true)
+                .with_target(true)
+                .with_level(true)
+                .with_thread_ids(false)
+                .with_file(false)
+                .with_line_number(false)
+                .with_timer(UptimeTimer)
+                .boxed()
+        }
     };
 
     let mut layers = Vec::new();
@@ -169,6 +193,19 @@ fn set_tracer_guard(provider: opentelemetry_sdk::trace::TracerProvider) {
 /// Initialize tracing with text format and env-filter (backward compatible).
 pub fn init_tracing() -> Result<()> {
     init_logging(&LoggingConfig::default())
+}
+
+/// Initialize the default (text, INFO, stdout) subscriber **only if** no
+/// global subscriber has been installed yet. Safe to call unconditionally at
+/// process start — a second call is a no-op rather than a panic.
+///
+/// This is what the Python `app.run()` path calls so that an app always gets a
+/// logger unless the user explicitly configured one first.
+pub fn init_default_if_unset() {
+    if tracing::dispatcher::has_been_set() {
+        return;
+    }
+    let _ = init_logging(&LoggingConfig::default());
 }
 
 /// Initialize JSON-formatted tracing with env-filter.

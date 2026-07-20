@@ -1,122 +1,134 @@
-# demo_shop — real-life e-commerce API (Olist dataset)
+# demo_shop — MVP e-commerce store (JustAPI Runtime)
 
-A realistic, complex online-shopping API built on the JustAPI Runtime, backed by
-the **Olist Brazilian e-commerce SQLite dataset** (`olist.sqlite`, ~112 MB:
-99k orders, 33k products, 3k sellers, 100k reviews, 1M geolocation rows).
+A **proper, working mini shop** built on the JustAPI Runtime: a real data model
+with full CRUD, a shopping-cart → checkout → order → payment → review flow,
+managed inventory, and analytics. Backed by a writable SQLite database
+(`shop.db`) seeded from the Olist Brazilian e-commerce dataset.
 
-The goal of this app is **not** to ship a product — it is to exercise the
-framework with a *real, join-heavy workload* (catalog, orders, sellers,
-analytics, search) and **surface framework problems** that the echo/hello
-micro-benchmarks hide. It succeeded: it found several serious issues.
+This is a self-contained MVP you can run, register products, put them in a cart,
+check out, and review — not just a read-only demo.
 
-## What's implemented
+## Data model
 
-| Area | Endpoints |
-|---|---|
-| Health/meta | `/shop/health`, `/shop/meta/tables` |
-| Catalog | `/products` (filter/search/paginate/sort), `/products/{id}`, `/products/{id}/reviews`, `/categories` |
-| Sellers | `/sellers`, `/sellers/{id}`, `/sellers/{id}/products` |
-| Customers | `/customers/{id}` |
-| Orders | `/orders` (filter), `/orders/{id}` (items+payments+reviews aggregate), `/orders/{id}/timeline` (delivery-delay calc) |
-| Reviews | `/reviews`, `/reviews/summary` |
-| Geolocation | `/geolocation/states` |
-| Analytics | `/analytics/sales-by-category`, `/analytics/top-sellers`, `/analytics/delivery-performance`, `/analytics/monthly-revenue` |
-| Search | `/search?q=&kind=` |
+```
+categories ─< products >─ sellers
+customers  ─< carts >─ cart_items ─< products
+customers  ─< orders >─ order_items ─< products, payments
+orders     ─< reviews >─ products
+```
 
-All SQL runs through the Rust-native `DbPool` (`app.db.query(sql, params)`,
-injection-safe bound params). 23 endpoints validated green via the framework's
-`AsyncTestClient` (`pytest`-style smoke in `test_app.py`).
+`shop.db` is created and seeded on first run (`python db_setup.py`): 72
+categories, ~3.1k sellers, ~99k customers, and ~33k products (with managed
+`price` + `stock`), all imported from `olist.sqlite`.
+
+## Endpoints
+
+| Area | Method & path | Notes |
+|---|---|---|
+| Health | `GET /shop/status` | `{"health":"ok","products":N}` |
+| Categories | `GET /categories`, `POST /categories` | create w/ 409 on dup slug |
+| Products | `GET /products` (filter/search/sort/paginate), `GET /products/{id}`, `POST /products`, `PATCH /products/{id}`, `DELETE /products/{id}` | full CRUD |
+| Sellers | `GET /sellers/{id}` | + lifetime stats |
+| Customers | `GET /customers/{id}`, `POST /customers` | register |
+| Cart | `POST /carts`, `GET /carts/{id}`, `POST /carts/{id}/items`, `DELETE /carts/{id}/items/{product_id}` | line items, totals |
+| Checkout | `POST /carts/{id}/checkout` | **atomic txn**: creates order + payment, decrements stock, empties cart |
+| Orders | `GET /orders`, `GET /orders/{id}` (items + payments), `PATCH /orders/{id}/status` | status lifecycle pending→paid→shipped→delivered→cancelled |
+| Reviews | `POST /orders/{id}/reviews` | score 1–5, must be a product in the order |
+| Analytics | `GET /analytics/sales-by-category`, `GET /analytics/top-products`, `GET /analytics/review-summary` | over the owned, mutable tables |
+
+All request bodies are validated with `justapi.Schema` classes
+(`CategoryIn`, `ProductIn`, `ProductPatch`, `CustomerIn`, `CartItemIn`,
+`CheckoutIn`, `OrderStatusIn`, `ReviewIn`). Errors return proper HTTP status
+codes: `400` bad input, `404` not found, `409` conflict (duplicate / out of
+stock / wrong product), `422` validation failure.
 
 ## Run it
 
 ```bash
-# Serve (DB-backed app runs fine over TCP after ADR-068)
-python demo_shop/app.py --port 8080
+# 1) (first time) build + seed the owned shop database
+python db_setup.py
 
-# Smoke-test the routes (works — uses the test client, not the TCP server)
-python demo_shop/test_app.py
+# 2) serve  (demo_shop is now a package, run as a module)
+/home/swadhin/RastAPI/crates/justapi-py/.venv/bin/python -m shop --port 8080
 
-# In-process load test (see Finding #5)
-python demo_shop/bench_async.py --concurrency 1 --per-worker 20
+# 3) exercise the full CRUD + checkout flow (no server needed)
+/home/swadhin/RastAPI/crates/justapi-py/.venv/bin/python test_app.py
 ```
 
-## Framework problems found — ROOT-CAUSED & FIXED (ADR-068)
+> `uv run` does **not** work from this directory — it walks up into the parent
+> RastAPI `uv` workspace (which conflicts with the `SQLPILOT` member). Use the
+> maturin venv that has `justapi` installed, as shown above.
 
-This exercise set out to break the framework by building a real app on it. It
-found four genuine defects in the Python-handler + SQLite path. All four are now
-fixed (commit ADR-068) and verified against this app.
+### Example flow (curl)
 
-### Finding #1 — `app.db` is `None` inside handlers unless the pool is connected
-`app.db` resolves the pool lazily; inside a request context the pool may be
-`None` (returns `AttributeError: 'NoneType' object has no attribute 'query'`).
-In practice the pool is not connected until a runtime calls `connect_database()`.
-**Status: by-design / documented.** Mitigation: call `app.connect_database()`
-eagerly (see `app.py`). Not a defect — kept as a usage note.
+```bash
+# register a customer, create a cart
+curl -s -X POST localhost:8080/customers -d '{"id":"c1","city":"SP"}' -H 'content-type: application/json'
+curl -s -X POST localhost:8080/carts     -d '{"customer_id":"c1"}' -H 'content-type: application/json'
+# -> {"id":"cart_xxx", ...}
 
-### Finding #2 — `set_database(..., wal=True)` HANGS the pool connect forever — **FIXED**
-`app.set_database(url, wal=True)` appends `PRAGMA journal_mode=WAL`, which takes
-an **exclusive lock** on the SQLite file. The original `after_connect` ran the
-pragma with `conn.execute` and **no `busy_timeout`**, so when the pool warmed up
-several connections concurrently the second opener blocked on the WAL lock
-forever (no timeout → infinite wait). **Fix:** `justapi-core/src/db/pool.rs`
-now always prepends `PRAGMA busy_timeout=5000` for SQLite and runs every pragma
-(including `journal_mode=WAL`) via `fetch_optional`. Result: `wal=True` now
-connects in **0.00s** on the 112 MB Olist file (was a 30s+ hang).
+# add an item, check out
+curl -s -X POST localhost:8080/carts/cart_xxx/items -d '{"product_id":"00066f42...","quantity":2}' -H 'content-type: application/json'
+curl -s -X POST localhost:8080/carts/cart_xxx/checkout -d '{"method":"credit_card"}' -H 'content-type: application/json'
+# -> {"id":"order_xxx","order_status":"paid","total_amount": ...}
 
-### Finding #3 — `app.run()` "deadlocks" on a configured database — **RETRACTED**
-Original report said a DB-backed `app.run()` "never binds." Re-testing after the
-D4 fix shows the server **always bound and served** — builtin `/health` and
-`/shop/meta/tables` returned correctly. The original "never up" probe hit
-`/shop/health`, a **DB-backed handler**, which deadlocked at the time (D4); the
-empty/hung response was misread as "server not up." Conclusion: there was no
-`run()` bind deadlock — the failure was entirely the D4 concurrency deadlock on
-DB-backed routes. No `run()`-specific fix was required.
+# advance + review
+curl -s -X PATCH localhost:8080/orders/order_xxx/status -d '{"status":"shipped"}' -H 'content-type: application/json'
+curl -s -X POST localhost:8080/orders/order_xxx/reviews -d '{"product_id":"00066f42...","score":5,"title":"Great"}' -H 'content-type: application/json'
+```
 
-### Finding #4 — DB-backed handler ~900 ms/req at concurrency=1 — **FIXED**
-Root cause: `connect_database()` built a **`tokio::runtime::Runtime::new()`
-(current-thread)** runtime and stored its handle for `DbPool::query/execute` to
-`block_on`. A current-thread runtime's handle can only be driven from the thread
-that owns it; calling `block_on` on it from a **foreign thread** (the GIL-pool
-worker / server runtime thread) silently deadlocks or serializes catastrophically
-— producing ~900 ms/req at concurrency=1 and a full hang at concurrency>1.
-**Fix:** `connect_database()` now builds a **multi-threaded** runtime
-(`Builder::new_multi_thread().worker_threads(4).enable_all()`). A multi-thread
-runtime's handle is safe to `block_on` from **any** thread (it temporarily drives
-the runtime on the caller's thread). Result: concurrency=1 `/products` latency
-dropped from p50 910 ms to **2–4 ms** (a ~250× improvement), and the per-request
-path is now ~1–2 ms on top of the raw query, matching the DB's own speed.
+## Interactive API docs (Scalar)
 
-### Finding #5 — concurrent async load DEADLOCKS — **FIXED**
-Same root cause as #4 (current-thread `db_runtime` handle + foreign-thread
-`block_on`). Under concurrent in-flight requests the GIL pool spawned many callers
-on different threads, each `block_on`-ing the current-thread runtime → deadlock.
-**Fix:** the multi-threaded `db_runtime` (above) makes `block_on` from any thread
-safe. Verified: `oha -z 12s -c 64` against `/products?size=20` served **3,706
-concurrent requests** (p50 188 ms at 64-way GIL saturation, p99 367 ms, 0
-deadlocks). The 188 ms p50 under -c 64 is GIL-pool saturation across 64
-simultaneous Python handlers, not a per-request defect (at concurrency=1 it is
-2–4 ms).
+The app ships interactive OpenAPI docs, generated live from the registered
+routes (`/openapi.json`):
 
-## Baseline: Rust HTTP core is fast; the Python+DB path is now fast too
+| URL | Viewer |
+|---|---|
+| **`/`** (home page) | **Scalar API Reference** — opens by default |
+| `/scalar` | Scalar API Reference |
+| `/docs` | Swagger UI |
+| `/redoc` | ReDoc |
+| `/openapi.json` | Raw OpenAPI 3.1 spec |
 
-| Path | Throughput | Notes |
-|---|---:|---|
-| No-DB `app.run()` + `oha -c 64` | **37,171 req/s** | Rust HTTP + Python dict handler, real TCP |
-| DB-backed `/products`, `concurrency=1` | **~250–330 req/s** effective (2–4 ms/req) | framework handler+DB dispatch, post-fix |
-| DB-backed `/products`, `oha -c 64` | **314 req/s** (p50 188 ms, p99 367 ms) | GIL-pool saturation at 64-way, **no deadlock** |
-| Raw `app.db.query` (same queries) | ~1–100 ms/query | DB itself was always fine |
-| `wal=True` connect on 112 MB file | **0.00 s** | was a 30s+ hang before the fix |
+Open <http://localhost:8080/> in a browser to see the full, interactive
+reference of every endpoint (catalog, cart, checkout, orders, reviews,
+analytics).
 
-**Conclusion:** the runtime's networking core was always solid (37k req/s). The
-Python-handler + SQLite path — the path every real app uses — had two genuine
-bugs (D2 WAL hang, D4 current-thread-runtime deadlock) both now fixed in
-`justapi-core`/`justapi-py`. After ADR-068 the DB-backed app serves real
-concurrent traffic over TCP with single-digit-ms latency. The only remaining
-headroom is GIL-pool serialization under very high concurrency, which is inherent
-to running Python handlers and is independent of the DB path.
+## Framework gotchas discovered while building this MVP
+
+Two real framework behaviors bit during development (workarounds applied in
+`app.py`):
+
+1. **Response bodies containing a top-level `"status"` key are emitted empty.**
+   A handler returning `{"status": "ok", ...}` produces a `200` with an empty
+   body; `{"products": N}` is fine. Workaround: order responses expose the
+   order state under `order_status` (the SQL column is still `status`), and the
+   health endpoint uses `health` instead of `status`. *(Framework bug — should
+   be filed.)*
+
+2. **`body_schema=` delivers the validated payload to the handler as raw
+   `bytes`, not an instantiated Schema object.** So handlers parse
+   `request.json()` and validate via the local `validate(schema, data)` helper
+   (which uses the Schema's generated JSON Schema). The `Schema` classes still
+   drive OpenAPI docs via `body_schema=`. *(Framework bug — should be filed.)*
+
+Neither blocks the MVP; both are noted for a follow-up framework fix.
 
 ## Files
-- `app.py` — the API (23 routes, SQLite-backed).
-- `test_app.py` — smoke test, 23 endpoints (all pass via `AsyncTestClient`).
-- `bench_async.py` — in-process load test (surfaces Finding #4/#5).
-- `README.md` — this file.
+
+The app is a small **package** (`shop/`), not a monolith:
+
+- `db_setup.py` — owned schema (`shop.db`) + one-shot seed from `olist.sqlite`.
+- `shop/__init__.py` — package doc, re-exports the `app` instance.
+- `shop/config.py` — `create_app()`, DB wiring, package-level `app`/`db` singletons.
+- `shop/db.py` — SQL helpers (`q`, `q1`, `paginate`, `new_token`).
+- `shop/schemas.py` — `Schema` request classes + the `validate()` helper.
+- `shop/catalog.py` — categories, products (full CRUD), sellers.
+- `shop/customers.py` — customer register / lookup.
+- `shop/cart.py` — cart lifecycle + `checkout` (atomic order + payment + stock dec).
+- `shop/orders.py` — orders list / detail / status lifecycle.
+- `shop/reviews.py` — reviews + analytics.
+- `shop/cli.py` — `python -m shop` entrypoint (`--host`/`--port`).
+- `test_app.py` — end-to-end flow test via `justapi.testing.AsyncTestClient`
+  (29 assertions: catalog, CRUD, checkout txn, stock decrement, status
+  lifecycle, reviews, validation).

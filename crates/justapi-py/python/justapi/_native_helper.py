@@ -125,10 +125,13 @@ def call_batch_handler(handler, requests):
 
 
 def validate_body(schema_fn, body_bytes):
-    """Validate a request body against a schema function.
+    """Validate a request body against a route's body schema.
 
-    The schema function receives the parsed JSON body and should return
-    a list of error strings, or None/[] if valid.
+    `schema_fn` is one of:
+    * a ``justapi.Schema`` subclass — its generated JSON Schema is validated
+      through the Rust ``validate_value`` engine (mirrors the native fast path);
+    * a plain callable ``fn(body_dict) -> list[str] | None`` — invoked directly
+      (legacy path), returning error strings or an empty/None list when valid.
     """
     if schema_fn is None:
         return []
@@ -139,6 +142,23 @@ def validate_body(schema_fn, body_bytes):
     except (UnicodeDecodeError, json.JSONDecodeError) as e:
         return [f"Invalid JSON body: {e}"]
 
+    # Schema subclass: validate via its JSON Schema through the Rust engine.
+    schema_json = getattr(schema_fn, "_schema_json", None)
+    if callable(schema_json):
+        try:
+            from ._justapi import validate_value
+        except Exception:
+            try:
+                from justapi._justapi import validate_value
+            except Exception:
+                validate_value = None
+        if validate_value is not None:
+            try:
+                return validate_value(schema_json(), json.dumps(body_data))
+            except Exception as e:  # pragma: no cover - defensive
+                return [f"schema validation error: {e}"]
+
+    # Legacy callable schema.
     result = schema_fn(body_data)
     if result is None:
         return []

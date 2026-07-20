@@ -5,6 +5,7 @@ pub mod buffer_test;
 mod dag;
 mod database;
 pub mod gil_pool;
+mod logging;
 mod multipart;
 mod native;
 mod rate_limit;
@@ -76,5 +77,6 @@ fn _justapi(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<background::BackgroundTasks>()?;
     m.add_class::<scheduler::PyScheduler>()?;
     status::register(m)?;
+    logging::register(m)?;
     Ok(())
 }

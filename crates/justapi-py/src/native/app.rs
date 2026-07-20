@@ -1350,6 +1350,12 @@ impl JustAPIApp {
             pyo3::exceptions::PyValueError::new_err(format!("Invalid address: {}", e))
         })?;
 
+        // Ensure a default logger is installed before serving, so that the
+        // server's `tracing` events (listen address, per-request spans,
+        // connection errors, graceful shutdown) are actually surfaced. A user
+        // who called `justapi.init_logging(...)` first keeps their config.
+        justapi_core::tracing_setup::init_default_if_unset();
+
         // Initialize the dedicated GIL pool once (detects GIL vs free-threaded
         // mode automatically; see gil_pool.rs / DECISIONS.md ADR-049).
         crate::gil_pool::init(py, None);
