@@ -38,6 +38,18 @@ from .websockets import WebSocket, WebSocketState, WebSocketDisconnect
 from .templating import Jinja2Templates
 from .background import BackgroundTasks
 from ._justapi import Scheduler  # type: ignore[import-untyped]
+
+# Logging / tracing configuration (thin re-exports of justapi-core's
+# `tracing`-based subsystem). `app.run()` installs a default INFO text logger
+# automatically; these let apps opt into JSON / file / OTLP instead.
+from ._justapi import (  # type: ignore[import-untyped]
+    init_logging,
+    init_json_logging,
+    init_file_logging,
+    init_otlp_tracing,
+    shutdown_tracing,
+)
+from . import logging as logging  # re-export the logging namespace
 from .responses import (
     Response,
     HTMLResponse,
@@ -78,7 +90,13 @@ class Schema:
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
-        annotations = getattr(cls, '__annotations__', {})
+        # Resolve annotations via get_type_hints so that `from __future__ import
+        # annotations` (which stringizes them) and forward references still map
+        # to real types — otherwise every field would be treated as `str`.
+        try:
+            annotations = typing.get_type_hints(cls)
+        except Exception:
+            annotations = getattr(cls, '__annotations__', {})
         fields = {}
         for field_name, field_type in annotations.items():
             if field_name.startswith('_'):

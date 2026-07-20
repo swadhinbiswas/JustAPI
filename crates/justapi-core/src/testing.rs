@@ -64,6 +64,10 @@ impl TestClient {
         self.request(Method::PUT, path, body, &[]).await
     }
 
+    pub async fn patch(&self, path: &str, body: Vec<u8>) -> Result<TestResponse, anyhow::Error> {
+        self.request(Method::PATCH, path, body, &[]).await
+    }
+
     pub async fn delete(&self, path: &str) -> Result<TestResponse, anyhow::Error> {
         self.request(Method::DELETE, path, Vec::new(), &[]).await
     }

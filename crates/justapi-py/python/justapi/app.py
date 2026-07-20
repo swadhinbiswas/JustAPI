@@ -85,6 +85,37 @@ def _builtin_redoc(app):
     return HTMLResponse(html)
 
 
+def _builtin_scalar(app):
+    """Serve Scalar API Reference (modern interactive docs) for the Python app.
+
+    Scalar reads the OpenAPI document from ``/openapi.json`` and renders a
+    clean, fast reference UI. Used for both ``/scalar`` and the home page ``/``.
+    """
+    html = (
+        "<!doctype html>\n"
+        "<html lang=\"en\">\n"
+        "  <head>\n"
+        "    <meta charset=\"utf-8\" />\n"
+        "    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />\n"
+        "    <title>API Reference — JustAPI</title>\n"
+        "    <style>html, body { margin: 0; padding: 0; height: 100%; }</style>\n"
+        "  </head>\n"
+        "  <body>\n"
+        "    <div id=\"app\"></div>\n"
+        "    <script src=\"https://cdn.jsdelivr.net/npm/@scalar/api-reference\"></script>\n"
+        "    <script>\n"
+        "      Scalar.createApiReference('#app', {\n"
+        "        url: '/openapi.json',\n"
+        "        theme: 'default',\n"
+        "        layout: 'modern',\n"
+        "      });\n"
+        "    </script>\n"
+        "  </body>\n"
+        "</html>\n"
+    )
+    return HTMLResponse(html)
+
+
 def _model_json_schema(ann):
     """Best-effort JSON schema from a Pydantic / dataclass / model annotation."""
     try:
@@ -208,6 +239,10 @@ class JustAPIApp:
         self.get("/openapi.json", lambda: _builtin_openapi(self), include_in_schema=False, name="builtin_openapi")
         self.get("/docs", lambda: _builtin_docs(self), include_in_schema=False, name="builtin_docs")
         self.get("/redoc", lambda: _builtin_redoc(self), include_in_schema=False, name="builtin_redoc")
+        self.get("/scalar", lambda: _builtin_scalar(self), include_in_schema=False, name="builtin_scalar")
+        # The home page opens the interactive API reference (Scalar) so the
+        # docs are the first thing a visitor sees.
+        self.get("/", lambda: _builtin_scalar(self), include_in_schema=False, name="builtin_index")
 
     def _record(self, method, path, handler, *, body_schema=None, schema=None,
                  experimental=False, **kw):
@@ -1253,7 +1288,13 @@ class JustAPIApp:
         from ._justapi import Scheduler
 
         Scheduler().start()
-        self._app.run(addr, max_body_size)
+        try:
+            self._app.run(addr, max_body_size)
+        except KeyboardInterrupt:
+            # Ctrl-C: the Rust runtime already performs a graceful drain/shutdown
+            # on the signal; swallow the Python traceback so the user just sees
+            # the clean "shutting down" log lines instead of a stack trace.
+            pass
 
     def schedule(self, cron_expr, func, *args, **kwargs):
         """Register a cron job (native Rust scheduler).

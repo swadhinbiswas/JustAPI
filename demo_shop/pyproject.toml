@@ -1,0 +1,11 @@
+[project]
+name = "demo-shop"
+version = "0.1.0"
+description = "JustAPI demo e-commerce API on the Olist SQLite dataset"
+requires-python = ">=3.11"
+dependencies = ["justapi"]
+
+[tool.uv]
+# Keep this directory a standalone project so `uv run` does not walk up into
+# the parent RastAPI uv workspace (which conflicts with the SQLPILOT member).
+package = false

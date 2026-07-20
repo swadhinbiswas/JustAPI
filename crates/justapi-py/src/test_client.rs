@@ -182,6 +182,11 @@ impl JustAPITestClient {
         self.do_request(py, move |client, rt| rt.block_on(client.put(&path, body)))
     }
 
+    fn patch(&self, py: Python<'_>, path: &str, body: Vec<u8>) -> PyResult<Py<PyAny>> {
+        let path = path.to_owned();
+        self.do_request(py, move |client, rt| rt.block_on(client.patch(&path, body)))
+    }
+
     fn delete(&self, py: Python<'_>, path: &str) -> PyResult<Py<PyAny>> {
         let path = path.to_owned();
         self.do_request(py, move |client, rt| rt.block_on(client.delete(&path)))

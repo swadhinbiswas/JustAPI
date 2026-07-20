@@ -2590,3 +2590,169 @@ deadlocks or serializes catastrophically — producing ~900 ms/req at concurrenc
 - `cargo test --workspace --features justapi-core/db` green; `cargo clippy
   --workspace --tests --features justapi-core/db -- -D warnings` clean;
   `cargo fmt --check` clean. No new dependency; internal change only.
+
+## ADR-069 — 2026-07-18 — Two framework serialization/payload gotchas (found building demo_shop MVP)
+
+**Context:** Rebuilt `demo_shop/` as a proper MVP shop (real data model, full
+CRUD, cart→checkout→order→payment→review flow, validation via `justapi.Schema`).
+Two framework behaviors surfaced that break naive handlers and were worked
+around in `demo_shop/app.py`:
+
+1. **Response bodies containing a top-level `"status"` key are emitted as an
+   empty body.** A handler returning `{"status": "ok", "products": N}` yields
+   `HTTP 200` with `content-length: 0` and no body; `{"products": N}` serializes
+   correctly. Reproduced with minimal handlers: `{"status":"ok"}` → empty,
+   `{"products":1}` → fine, `{"status":"ok","products":1}` → empty. The
+   framework appears to treat a JSON object with a `status` key as a
+   status-response envelope and mishandles it. **Workaround:** order state is
+   exposed as `order_status` (SQL column stays `status`); health uses `health`.
+   **This is a framework bug and should be filed/fixed** (response
+   serialization path).
+
+2. **`body_schema=` delivers the validated payload to the handler as raw
+   `bytes`, not an instantiated Schema object.** A handler declared as
+   `def h(request, payload: ProductIn)` receives `payload` being a `bytes`
+   object (so `payload.id` → `AttributeError: 'bytes' object has no
+   attribute 'id'`). **Workaround:** handlers parse `request.json()` and validate
+   via a local `validate(schema_cls, data)` helper that uses the Schema's
+   generated JSON Schema (`Schema._build_schema()`). The `Schema` classes still
+   drive OpenAPI docs through `body_schema=`. **This is a framework bug**
+   (PyO3/dispatch binding for validated bodies) and should be filed/fixed.
+
+**Decision:** Work around both in the app layer for now (no framework code
+change beyond adding `PATCH` to `JustAPITestClient`/`TestClient` so the test
+suite can drive `PATCH` routes). Document them in `demo_shop/README.md` as
+framework gotchas to fix.
+
+**Evidence:** `demo_shop/test_app.py` — 29/29 assertions pass via
+`justapi.testing.AsyncTestClient` (catalog, CRUD, atomic checkout decrementing
+stock, order status lifecycle, review validation). The two behaviors were
+isolated with minimal repro handlers. `cargo test --workspace
+--features justapi-core/db` green; `cargo clippy --workspace --tests
+--features justapi-core/db -- -D warnings` clean; `cargo fmt --check` clean.
+
+---
+
+## ADR-070 — 2026-07-18 — Framework had no usable logging from `app.run()`
+
+**Context:** Building `demo_shop/` surfaced that the framework emitted **no
+logs at all** when launched from Python. `justapi-core` already had a full
+`tracing`-based subsystem (`tracing_setup.rs`: `init_logging`, `LoggingConfig`,
+JSON/text, rolling file, OTLP) and the server (`server/mod.rs`) fired
+`tracing::info!`/`error!` events plus an `info_span!("http.request", …)` per
+request — but **nothing ever initialized a `tracing` subscriber on the Python
+`app.run()` path**. The `init_tracing`/`init_logging` functions existed in core
+but were unreachable from PyO3, and the default `LoggingConfig` shipped with
+`otel_exporter: Some(OtelExporter::Stdout)`, which would dump raw OTLP span
+JSON to stdout.
+
+**Options considered:**
+1. Leave logging as a Rust-only feature, require users to wire `tracing`
+   themselves — rejected: a web framework that is silent on startup, request
+   completion, and errors is not production-grade; the user explicitly flagged
+   this ("there is no logging system in this framework").
+2. Auto-install a default subscriber inside `app.run()` + expose opt-in config
+   from Python — **selected**.
+
+**Decision:**
+- `justapi-core/src/tracing_setup.rs`: added `init_default_if_unset()` — calls
+  `init_logging(LoggingConfig::default())` only if
+  `tracing::dispatcher::has_been_set()` is false (so a user-installed subscriber
+  is never clobbered). Changed `LoggingConfig::default()` to `otel_exporter:
+  None` so the default is clean text→stdout, not an OTLP stdout span dump.
+- `justapi-py/src/native/app.rs::run` now calls `init_default_if_unset()` before
+  serving → the framework logs automatically the moment an app runs.
+- `justapi-py/src/logging.rs` (new): thin PyO3 glue exposing `init_logging`,
+  `init_json_logging`, `init_file_logging`, `init_otlp_tracing`,
+  `shutdown_tracing` (registered in `lib.rs`). Re-exported on the `justapi`
+  package and via `justapi.logging`.
+- `justapi-core/src/server/mod.rs`: added a structured **access-log** `info!`
+  event on every completed (non-timeout) request — `http.method`, `http.path`,
+  `http.status_code`, `latency_ms` — so each request is visible. Startup now
+  prints a clear banner: `🚀 JustAPI serving on http://<ip>:<port>` plus a
+  "endpoints live at …" line, so the bound IP/port is always visible.
+- `justapi-core/src/tracing_setup.rs`: the default **Text** format was
+  reworked into a clean, colored CLI style — compact `HH:MM:SS` timestamp
+  (custom `UptimeTimer`, no nanos/date), ANSI-colored level (green INFO /
+  yellow WARN / red ERROR / cyan DEBUG / magenta TRACE), dimmed module target,
+  and thread/file/line noise disabled. ANSI is on for stdout, off for file
+  appenders. The `Json` format stays structured for collectors.
+
+**Evidence:** `python -m shop --port 8111` now prints:
+```
+17:28:10  INFO  justapi::gil_pool: GIL pool initialized: mode=GilBased …
+17:28:10  INFO  justapi_core::server: 🚀 JustAPI serving on http://127.0.0.1:8111
+17:28:10  INFO  justapi_core::server:    ready — endpoints live at http://127.0.0.1:8111/
+17:28:15  INFO  justapi_core::server: request completed http.method=GET http.path=/products http.status_code=200 latency_ms="8.70"
+```
+Levels are ANSI-colored, timestamp is short, and the listening IP:port is
+explicit. `cargo test -p justapi-core --features justapi-core/db`, `cargo
+clippy`, `cargo fmt --check` all green; `demo_shop/test_app.py` 29/29 and
+`demo_shop/test_lookup.py` 19/19.
+
+---
+
+## ADR-071 — 2026-07-18 — Scalar API Reference as the default home-page docs
+
+**Context:** The framework already served Swagger UI (`/docs`) and ReDoc
+(`/redoc`) from `/openapi.json`, but the **home page `/`** was unclaimed (404 /
+static fallback) and Scalar — the modern, fast API-reference UI at
+<https://scalar.com/> — was not available. The user asked for Scalar to be wired
+in properly and for the **home page to open the docs**.
+
+**Decision:** In `crates/justapi-py/python/justapi/app.py`:
+- Added `_builtin_scalar(app)` — the official Scalar CDN embed
+  (`@scalar/api-reference`, `Scalar.createApiReference('#app', { url:
+  '/openapi.json', theme: 'default', layout: 'modern' })`).
+- Registered `GET /scalar` → Scalar, and **`GET /` (root) → Scalar** so the
+  home page opens the interactive reference.
+- `/docs` (Swagger UI) and `/redoc` (ReDoc) remain, all reading the live
+  `/openapi.json` generated from registered routes (`build_openapi`).
+
+**Evidence:** `python -m shop --port 8112` → `GET /` returns 200 `text/html`
+(564 B) embedding `Scalar.createApiReference`; `GET /scalar` and `GET
+/openapi.json` (title "JustAPIApp", 20 shop paths) verified. `cargo fmt`,
+`cargo clippy -D warnings` clean; `demo_shop/test_app.py` 29/29,
+`test_lookup.py` 19/19.
+
+---
+
+## ADR-072 — 2026-07-18 — Fixed `body_schema=` validation (ADR-069 root cause) + auto-slug
+
+**Context:** ADR-069 documented two framework behaviors as "work around in the
+app, file as bugs". The first — `body_schema=` delivering the validated payload
+as raw `bytes` / failing to instantiate the Schema — was actually a **crash**,
+not a silent bytes delivery: `validate_body` in `_native_helper.py` called the
+Schema class directly (`CategoryIn(body_dict)`), raising
+`TypeError: CategoryIn() takes no arguments` on every POST. The app papered over
+it with a manual `validate()` helper, but the framework still logged the spurious
+error on every write request. The user hit `{"detail":"missing required field:
+slug"}` noise and a `TypeError` traceback on `POST /categories`.
+
+**Root cause #2 (latent):** `justapi.Schema.__init_subclass__` read raw
+`cls.__annotations__`. With `from __future__ import annotations` (used by
+`shop/schemas.py`), annotations are *stringized*, so every field resolved to
+`str` — numeric fields (`price: float`, `stock: int`) generated `"type":
+"string"` in the JSON Schema. Once real validation was switched on, every
+numeric body was rejected (`"12.5 is not of type string"`).
+
+**Decision (framework fixes in `crates/justapi-py`):**
+- `_native_helper.validate_body` now detects a `justapi.Schema` subclass (via
+  `_schema_json`) and validates through the Rust `validate_value` engine — the
+  same path as the native fast route — returning clean error strings (e.g.
+  `"name_pt" is a required property`). No more `TypeError` noise.
+- `justapi.Schema.__init_subclass__` resolves annotations with
+  `typing.get_type_hints(cls)` so PEP-563 stringized annotations and forward
+  refs map to real types; numeric fields now generate correct JSON Schema types.
+
+**App fix (`demo_shop/shop`):** `CategoryIn.slug` is now `Optional[str]` and
+`create_category` auto-generates a slug via `slugify(name_pt)` when absent, so
+`POST /categories` only requires `name_pt`. The 409 message reports the actual
+computed slug.
+
+**Evidence:** `POST /categories` with only `name_pt` → 200 (slug auto-created);
+duplicate → 409 `category slug '…' already exists`; missing `name_pt` → 422
+`"name_pt" is a required property` (no `TypeError`). `POST /products` with
+`price:12.5, stock:10, category_id:1` → 200 (numerics validated correctly).
+`cargo fmt`, `cargo clippy -D warnings` clean; `demo_shop/test_app.py` 29/29,
+`test_lookup.py` 19/19.
