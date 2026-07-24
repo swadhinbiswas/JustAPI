@@ -3,7 +3,9 @@ import sys
 from justapi import JustAPIApp, Database
 
 PORT = sys.argv[1] if len(sys.argv) > 1 else "8099"
-PGURL = sys.argv[2] if len(sys.argv) > 2 else "postgres://avnadmin:<SECRET_PASSWORD>@dexmorgan-examhallorhell-5f8c.d.aivencloud.com:11100/defaultdb?sslmode=require"
+# Pass via CLI arg or JUSTAPI_PG_URL env var — never commit live credentials
+import os
+PGURL = sys.argv[2] if len(sys.argv) > 2 else os.environ.get("JUSTAPI_PG_URL", "")
 
 INIT = (
     "DROP TABLE IF EXISTS justapi_bench_items;"

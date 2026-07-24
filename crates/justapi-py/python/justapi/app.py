@@ -3,6 +3,7 @@ import functools
 import json
 import re
 import typing
+import warnings
 from urllib.parse import quote
 from ._justapi import _JustAPIApp, TokenStreamResponse, ValidatedStreamResponse, Database
 from .exceptions import WebSocketException
@@ -314,6 +315,8 @@ class JustAPIApp:
         """
         name = kw.get("name")
         if name is not None:
+            if name in self._named_routes and not name.startswith("builtin_"):
+                warnings.warn(f"Named route collision: '{name}' overwritten")
             self._named_routes[name] = path
         self.routes.append({
             "method": method,
@@ -322,8 +325,8 @@ class JustAPIApp:
             "body_schema": body_schema,
             "schema": schema,
             "experimental": experimental,
-            "dependencies": [],
-            "middlewares": [],
+            "dependencies": kw.get("dependencies") or [],
+            "middlewares": kw.get("middlewares") or [],
             "tags": kw.get("tags") or [],
             "summary": kw.get("summary"),
             "description": kw.get("description"),
@@ -800,8 +803,8 @@ class JustAPIApp:
         return responses_json, extra_json
 
     def _route_kw(self, tags=None, summary=None, description=None, deprecated=None,
-                  status_code=None, responses=None, operation_id=None, openapi_extra=None,
-                  include_in_schema=True, name=None):
+                   status_code=None, responses=None, operation_id=None, openapi_extra=None,
+                   include_in_schema=True, name=None):
         responses_json, extra_json = self._meta(responses, openapi_extra)
         return dict(
             tags=tags,
@@ -826,16 +829,16 @@ class JustAPIApp:
             def _crud_noop(request):
                 raise AssertionError("crud routes must not invoke the Python handler")
             self._app.get(path, _crud_noop, query_schema=query_schema, **kw)
-            self._record("GET", path, _crud_noop, query_schema=query_schema, **kw)
+            self._record("GET", path, _crud_noop, query_schema=query_schema, dependencies=dependencies, middlewares=middlewares, **kw)
             return _crud_noop
         if handler is None:
             def decorator(func):
                 self._app.get(path, self._wrap_handler(func, route_dependencies=dependencies, route_middlewares=middlewares), query_schema=query_schema, **kw)
-                self._record("GET", path, func, query_schema=query_schema, **kw)
+                self._record("GET", path, func, query_schema=query_schema, dependencies=dependencies, middlewares=middlewares, **kw)
                 return func
             return decorator
         self._app.get(path, self._wrap_handler(handler, route_dependencies=dependencies, route_middlewares=middlewares), query_schema=query_schema, **kw)
-        self._record("GET", path, handler, query_schema=query_schema, **kw)
+        self._record("GET", path, handler, query_schema=query_schema, dependencies=dependencies, middlewares=middlewares, **kw)
         return handler
 
     def post(self, path: str, handler=None, body_schema=None, schema=None, query_schema=None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None, tags: typing.List[str] = None, summary: str = None, description: str = None, deprecated: bool = False, status_code: int = None, responses: dict = None, operation_id: str = None, openapi_extra: dict = None, name: str = None, include_in_schema: bool = True, native: bool = False, crud_table: str = None, crud_columns: typing.List[str] = None):
@@ -850,20 +853,20 @@ class JustAPIApp:
             def _crud_noop(request):
                 raise AssertionError("crud routes must not invoke the Python handler")
             self._app.post(path, _crud_noop, body_schema, schema, query_schema=query_schema, **kw)
-            self._record("POST", path, _crud_noop, body_schema=body_schema, schema=schema, query_schema=query_schema, **kw)
+            self._record("POST", path, _crud_noop, body_schema=body_schema, schema=schema, query_schema=query_schema, dependencies=dependencies, middlewares=middlewares, **kw)
             return _crud_noop
         if handler is None:
             def decorator(func):
                 batch_size, batch_window_ms = self._resolve_batch_config(func)
                 wrapped = self._wrap_batch_handler(func, native=native) if batch_size else self._wrap_handler(func, route_dependencies=dependencies, route_middlewares=middlewares, native=native)
                 self._app.post(path, wrapped, body_schema, schema, query_schema=query_schema, batch_size=batch_size, batch_window_ms=batch_window_ms, **kw)
-                self._record("POST", path, func, body_schema=body_schema, schema=schema, query_schema=query_schema, **kw)
+                self._record("POST", path, func, body_schema=body_schema, schema=schema, query_schema=query_schema, dependencies=dependencies, middlewares=middlewares, **kw)
                 return func
             return decorator
         batch_size, batch_window_ms = self._resolve_batch_config(handler)
         wrapped = self._wrap_batch_handler(handler, native=native) if batch_size else self._wrap_handler(handler, route_dependencies=dependencies, route_middlewares=middlewares, native=native)
         self._app.post(path, wrapped, body_schema, schema, query_schema=query_schema, batch_size=batch_size, batch_window_ms=batch_window_ms, **kw)
-        self._record("POST", path, handler, body_schema=body_schema, schema=schema, query_schema=query_schema, **kw)
+        self._record("POST", path, handler, body_schema=body_schema, schema=schema, query_schema=query_schema, dependencies=dependencies, middlewares=middlewares, **kw)
         return handler
 
     def put(self, path: str, handler=None, body_schema=None, schema=None, query_schema=None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None, tags: typing.List[str] = None, summary: str = None, description: str = None, deprecated: bool = False, status_code: int = None, responses: dict = None, operation_id: str = None, openapi_extra: dict = None, name: str = None, include_in_schema: bool = True, native: bool = False, crud_table: str = None, crud_columns: typing.List[str] = None):
@@ -876,41 +879,42 @@ class JustAPIApp:
             def _crud_noop(request):
                 raise AssertionError("crud routes must not invoke the Python handler")
             self._app.put(path, _crud_noop, body_schema, schema, query_schema=query_schema, **kw)
-            self._record("PUT", path, _crud_noop, body_schema=body_schema, schema=schema, query_schema=query_schema, **kw)
+            self._record("PUT", path, _crud_noop, body_schema=body_schema, schema=schema, query_schema=query_schema, dependencies=dependencies, middlewares=middlewares, **kw)
             return _crud_noop
         if handler is None:
             def decorator(func):
                 batch_size, batch_window_ms = self._resolve_batch_config(func)
                 wrapped = self._wrap_batch_handler(func, native=native) if batch_size else self._wrap_handler(func, route_dependencies=dependencies, route_middlewares=middlewares, native=native)
                 self._app.put(path, wrapped, body_schema, schema, query_schema=query_schema, batch_size=batch_size, batch_window_ms=batch_window_ms, **kw)
-                self._record("PUT", path, func, body_schema=body_schema, schema=schema, query_schema=query_schema, **kw)
+                self._record("PUT", path, func, body_schema=body_schema, schema=schema, query_schema=query_schema, dependencies=dependencies, middlewares=middlewares, **kw)
                 return func
             return decorator
         batch_size, batch_window_ms = self._resolve_batch_config(handler)
         wrapped = self._wrap_batch_handler(handler, native=native) if batch_size else self._wrap_handler(handler, route_dependencies=dependencies, route_middlewares=middlewares, native=native)
         self._app.put(path, wrapped, body_schema, schema, query_schema=query_schema, batch_size=batch_size, batch_window_ms=batch_window_ms, **kw)
-        self._record("PUT", path, handler, body_schema=body_schema, schema=schema, query_schema=query_schema, **kw)
+        self._record("PUT", path, handler, body_schema=body_schema, schema=schema, query_schema=query_schema, dependencies=dependencies, middlewares=middlewares, **kw)
         return handler
 
     def delete(self, path: str, handler=None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None, tags: typing.List[str] = None, summary: str = None, description: str = None, deprecated: bool = False, status_code: int = None, responses: dict = None, operation_id: str = None, openapi_extra: dict = None, name: str = None, include_in_schema: bool = True, query_schema=None, native: bool = False, crud_table: str = None, crud_columns: typing.List[str] = None):
         if name is not None: self._named_routes[name] = path
         kw = self._route_kw(tags, summary, description, deprecated, status_code, responses, operation_id, openapi_extra, include_in_schema, name=name)
+        kw["native"] = native
         kw["crud_table"] = crud_table
         kw["crud_columns"] = crud_columns
         if handler is None and crud_table is not None:
             def _crud_noop(request):
                 raise AssertionError("crud routes must not invoke the Python handler")
-            self._app.delete(path, _crud_noop, query_schema=query_schema, native=native, **kw)
-            self._record("DELETE", path, _crud_noop, query_schema=query_schema, native=native, **kw)
+            self._app.delete(path, _crud_noop, query_schema=query_schema, **kw)
+            self._record("DELETE", path, _crud_noop, query_schema=query_schema, dependencies=dependencies, middlewares=middlewares, **kw)
             return _crud_noop
         if handler is None:
             def decorator(func):
-                self._app.delete(path, self._wrap_handler(func, route_dependencies=dependencies, route_middlewares=middlewares), query_schema=query_schema, native=native, **kw)
-                self._record("DELETE", path, func, query_schema=query_schema, native=native, **kw)
+                self._app.delete(path, self._wrap_handler(func, route_dependencies=dependencies, route_middlewares=middlewares), query_schema=query_schema, **kw)
+                self._record("DELETE", path, func, query_schema=query_schema, dependencies=dependencies, middlewares=middlewares, **kw)
                 return func
             return decorator
-        self._app.delete(path, self._wrap_handler(handler, route_dependencies=dependencies, route_middlewares=middlewares), query_schema=query_schema, native=native, **kw)
-        self._record("DELETE", path, handler, query_schema=query_schema, native=native, **kw)
+        self._app.delete(path, self._wrap_handler(handler, route_dependencies=dependencies, route_middlewares=middlewares), query_schema=query_schema, **kw)
+        self._record("DELETE", path, handler, query_schema=query_schema, dependencies=dependencies, middlewares=middlewares, **kw)
         return handler
 
     def patch(self, path: str, handler=None, body_schema=None, schema=None, query_schema=None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None, tags: typing.List[str] = None, summary: str = None, description: str = None, deprecated: bool = False, status_code: int = None, responses: dict = None, operation_id: str = None, openapi_extra: dict = None, name: str = None, include_in_schema: bool = True, native: bool = False, crud_table: str = None, crud_columns: typing.List[str] = None):
@@ -923,20 +927,20 @@ class JustAPIApp:
             def _crud_noop(request):
                 raise AssertionError("crud routes must not invoke the Python handler")
             self._app.patch(path, _crud_noop, body_schema, schema, query_schema=query_schema, **kw)
-            self._record("PATCH", path, _crud_noop, body_schema=body_schema, schema=schema, query_schema=query_schema, **kw)
+            self._record("PATCH", path, _crud_noop, body_schema=body_schema, schema=schema, query_schema=query_schema, dependencies=dependencies, middlewares=middlewares, **kw)
             return _crud_noop
         if handler is None:
             def decorator(func):
                 batch_size, batch_window_ms = self._resolve_batch_config(func)
                 wrapped = self._wrap_batch_handler(func, native=native) if batch_size else self._wrap_handler(func, route_dependencies=dependencies, route_middlewares=middlewares, native=native)
                 self._app.patch(path, wrapped, body_schema, schema, query_schema=query_schema, batch_size=batch_size, batch_window_ms=batch_window_ms, **kw)
-                self._record("PATCH", path, func, body_schema=body_schema, schema=schema, query_schema=query_schema, **kw)
+                self._record("PATCH", path, func, body_schema=body_schema, schema=schema, query_schema=query_schema, dependencies=dependencies, middlewares=middlewares, **kw)
                 return func
             return decorator
         batch_size, batch_window_ms = self._resolve_batch_config(handler)
         wrapped = self._wrap_batch_handler(handler, native=native) if batch_size else self._wrap_handler(handler, route_dependencies=dependencies, route_middlewares=middlewares, native=native)
         self._app.patch(path, wrapped, body_schema, schema, query_schema=query_schema, batch_size=batch_size, batch_window_ms=batch_window_ms, **kw)
-        self._record("PATCH", path, handler, body_schema=body_schema, schema=schema, query_schema=query_schema, **kw)
+        self._record("PATCH", path, handler, body_schema=body_schema, schema=schema, query_schema=query_schema, dependencies=dependencies, middlewares=middlewares, **kw)
         return handler
 
     def query(self, path: str, handler=None, body_schema=None, schema=None, query_schema=None, experimental: bool = True, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None, tags: typing.List[str] = None, summary: str = None, description: str = None, deprecated: bool = False, status_code: int = None, responses: dict = None, operation_id: str = None, openapi_extra: dict = None, name: str = None, include_in_schema: bool = True, native: bool = False):
@@ -951,49 +955,52 @@ class JustAPIApp:
         if handler is None:
             def decorator(func):
                 self._app.query(path, self._wrap_handler(func, route_dependencies=dependencies, route_middlewares=middlewares, native=native), body_schema, schema, query_schema=query_schema, experimental=experimental, **kw)
-                self._record("QUERY", path, func, body_schema=body_schema, schema=schema, query_schema=query_schema, experimental=experimental, **kw)
+                self._record("QUERY", path, func, body_schema=body_schema, schema=schema, query_schema=query_schema, experimental=experimental, dependencies=dependencies, middlewares=middlewares, **kw)
                 return func
             return decorator
         self._app.query(path, self._wrap_handler(handler, route_dependencies=dependencies, route_middlewares=middlewares, native=native), body_schema, schema, query_schema=query_schema, experimental=experimental, **kw)
-        self._record("QUERY", path, handler, body_schema=body_schema, schema=schema, query_schema=query_schema, experimental=experimental, **kw)
+        self._record("QUERY", path, handler, body_schema=body_schema, schema=schema, query_schema=query_schema, experimental=experimental, dependencies=dependencies, middlewares=middlewares, **kw)
         return handler
 
     def head(self, path: str, handler=None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None, tags: typing.List[str] = None, summary: str = None, description: str = None, deprecated: bool = False, status_code: int = None, responses: dict = None, operation_id: str = None, openapi_extra: dict = None, name: str = None, include_in_schema: bool = True, query_schema=None, native: bool = False):
         if name is not None: self._named_routes[name] = path
         kw = self._route_kw(tags, summary, description, deprecated, status_code, responses, operation_id, openapi_extra, include_in_schema, name=name)
+        kw["native"] = native
         if handler is None:
             def decorator(func):
-                self._app.head(path, self._wrap_handler(func, route_dependencies=dependencies, route_middlewares=middlewares), query_schema=query_schema, native=native, **kw)
-                self._record("HEAD", path, func, query_schema=query_schema, native=native, **kw)
+                self._app.head(path, self._wrap_handler(func, route_dependencies=dependencies, route_middlewares=middlewares), query_schema=query_schema, **kw)
+                self._record("HEAD", path, func, query_schema=query_schema, dependencies=dependencies, middlewares=middlewares, **kw)
                 return func
             return decorator
-        self._app.head(path, self._wrap_handler(handler, route_dependencies=dependencies, route_middlewares=middlewares), query_schema=query_schema, native=native, **kw)
-        self._record("HEAD", path, handler, query_schema=query_schema, native=native, **kw)
+        self._app.head(path, self._wrap_handler(handler, route_dependencies=dependencies, route_middlewares=middlewares), query_schema=query_schema, **kw)
+        self._record("HEAD", path, handler, query_schema=query_schema, dependencies=dependencies, middlewares=middlewares, **kw)
         return handler
 
     def options(self, path: str, handler=None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None, tags: typing.List[str] = None, summary: str = None, description: str = None, deprecated: bool = False, status_code: int = None, responses: dict = None, operation_id: str = None, openapi_extra: dict = None, name: str = None, include_in_schema: bool = True, query_schema=None, native: bool = False):
         if name is not None: self._named_routes[name] = path
         kw = self._route_kw(tags, summary, description, deprecated, status_code, responses, operation_id, openapi_extra, include_in_schema, name=name)
+        kw["native"] = native
         if handler is None:
             def decorator(func):
-                self._app.options(path, self._wrap_handler(func, route_dependencies=dependencies, route_middlewares=middlewares), query_schema=query_schema, native=native, **kw)
-                self._record("OPTIONS", path, func, query_schema=query_schema, native=native, **kw)
+                self._app.options(path, self._wrap_handler(func, route_dependencies=dependencies, route_middlewares=middlewares), query_schema=query_schema, **kw)
+                self._record("OPTIONS", path, func, query_schema=query_schema, dependencies=dependencies, middlewares=middlewares, **kw)
                 return func
             return decorator
-        self._app.options(path, self._wrap_handler(handler, route_dependencies=dependencies, route_middlewares=middlewares), query_schema=query_schema, native=native, **kw)
-        self._record("OPTIONS", path, handler, query_schema=query_schema, native=native, **kw)
+        self._app.options(path, self._wrap_handler(handler, route_dependencies=dependencies, route_middlewares=middlewares), query_schema=query_schema, **kw)
+        self._record("OPTIONS", path, handler, query_schema=query_schema, dependencies=dependencies, middlewares=middlewares, **kw)
         return handler
 
     def trace(self, path: str, handler=None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None, tags: typing.List[str] = None, summary: str = None, description: str = None, deprecated: bool = False, status_code: int = None, responses: dict = None, operation_id: str = None, openapi_extra: dict = None, name: str = None, include_in_schema: bool = True, query_schema=None, native: bool = False):
         kw = self._route_kw(tags, summary, description, deprecated, status_code, responses, operation_id, openapi_extra, include_in_schema, name=name)
+        kw["native"] = native
         if handler is None:
             def decorator(func):
-                self._app.trace(path, self._wrap_handler(func, route_dependencies=dependencies, route_middlewares=middlewares), query_schema=query_schema, native=native, **kw)
-                self._record("TRACE", path, func, query_schema=query_schema, native=native, **kw)
+                self._app.trace(path, self._wrap_handler(func, route_dependencies=dependencies, route_middlewares=middlewares), query_schema=query_schema, **kw)
+                self._record("TRACE", path, func, query_schema=query_schema, dependencies=dependencies, middlewares=middlewares, **kw)
                 return func
             return decorator
-        self._app.trace(path, self._wrap_handler(handler, route_dependencies=dependencies, route_middlewares=middlewares), query_schema=query_schema, native=native, **kw)
-        self._record("TRACE", path, handler, query_schema=query_schema, native=native, **kw)
+        self._app.trace(path, self._wrap_handler(handler, route_dependencies=dependencies, route_middlewares=middlewares), query_schema=query_schema, **kw)
+        self._record("TRACE", path, handler, query_schema=query_schema, dependencies=dependencies, middlewares=middlewares, **kw)
         return handler
 
     def frontend(self, path: str, directory: str, html: bool = True, check_dir: bool = True):
@@ -1111,10 +1118,8 @@ class JustAPIApp:
         """
         try:
             self._app.connect_database()
-        except Exception:
-            # Not configured, or connection failed — let handlers surface errors
-            # via the normal pool path; here just return whatever is resolved.
-            pass
+        except Exception as e:
+            warnings.warn(f"Database connection failed: {e}")
         return self._app.db_pool()
         
     def enable_gateway(self, config_path: str):
@@ -1300,15 +1305,45 @@ class JustAPIApp:
             return func
         return decorator
 
-    def include_router(self, router, prefix: str = "", tags: typing.List[str] = None):
+    def include_router(
+        self,
+        router,
+        prefix: str = "",
+        tags: typing.List[str] = None,
+        dependencies: typing.List[Depends] = None,
+        responses: dict = None,
+        deprecated: bool = None,
+        include_in_schema: bool = None,
+    ):
+        """Include routes from an APIRouter.
+
+        Mirrors FastAPI's ``app.include_router()`` exactly.
+        Merge order (FastAPI semantics)::
+
+            include deps + router deps + route deps
+            include tags + router tags + route tags
+
+        Args:
+            router: The APIRouter to include.
+            prefix: URL prefix prepended to every route (in addition to the router's own prefix).
+            tags: Tags prepended to every route's OpenAPI tags.
+            dependencies: Dependencies prepended to every route (include-level).
+            responses: Additional OpenAPI responses for every route.
+            deprecated: Force-deprecate all routes in this include.
+            include_in_schema: Override schema visibility for all routes.
+        """
+        include_deps = dependencies or []
+        include_responses = responses or {}
+
         for route in router.routes:
             path = prefix + route["path"]
-            # Combine dependencies: App -> Router -> Route
-            combined_deps = router.dependencies + route["dependencies"]
+            # Merge order: include-level -> router-level -> route-level (FastAPI parity).
+            combined_deps = include_deps + router.dependencies + route["dependencies"]
             combined_mws = router.middlewares + route.get("middlewares", [])
-            # Include-level tags, then router-level tags, then the route's
-            # own tags (FastAPI merge order).
             route_tags = (tags or []) + (router.tags or []) + (route.get("tags") or [])
+            route_responses = {**include_responses, **(route.get("responses") or {})}
+            route_deprecated = deprecated if deprecated is not None else route.get("deprecated", False)
+            route_include = include_in_schema if include_in_schema is not None else route.get("include_in_schema", True)
 
             kw = dict(
                 dependencies=combined_deps,
@@ -1316,12 +1351,12 @@ class JustAPIApp:
                 tags=route_tags or None,
                 summary=route.get("summary"),
                 description=route.get("description"),
-                deprecated=route.get("deprecated", False),
+                deprecated=route_deprecated,
                 status_code=route.get("status_code"),
-                responses=route.get("responses"),
+                responses=route_responses or None,
                 operation_id=route.get("operation_id"),
                 openapi_extra=route.get("openapi_extra"),
-                include_in_schema=route.get("include_in_schema", True),
+                include_in_schema=route_include,
                 name=route.get("name"),
             )
 
@@ -1345,8 +1380,6 @@ class JustAPIApp:
                 self.trace(path, route["handler"], **kw)
             elif route["method"] == "FRONTEND":
                 self.frontend(path, route["directory"], html=route.get("html", True), check_dir=route.get("check_dir", True))
-            elif route["method"] == "TRACE":
-                self.trace(path, route["handler"], **kw)
             elif route["method"] == "SSE":
                 self._app.get(path, self._wrap_sse_handler(route["handler"]))
             elif route["method"] == "WS":
@@ -1612,8 +1645,10 @@ class APIRouter:
         # Route-level tags override the router default; include-level merging
         # happens in JustAPIApp.include_router.
         if name is not None:
+            if name in self._named_routes and not name.startswith("builtin_"):
+                warnings.warn(f"Named route collision: '{name}' overwritten")
             self._named_routes[name] = full_path
-        route_tags = tags if tags is not None else (self.tags or [])
+        route_tags = tags if tags is not None else []
         route_responses = responses if responses is not None else self.responses
         route_deprecated = deprecated if deprecated else self.deprecated
         route_include = include_in_schema if include_in_schema is not None else self.include_in_schema
@@ -1768,16 +1803,37 @@ class APIRouter:
             return func
         return decorator
 
-    def include_router(self, router, prefix: str = "", tags: typing.List[str] = None):
+    def include_router(
+        self,
+        router,
+        prefix: str = "",
+        tags: typing.List[str] = None,
+        dependencies: typing.List[Depends] = None,
+        responses: dict = None,
+        deprecated: bool = None,
+    ):
+        """Include routes from another APIRouter (sub-router support / FastAPI parity).
+
+        Merge order (FastAPI semantics)::
+
+            parent router deps + include deps + sub router deps + route deps
+            include tags + parent tags + sub tags + route tags
+        """
+        for name, path in router._named_routes.items():
+            if name in self._named_routes and not name.startswith("builtin_"):
+                warnings.warn(f"Named route collision: '{name}' overwritten by include_router")
         self._named_routes.update(router._named_routes)
         for route in router.routes:
             new_route = route.copy()
-            # route["path"] already has router.prefix; prepend our prefix + include prefix.
             new_route["path"] = self.prefix + prefix + route["path"]
-            new_route["dependencies"] = router.dependencies + route["dependencies"]
-            new_route["middlewares"] = router.middlewares + route.get("middlewares", [])
-            # Include-level tags are prepended to the route's existing tags.
-            new_route["tags"] = (tags or []) + route.get("tags", [])
+            new_route["dependencies"] = (dependencies or []) + self.dependencies + router.dependencies + route["dependencies"]
+            new_route["middlewares"] = self.middlewares + router.middlewares + route.get("middlewares", [])
+            new_route["tags"] = (tags or []) + (self.tags or []) + (router.tags or []) + route.get("tags", [])
+            route_responses = {**(responses or {}), **(route.get("responses") or {})}
+            if route_responses:
+                new_route["responses"] = route_responses
+            if deprecated is not None:
+                new_route["deprecated"] = deprecated
             self.routes.append(new_route)
 
     def url_for(self, name, **path_params):

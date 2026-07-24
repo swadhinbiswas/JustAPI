@@ -59,8 +59,8 @@ impl StaticDir {
         if relative.is_empty() {
             return None;
         }
-        // Block directory traversal
-        if relative.contains("..") {
+        // Block directory traversal: check both literal and percent-encoded `..`
+        if relative.contains("..") || relative.contains("%2e") || relative.contains("%2E") {
             return None;
         }
         let path = self.root.join(relative);

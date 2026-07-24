@@ -6,10 +6,8 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "crates", "justapi-py"))
 from justapi import JustAPIApp, Database  # noqa: E402
 
-PG_URL = (
-    "postgres://avnadmin:<SECRET_PASSWORD>"
-    "@dexmorgan-examhallorhell-5f8c.d.aivencloud.com:11100/defaultdb?sslmode=require"
-)
+# Set JUSTAPI_PG_URL env var for DB benchmarks — never commit live credentials
+PG_URL = os.environ.get("JUSTAPI_PG_URL", "")
 
 import threading
 
