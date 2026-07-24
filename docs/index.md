@@ -31,9 +31,17 @@ JustAPI obliterates traditional frameworks under load. Measured on an Intel Core
 
 *(Note: JustAPI achieves these numbers in a single process without multi-worker fan-out.)*
 
+## Master Developer Handbook
+
+For a comprehensive end-to-end tutorial, architecture deep-dive, database guides, and production deployment handbook:
+
+👉 **[Read the JustAPI Developer Handbook (HANDBOOK.md)](HANDBOOK.md)**
+
 ## Where to go next?
 
+- **[Developer Handbook](HANDBOOK.md):** Complete end-to-end tutorial & master reference.
 - **[Getting Started](getting_started.md):** Build your first JustAPI application in minutes.
 - **[Migrating from FastAPI](migrating_from_fastapi.md):** See how easy it is to switch your existing FastAPI project to JustAPI.
-- **[API Reference](api_reference.md):** Detailed information about all the classes and functions available.
-- **[Plugins](plugins.md):** Learn how to extend JustAPI using Python or Rust.
+- **[API Reference](api_reference.md):** Detailed documentation of classes, functions, and kwargs.
+- **[Plugins](plugins.md):** Learn how to extend JustAPI using Python or Rust WASM plugins.
+
