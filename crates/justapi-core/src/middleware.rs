@@ -417,6 +417,7 @@ pub struct JwtAuth {
     decoding_key: jsonwebtoken::DecodingKey,
     route_rules: Vec<(String, JwtRequirement)>,
     default_requirement: JwtRequirement,
+    warned_aud_iss: std::sync::atomic::AtomicBool,
 }
 
 impl std::fmt::Debug for JwtAuth {
@@ -435,6 +436,7 @@ impl JwtAuth {
             decoding_key: jsonwebtoken::DecodingKey::from_secret(secret),
             route_rules: Vec::new(),
             default_requirement: JwtRequirement::Required,
+            warned_aud_iss: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -451,6 +453,7 @@ impl JwtAuth {
             decoding_key,
             route_rules: Vec::new(),
             default_requirement: JwtRequirement::Required,
+            warned_aud_iss: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -464,6 +467,7 @@ impl JwtAuth {
             decoding_key,
             route_rules: Vec::new(),
             default_requirement: JwtRequirement::Required,
+            warned_aud_iss: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -480,6 +484,7 @@ impl JwtAuth {
             decoding_key,
             route_rules: Vec::new(),
             default_requirement: JwtRequirement::Required,
+            warned_aud_iss: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -493,6 +498,7 @@ impl JwtAuth {
             decoding_key,
             route_rules: Vec::new(),
             default_requirement: JwtRequirement::Required,
+            warned_aud_iss: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -590,6 +596,18 @@ fn check_claims(
 #[async_trait]
 impl<B: Send + 'static> Middleware<B> for JwtAuth {
     async fn handle(&self, req: Request<B>, next: Next<'_, B>) -> Result<Response<ResponseBody>> {
+        // One-time warning if aud/iss validation is not configured.
+        if self.validation.aud.is_none()
+            && self.validation.iss.is_none()
+            && !self.warned_aud_iss.swap(true, std::sync::atomic::Ordering::Relaxed)
+        {
+            tracing::warn!(
+                "JwtAuth: neither `aud` nor `iss` claim is validated. \
+                 Call `.with_audience([...])` and/or `.with_issuer(...)` \
+                 to prevent token replay across different services."
+            );
+        }
+
         let path = req.uri().path().to_string();
         let requirement = self.requirement_for_path(&path);
 
@@ -1103,6 +1121,7 @@ impl OAuth2Password {
             decoding_key: self.decoding_key.clone(),
             route_rules: Vec::new(),
             default_requirement: JwtRequirement::Required,
+            warned_aud_iss: std::sync::atomic::AtomicBool::new(false),
         }
     }
 }
