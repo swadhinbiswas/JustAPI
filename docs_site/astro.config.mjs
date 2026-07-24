@@ -101,6 +101,15 @@ export default defineConfig({
           ],
         },
         {
+          label: 'Inference',
+          items: [
+            { label: 'Overview', link: 'inference/overview/' },
+            { label: 'LLM Serving API', link: 'inference/llm-serving-api/' },
+            { label: 'GPU & CUDA Setup', link: 'inference/gpu-cuda-setup/' },
+            { label: 'Scheduling & Batching', link: 'inference/scheduling-batching/' },
+          ],
+        },
+        {
           label: 'Deployment',
           items: [
             { label: 'Docker & Docker Compose', link: 'deployment/docker/' },
