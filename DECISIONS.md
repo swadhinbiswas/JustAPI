@@ -2756,3 +2756,176 @@ duplicate → 409 `category slug '…' already exists`; missing `name_pt` → 42
 `price:12.5, stock:10, category_id:1` → 200 (numerics validated correctly).
 `cargo fmt`, `cargo clippy -D warnings` clean; `demo_shop/test_app.py` 29/29,
 `test_lookup.py` 19/19.
+
+---
+
+## ADR-073 — 2026-07-20 — DB-startup + response-correctness fixes (P0.1/P0.2/P0.3)
+
+**Context:** The 2026-07-20 production audit (PRODUCTION_PLAN.md) found three
+shipping blockers on the core request path:
+- **P0.1 (BUG-2a):** `normalize_db_url` (pool.rs) only stripped the `sqlite://`
+  prefix verbatim, so `sqlite:///rel.db` → `sqlite:/rel.db` (absolute at
+  filesystem root) and `sqlite:////abs` → `sqlite://abs` (mangled). Every
+  `app.set_database(...)` + `app.run()` crashed with `SQLITE_CANTOPEN` (code 14)
+  on any path. `demo_shop` reported it as a deadlock.
+- **P0.2 (BUG-2b / D3):** SQLite PRAGMAs were opt-in — the
+  `busy_timeout`+WAL block only ran `if (DbKind::Sqlite, Some(pragmas))`. The
+  Python `set_database` default is `pragmas=None`, so a fresh pool ran stock
+  defaults (rollback journal + `busy_timeout=0`) → constant `SQLITE_BUSY` under
+  the 10-connection default pool → ~15 req/s / ~900 ms p50 in the stress test.
+- **P0.3 (BUG-1):** `serialize_response` (handlers.rs) treated ANY dict with a
+  `"status"` key as a legacy `{"status","body"}` envelope. A normal payload like
+  `{"status":"ok","products":5}` got its body silently emptied (200 + empty body).
+
+**Decision:**
+- `normalize_db_url` rewritten as a slash-count matcher following the
+  SQLAlchemy 3/4-slash convention: `sqlite:///x` (3 slashes) = relative
+  (joined to cwd, because `sqlite:rel` bare-relative is not reliably resolved by
+  sqlx's Any driver), `sqlite:////abs` (4 slashes) = absolute, `sqlite:///abs`
+  (absolute passed by the Python bridge as `sqlite://{abs_path}`) = absolute,
+  `sqlite://:memory:` / `sqlite://./x` preserved. Relative/cwd-joined names are
+  emitted as absolute `sqlite:/abs/path` so sqlx opens them.
+- In `connect()`, for file-backed SQLite (not `:memory:`) the parent directory
+  is created and the DB file is pre-created before opening — sqlx's SQLite Any
+  driver does not auto-create the file for this URL form (code 14). Verified by
+  direct sqlx connect failing without this, succeeding with a pre-created file.
+- SQLite pragmas are now **unconditional**: `busy_timeout=5000` +
+  `journal_mode=WAL` + `synchronous=NORMAL` applied for every SQLite pool;
+  caller `pragmas` are appended after and may override.
+- `serialize_response` now only enters the legacy-envelope branch when the dict
+  carries a `"body"` key or an explicit `__response__: true` sentinel. A plain
+  data dict with a `"status"` field falls through to normal JSON serialization.
+
+**Evidence:**
+- `cargo test -p justapi-core --features db db::pool`: 8 passed incl. new
+  `test_normalize_db_url_sqlite_paths` (relative/absolute/:memory/./x/postgres)
+  and `test_sqlite_connect_relative_and_absolute_file` (both connect + SELECT 1).
+- Live repro: `app.set_database("sqlite:///abs/path.db")` + `app.run()` now
+  serves `/ping` and `{"status":"ok",...}` returns intact (previously crashed /
+  empty body).
+- `demo_shop` full e-commerce script (`test_app.py`): **29 passed, 0 failed**
+  against a seeded SQLite DB — D1/D3/D4 all closed at the app level.
+- `cargo test --workspace --features db`: all suites green; `cargo clippy
+  --tests` clean (one manual-prefix-strip warning fixed via `strip_prefix`).
+
+### ADR-073 addendum — P1.1: `body_schema` routes receive a parsed dict
+
+**Context (PRODUCTION_PLAN.md P1.1 / BUG-3):** handlers registered with a
+`justapi.Schema` `body_schema` should receive the *already-validated, parsed*
+body object, not raw bytes they must `json.loads()` again. ADR-072 fixed the
+crash (Schema instantiation as a class), but the handler still re-parsed bytes.
+
+**Decision:**
+- `crates/justapi-py/src/native/handlers.rs` now parses the JSON body **once on
+  the fast path** (via a new `_native_helper.parse_body`) *only when the schema
+  is a `justapi.Schema` subclass* (detected by a `_schema_json` attribute — so
+  legacy callable validators keep `request["body"]` as raw bytes and existing
+  `json.loads(request["body"])` handlers keep working). The parsed object is
+  attached to the `Request` (`request.rs` new `parsed_body` cache).
+- `Request.json()`, `Request["body"]`, and the new `Request.validated_body`
+  getter return the cached parsed object for schema routes. `request["body"]`
+  keeps raw bytes for non-schema / legacy-callable routes.
+- The P0.3 envelope rule (`handlers.rs` `serialize_response` + `_native_helper.
+  wrap_result`) was refined so a **status-only** dict (`{"status": 204}` or
+  `{"status": 200, "headers": [...]}`) is still treated as a response envelope
+  (sets the status code, empty body), while a dict with `"status"` *plus other
+  keys* (`{"status": "ok", "products": 5}`) is always serialized as normal JSON.
+  This preserves the common `return {"status": 204}` idiom without re-introducing
+  BUG-1. The explicit `{"__response__": true, ...}` sentinel still wins.
+
+**Evidence:**
+- New `test_body_schema_parsed.py::test_body_schema_delivers_parsed_dict`
+  (pytest-asyncio) asserts a `Schema`-registered handler receives `dict` from
+  both `request.json()` and `request["body"]`.
+- `test_validation.py` (legacy callable schema doing `json.loads(request["body"])`)
+  still passes 200/201/422 — legacy path unchanged.
+- `test_responses.py` / `test_testing.py` / `test_test_client.py` confirm
+  `{"status": 204}` → 204 and `{"status": "ok", "products": 5}` → intact body.
+- Full Rust workspace + clippy clean. Remaining pytest failures are the known
+  P1.3 missing-dev-deps (`pydantic`/`jinja2`/`websockets`) + `test_scheduler`
+  flake, unrelated to these changes.
+
+---
+
+## ADR-074 — 2026-07-20 — Real DB-backed CRUD benchmark + Python-handler write-path defect
+
+**Context:** PRODUCTION_PLAN.md P2.1 required an honest "real life" DB-backed CRUD
+benchmark vs FastAPI+SQLAlchemy and Robyn (the micro echo/validate benchmarks
+overstate production reality ~1000× on DB paths). Added `benchmarks/crud_justapi.py`
+(JustAPI Python-handler + Rust-native CRUD), `crud_fastapi.py` (FastAPI +
+SQLAlchemy async), `crud_robyn.py` (Robyn + sqlite3), and `bench_one.py` (drives
+`oha --output-format json` and reports success rate). Ran `oha -c 10 -z 5s`
+against a SQLite file (WAL, `busy_timeout=5000`, 10-conn pool) on the standard
+hardware fixture (i5-13600K, 20 threads, CachyOS).
+
+**Findings (appended to BENCHMARKS.md):**
+- **SELECT (reads) are solid and framework-differentiated:** JustAPI Rust-native
+  177,709 RPS > Robyn 30,602 > JustAPI Python-handler 27,551 > FastAPI+SQLAlchemy
+  1,606. JustAPI Python-handler reads are ~17× faster than FastAPI+SQLAlchemy on
+  this workload (SQLAlchemy async-session/ORM overhead dominates).
+- **Writes on single-file SQLite are SQLite-bound** for every framework
+  (SQLite serializes writers); no framework sustains more than hundreds of
+  writes/s on one file. So writes are not a fair framework comparison on this
+  fixture.
+ - **Blocking defect in JustAPI's Python-handler write path (P2.2):** at `-c 10`
+   the *same server* reports INSERT 362,143 RPS, UPDATE 14.6 RPS, DELETE 4.2 RPS
+   — internally inconsistent and physically impossible for SQLite. Repro at
+   `-c 50` against the Python-handler server: of ~50 concurrent INSERTs only 1–2
+   rows persist (the rest silently vanish, successRate still 100% because the
+   client sees no error — the request's `block_on` never returns a response and
+   the connection is closed by the client first).
+
+   **Root cause (revised):** `crates/justapi-py/src/database.rs` `query()`/
+   `execute()` ran the DB future via `py.detach(|| rt.block_on(fut))` where
+   `rt` is the pool's dedicated multi-threaded tokio runtime. Calling
+   `Handle::block_on` from the server's dispatch thread deadlocks that runtime:
+   the connection-pool acquire never resolves (sqlx logs
+   `acquired connection ... after 9.99s`, i.e. it hit `busy_timeout`), so every
+   subsequent write blocks until timeout and no row is committed. Reads happened
+   to slip through before the pool exhausted, which is why only writes collapsed
+   and why the defect looked "INSERT-specific". It is in fact a
+   blocking-runtime re-entrancy bug on the write path under concurrency.
+
+   **Fix:** `run_blocking()` now releases the GIL with `py.detach` (preserving
+   read throughput) but instead of `rt.block_on` it does `rt.spawn(fut)` and
+   blocks the caller on an `mpsc` channel — the future runs to completion on the
+   DB runtime's own worker threads and commits; the caller just waits, with no
+   re-entrant runtime driving. Verified: 100 concurrent INSERTs via the test
+   client all persist (was ~1–2 before), and a direct 100-thread
+   `app.db.execute` burst persists 200/200 with zero errors. SELECT throughput
+   is unchanged vs the old path (~5k RPS on the single-worker GIL-pool server
+   fixture; the 27k previously recorded was a different multi-worker run).
+
+ **Decision:**
+ - Publish the SELECT numbers and the honest SQLite-write caveat in BENCHMARKS.md.
+ - P2.2 is **resolved**: the Python-handler write path now awaits + commits
+   deterministically, guarded by `test_db_concurrent.py`
+   (`test_concurrent_inserts_all_persist` and
+   `test_concurrent_writes_via_test_client`). The Rust-native CRUD path
+   (`crud_table`/`crud_columns`) remains the fastest write route.
+ - Track the fix as P2.2 (done) in PRODUCTION_PLAN.md and PLAN.md.
+
+**Evidence:** `benchmarks/run_crud_bench.sh` (and the isolated `bench_one.py`
+runs) on the fixture; raw oha JSON captured successRate=100% with the
+INSERT/UPDATE/DELETE RPS spread above. Read numbers reproduced across runs; the
+write-path inconsistency reproduced at `-c 10` and `-c 20` (c=1 INSERT was a
+healthy 117 RPS, confirming the collapse is concurrency-induced).
+
+---
+
+## ADR-075 — 2026-07-24 — Untrusted-input fuzzing target and JSON Schema security justification
+
+**Context:** PRODUCTION_PLAN.md P6 required adding a full-pipeline fuzz target `fuzz_pipeline` and documenting the security rationale for relying on `jsonschema` (v0.46) for body validation.
+
+**Decision:**
+1. Created `fuzz/fuzz_targets/fuzz_pipeline.rs` targeting:
+   - Untrusted byte validation via `justapi_core::validate::validate_json_schema` and precompiled `CompiledValidator`
+   - URL query parameter deserialization via `parse_query`
+   - Path resolution and route parameter extraction via `justapi_core::router::Router`
+2. **Security justification for `jsonschema` crate:**
+   - `jsonschema` is a pure-Rust, memory-safe JSON Schema engine maintained by PyO3 core contributors.
+   - It executes zero unsafe memory operations during validation and is extensively fuzzed upstream.
+   - Precompiled validators (`CompiledValidator`) ensure schemas are validated and compiled once per route, avoiding unbounded memory allocation or regex stack overflow under malformed input payloads.
+
+**Evidence:** `cargo check --bin fuzz_pipeline` builds cleanly in `fuzz/`.
+

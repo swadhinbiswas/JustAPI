@@ -1637,3 +1637,107 @@ handlers, independent of the DB path.
 | DB-backed concurrency>1 | 314 req/s @ -c 64, no deadlock (D4 fixed) |
 | `wal=True` connect | 0.00 s (D2 fixed) |
 
+
+---
+
+## Real DB-backed CRUD benchmark — JustAPI vs FastAPI vs Robyn (recorded 2026-07-20)
+
+This is the "real life" benchmark the production audit (PRODUCTION_PLAN.md P2.1)
+called for: single-row INSERT / SELECT / UPDATE / DELETE through a SQLite file
+(WAL, `busy_timeout=5000`, 10-connection pool) under `oha -c 10 -z 5s`, on the
+same hardware fixture (i5-13600K, 20 threads, CachyOS). Each framework runs a
+plain Python handler that issues one SQL statement per request:
+
+- **JustAPI (Python-handler):** handler calls `app.db.query(sql, params)`.
+- **JustAPI (Rust-native):** `app.post("/items", crud_table=..., crud_columns=...)`
+  — op inferred from HTTP method, served entirely in Rust (the fast path).
+- **FastAPI + SQLAlchemy (async):** `async def` route → `AsyncSession.execute`.
+- **Robyn (sync handler):** `sqlite3` connection, one statement per request.
+
+Harness: `benchmarks/crud_justapi.py`, `crud_fastapi.py`, `crud_robyn.py`,
+`bench_one.py` (runs `oha --output-format json` and reports success rate).
+
+### SELECT (the reliable, framework-differentiated metric)
+
+Single-row `SELECT * FROM items WHERE id = 1`, no write contention:
+
+| Framework | SELECT RPS | success% |
+|---|---:|---:|
+| JustAPI — Rust-native | 177,709 | 100 |
+| Robyn (sync, sqlite3) | 30,602 | 100 |
+| JustAPI — Python-handler | 27,551 | 100 |
+| FastAPI + SQLAlchemy (async) | 1,606 | 100 |
+
+**Read takeaway:** JustAPI's Rust-native CRUD path is the fastest by a wide
+margin (the query and row mapping happen in Rust, no Python round-trip). The
+JustAPI Python-handler read path (27k RPS) is ~17× faster than FastAPI+SQLAlchemy
+(1.6k RPS) on this workload — SQLAlchemy's async session + ORM overhead dominates.
+
+### WRITE path — FIXED (P2.2, resolved 2026-07-20)
+
+The write workload originally exposed a **serious, reproducible bug in JustAPI's
+Python-handler DB write path**. Under `-c 10` the per-operation RPS was
+non-physical and internally inconsistent on the *same server*:
+
+| Op | JustAPI Python-handler RPS | JustAPI Rust-native RPS | FastAPI RPS | Robyn RPS |
+|---|---:|---:|---:|---:|
+| INSERT | 362,143 (artifact) | 356,802 (artifact) | 8,954 | 64,557 |
+| UPDATE | 14.6 | 32,774 | 1,792 | 28,522 |
+| DELETE | 4.2 | 42,971 | 1,850 | 29,817 |
+
+(The Rust-native INSERT/Robyn/FastAPI numbers are also inflated by oha reporting
+connection-reset/error bursts as throughput; **single-file SQLite serializes all
+writes**, so *no* framework can sustain >~hundreds of writes/s on one file — the
+true write ceiling here is SQLite, not the framework.)
+
+**Root cause (corrected):** the collapse was *not* INSERT-specific. The real
+defect was a blocking-runtime re-entrancy in `database.rs`: writes ran via
+`py.detach(|| rt.block_on(fut))` where `rt` is the pool's dedicated runtime.
+`Handle::block_on` from the server's dispatch thread deadlocks that runtime, so
+the connection-pool acquire never resolves (sqlx logged
+`acquired connection ... after 9.99s` → `busy_timeout`), the pool exhausts, and
+every subsequent write blocks until timeout with **no row committed**. At `-c 50`
+only 1–2 of ~50 INSERTs persisted (the rest silently dropped, successRate still
+100% because the client saw no error). Reads happened to slip through before the
+pool exhausted, which is why only writes visibly collapsed.
+
+**Fix:** `run_blocking()` now releases the GIL with `py.detach` (preserving read
+throughput) but runs the future via `rt.spawn(fut)` and waits on an `mpsc`
+channel instead of `rt.block_on` — the future completes on the DB runtime's own
+worker threads and commits; no re-entrant runtime driving. Verified:
+- 100 concurrent INSERTs through the async test client → **100/100 rows persisted**
+  (was ~1–2).
+- 100-thread direct `app.db.execute` burst → **200/200 rows** (100 concurrent +
+  100 sequential) with zero errors.
+- Single-connection INSERT throughput: ~127 RPS, all durable (vs the old
+  non-durable 362k artifact).
+
+**Honest conclusion (updated):**
+- SELECT (reads) are solid: JustAPI (both modes) and Robyn clearly beat
+  FastAPI+SQLAlchemy; JustAPI Rust-native is the fastest overall.
+- Writes on single-file SQLite are SQLite-bound for ALL frameworks (hundreds
+  RPS ceiling). JustAPI's Python-handler write path is now **durable under
+  concurrency** (matches the Rust-native path's commit semantics). The
+  Rust-native CRUD path (`crud_table`/`crud_columns`) remains the fastest write
+  route and is recommended for write-heavy workloads.
+- A fair write-throughput comparison requires Postgres or WAL + higher
+  concurrency tuning; the single-file SQLite fixture is intentionally
+  write-serialized and is reported here only to surface the framework defect.
+
+**Status:** P2.2 resolved. Do NOT revert to `py.detach`+`rt.block_on` on the
+write path — it silently drops writes under concurrency.
+
+
+---
+
+## Run 2026-07-24 — JustAPI Core Serialization & Microbenchmarks Ledger
+
+*Hardware: 13th Gen Intel Core i5-13600K (6P+8E cores), DDR5 RAM*
+
+| Benchmark | Result | Latency / ops | Details |
+|---|---|---|---|
+| `justapi_core::serialize` (serde_json) | **12,476,460 ops/sec** | 80 ns/op | 1,000,000 iterations in 80.15 ms |
+| `justapi-cli` create project | **Instant (< 12 ms)** | N/A | Multi-DB (SQLite, Postgres, MySQL, DuckDB, ClickHouse, Mongo, Redis) & Multi-API (REST, GraphQL, gRPC, JSON-RPC) |
+
+**Verification Status:** All workspace crates clean. `cargo test --workspace` (269 passed), `cargo clippy` clean, `pytest` (149 passed).
+

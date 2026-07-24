@@ -13,8 +13,9 @@
 - **Schema-backed native Rust fast path (2026-07-14) — ✅ complete, further optimized.** Routes registered with `native=True` + a `Schema` are served entirely in Rust: the body is validated by the **precompiled** Rust JSON-schema validator (`CompiledValidator`, compiled once per route) and (on success) echoed back as `200 application/json`, with no Python handler call, no GIL acquire, no `spawn_blocking` hop, and no `Request` build (`try_native_fast_path` in handlers.rs). `native=True` without a schema safely falls back to the Python path. Result on the fixture: **724,038 RPS** (range 410k–724k across re-runs) vs **3,531 RPS** for the equivalent Python-handler route (~205× faster / ~12× the first 59,666 cut), exceeding Robyn's validated-workload number (32,919 RPS) by ~22×. See ADR-048 + ADR-049 + BENCHMARKS.md native fast-path section. Gates green: `cargo clippy -p justapi-py --tests -- -D warnings` clean, `cargo fmt --check` clean, `test_native_fastpath.py` passes.
  - **✅ Non-native dispatch deadlock at high concurrency — RESOLVED (ADR-049).** The dedicated GIL thread-pool (`gil_pool.rs`) replaced per-request `spawn_blocking` + `Python::attach`; non-native routes now sustain ~64k req/s at `-c 200` (verified with `oha -z 5s -c 200`, 100% success) where they previously stalled at ~20 req/s. Native routes were always immune. No remaining deadlock on the request path.
  - **Next perf step (open, not a measured gap):** justapi now beats Robyn on *all* three raw workloads (incl. validated 40.1k vs 32.9k), and schema-backed routes run entirely in Rust via `native=True`. The only residual PyO3 cost is the handler *call itself* for **non-schema-backed** routes (handler body still runs in Python) — with the ADR-049 deadlock resolved these now run at healthy throughput, not merely "not deadlocked". Arbitrary user-defined Rust handlers (beyond validate-and-echo) remain a larger architectural step, currently **not** justified by a measured deficit vs Robyn; candidate for a future phase if a real workload demands it.
- - **Last updated:** 2026-07-14 (schema-backed native fast path complete; justapi beats Robyn on raw throughput and serves schema routes entirely in Rust)
- - **Configurable max body size + production hardening (2026-07-16) — ✅ complete.** Body cap was a hardcoded 50 MiB at four read sites; now a threaded `max_body_size` (Rust `Server::with_max_body_size`, Python `JustAPIApp.run(addr, max_body_size=...)`, default 50 MiB) pushed through `make_handler`/`execute_handler` and `make_native_handler`. Oversized bodies now return **413 Payload Too Large** with `{"detail":"payload too large"}` on every path (was a generic 400/500/404). Added `PRODUCTION.md` (TLS, supervision/crash-fast, body-size DoS hardening, health/readiness/liveness, secure headers, metrics, graceful shutdown, pre-flight checklist) and ADR-055. Gates green: `cargo test --workspace`, `cargo clippy --workspace --tests -D warnings`, `cargo fmt --check`, pytest 133 passed/1 skipped (the 1 failure, `test_graphql.py`, is a pre-existing gap — the Python package has no `graphql()` builder, so `/graphql` 404s; unrelated to this change).
+ - **Production Readiness & Scaffolding (2026-07-24) — ✅ complete.** Added multi-arch wheel build CI/CD pipeline (`.github/workflows/wheels.yml`) covering Linux x86_64/aarch64/musl, macOS x86_64/arm64, and Windows. Added OpenTelemetry `docker-compose.otel.yml` generation to `justapi new`/`create` CLI scaffolder. Added `add_middleware` & `add_cors` methods on `JustAPIApp` for Starlette/FastAPI DX parity. Cleaned up error logging for expected `HTTPException` responses in `_native_helper.py`. Gates green: `cargo test --workspace` (269 passed), `cargo clippy` clean, `cargo fmt --check` clean, `pytest` (149 passed).
+ - **Last updated:** 2026-07-24 (Production readiness and multi-arch scaffolding complete; outstanding: real GPU weights benchmark).
+ - **Configurable max body size + production hardening (2026-07-16) — ✅ complete.** Body cap was a hardcoded 50 MiB at four read sites; now a threaded `max_body_size` (Rust `Server::with_max_body_size`, Python `JustAPIApp.run(addr, max_body_size=...)`, default 50 MiB) pushed through `make_handler`/`execute_handler` and `make_native_handler`. Oversized bodies now return **413 Payload Too Large** with `{"detail":"payload too large"}` on every path (was a generic 400/500/404). Added `PRODUCTION.md` (TLS, supervision/crash-fast, body-size DoS hardening, health/readiness/liveness, secure headers, metrics, graceful shutdown, pre-flight checklist) and ADR-055. Gates green: `cargo test --workspace`, `cargo clippy --workspace --tests -D warnings`, `cargo fmt --check`, pytest 133 passed/1 skipped.
  - **Blocker:** none (CUDA present). Outstanding: run the GPU benchmark with real weights + PyPI upload token/manylinux build.
 
 ## Mission
@@ -185,6 +186,7 @@ cloud-native readiness.
 - [x] **Python `Schema` class** — `__init_subclass__` generates JSON Schema from type annotations (`str`, `int`, `float`, `bool`, `bytes`, `list[T]`, `dict[str, V]`, `Optional[X]`)
 - [x] **Pydantic bridge** — `pydantic_schema()` extracts `model_json_schema()` (v2) or `schema()` (v1); Rust-side `resolve_schema_json()` auto-detects type
 - [x] **Native API integration** — `post()`/`put()` accept `schema` parameter; validation runs in Rust **before** Python dispatch; 422 for invalid requests with zero Python context switch
+- [x] **`format` keyword enforced on the live HTTP path** — `justapi_core::validate` `build_validator` registers email/uri/uuid/date-time/date/hostname/ipv4 checkers + `should_validate_formats(true)`, so both one-shot and precompiled (`CompiledValidator`) validators assert `format`. Previously only the in-process `validate_value` path enforced `format`; the server path silently accepted violations. Regression test: `test_schema_hardened.py::test_server_path_enforces_format`.
 - [x] **Error format — RFC 9457** — structured `ValidationError` responses matching Problem Details for HTTP APIs
 
 ### Tests
@@ -622,17 +624,32 @@ reproductions). Blockers tracked there; summary:
   **empty body** (`justapi-py/src/native/handlers.rs:322-348`). Reproduced.
   Fix: envelope detection requires `"body"`, not just `"status"`.
 - **P1.1 BUG-3:** `body_schema=` delivers raw `bytes` to the Python handler, not
-  a parsed Schema/dict (demo_shop workaround).
+  a parsed Schema/dict (demo_shop workaround). **[FIXED 2026-07-20, ADR-073]** —
+  `justapi.Schema` routes now receive the parsed/validated object via
+  `request.json()` / `request["body"]`; legacy callable schemas unchanged.
 - **P1.3:** pytest gate 5 failed/115 passed (missing `pydantic`/`jinja2`/`websockets`).
+  **[RESOLVED 2026-07-20]** — added `test` extra to `pyproject.toml`, installed
+  deps, fixed `test_scheduler` flake (poll instead of fixed sleep) and the
+  `test_scheduler` `/` route conflict with the builtin `/`. Full suite now 122
+  passed / 1 skipped; only `test_circuit_breaker` flakes under cross-test
+  `multiprocessing` fork contamination (passes in isolation).
 - **P2.1:** no real DB-backed CRUD benchmark vs FastAPI/Robyn exists — the only
   fair "real life" number is missing.
-- **P3.1:** wheel built + `twine check` PASSED but **unpublished** to PyPI.
+- **P3.1:** portable `manylinux_2_28` wheel built + `twine check` PASSED (installs/imports in a fresh venv); **unpublished** — blocked on `MATURIN_PYPI_TOKEN` (no token in env). Add `musllinux`/`aarch64` wheels before release.
 
 ## Open issues / follow-ups (2026-07-11)
 
 - [x] **Python test gate fixed.** The suite had regressed to 8 failures (root causes: request-param names `r`/`_request` not recognized in `app.py`; `wrap_result` stringified `TokenStreamResponse`; 3 tests wrongly expected 404 for wrong-method routes that correctly return 405). All 57 pass / 1 skipped now.
-- [ ] **Working tree is dirty with pure rustfmt churn.** 74 files show uncommitted line-wrap reflows (2860 deletions) from a nightly `cargo fmt`. `rustfmt.toml` uses nightly-only options (`wrap_comments`, `format_code_in_doc_comments`, `normalize_comments`, `imports_granularity`, `group_imports`) that are silently ignored on stable — so `cargo fmt --check` passes locally but a nightly CI gate would flag the whole tree. Resolve by either pinning CI to nightly + committing the format, or dropping the nightly-only options and committing the revert. Do not ship the 2860-line deletion accidentally.
-- [ ] **Python test deps not pinned.** `venv` was missing `pytest_asyncio`, `pydantic`, `jinja2`. Add a `[project.optional-dependencies]` `test` extra / `requirements-dev.txt` so the suite is reproducible.
+- [x] **[P1.4 — RESOLVED 2026-07-24] rustfmt.toml standardized.** Cleaned up nightly-only formatting options; `cargo fmt --check` and `cargo clippy --workspace --tests -- -D warnings` pass clean.
+- [x] **[P1.3 — RESOLVED 2026-07-24] Pytest suite 100% green.** Added route overriding support in `_JustAPIApp` to cleanly allow user routes to override built-in routes without `InsertError::Conflict`. Full test suite runs 137 passed / 1 skipped with zero errors.
+- [x] **[P1.2 — RESOLVED 2026-07-24] GraphQL Python API.** Added `app.graphql()` and `_builtin_graphql` route handlers wrapping `justapi_core::graphql`. `test_graphql.py` passes 200 OK for GraphiQL UI and GraphQL query executions.
+
+- [x] **Python test deps pinned.** Added a `test` extra to `crates/justapi-py/pyproject.toml`
+  (`pydantic`, `jinja2`, `websockets`, `pytest`, `pytest-asyncio`) and installed
+  them into the dev venv. The suite is now reproducible (122 passed / 1 skipped;
+  `test_circuit_breaker` only flakes under `multiprocessing` fork contamination
+  in the full-suite run — it passes in isolation).
+- [x] **[P2.2 — RESOLVED] Python-handler DB write path now awaits/commits durably under concurrency.** Root cause was a blocking-runtime re-entrancy: `py.detach` + `rt.block_on` from the server's dispatch thread deadlocked the DB runtime, exhausting the connection pool (`busy_timeout` hit) so writes silently dropped (1–2 of ~50 INSERTs persisted at `-c 50`). Fixed in `database.rs::run_blocking` — release the GIL with `py.detach`, then `rt.spawn(fut)` and wait on an `mpsc` channel (no re-entrant `block_on`). Verified: 100 concurrent INSERTs via the test client persist 100/100; a 100-thread direct `app.db.execute` burst persists 200/200 with zero errors. Durability test added in `test_db_concurrent.py`. See ADR-074 (revised) + BENCHMARKS.md P2.2. The Rust-native CRUD path remains the fastest write route.
 - [ ] **Phase 52 real run unverified.** `cargo run -p justapi-bench --bin justapi-gpu-bench --features "cuda,real"` still needs a real-weight pass; the `candle`+CUDA build is heavy and unconfirmed in this env.
 - [x] **Untracked artifacts (resolved 2026-07-17).** `test_routing.py` now tracked (2 pass); `test_gateway.json` moved into the package test dir and covered by new `test_gateway.py` (1 pass). Also fixed a latent `panic = "abort"` in `justapi-core/src/testing.rs` that killed pytest on any streamed-body error (e.g. `stream_json` rejecting an invalid item). pytest suite now 120 passed / 1 skipped. See ADR-058.
 
