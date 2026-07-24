@@ -67,3 +67,36 @@ def test_response_end_to_end_via_testclient():
     resp2 = client.get("/go")
     assert resp2["status"] == 307
     assert resp2["headers"].get("location") == "/set"
+
+
+def test_status_key_in_body_not_dropped():
+    # BUG-1 (PRODUCTION_PLAN.md P0.3): a response dict that contains a
+    # top-level "status" field must NOT be misclassified as a legacy
+    # {"status", "body"} envelope. Its body must be returned intact.
+    app = JustAPIApp()
+
+    @app.get("/with_status")
+    def with_status(req):
+        return {"status": "ok", "products": 5}
+
+    client = JustAPITestClient(app)
+    resp = client.get("/with_status")
+    assert resp["status"] == 200
+    # orjson produces compact JSON (no spaces); the key point is the "status"
+    # field is preserved in the body, not dropped as a legacy envelope.
+    assert resp["body"] == b'{"status":"ok","products":5}'
+
+
+def test_explicit_envelope_still_works():
+    # A real envelope (with "body") is still passed through unchanged.
+    app = JustAPIApp()
+
+    @app.get("/env")
+    def env(req):
+        return {"__response__": True, "status": 201, "body": "created"}
+
+    client = JustAPITestClient(app)
+    resp = client.get("/env")
+    assert resp["status"] == 201
+    assert resp["body"] == b"created"
+

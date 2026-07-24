@@ -12,6 +12,21 @@ try:
 except Exception:  # pragma: no cover - orjson is optional
     _dumps = lambda obj: json.dumps(obj, default=str).encode("utf-8")
 
+# Import the Rust validator once, at module-load time. Importing it lazily
+# *inside* `validate_body` (via a relative `from ._justapi import ...`)
+# fails when that function is invoked from a GIL-pool worker thread
+# ("attempted relative import with no known parent package"), which silently
+# disables request-body validation on the live server path. Binding it
+# here — on the main thread, with the package context intact — avoids
+# that and keeps the Rust-native validator active under real concurrency.
+try:
+    from ._justapi import validate_value as _rust_validate_value
+except Exception:  # pragma: no cover - defensive
+    try:
+        from justapi._justapi import validate_value as _rust_validate_value
+    except Exception:
+        _rust_validate_value = None
+
 from justapi._justapi import validate_value
 
 _trace_id_var = contextvars.ContextVar("trace_id", default=None)
@@ -61,10 +76,26 @@ def wrap_result(result):
 
     if hasattr(result, "to_dict"):
         return result.to_dict()
-    if isinstance(result, dict) and ("body" in result or "status" in result):
-        if "body" in result and isinstance(result["body"], str):
-            result["body"] = result["body"].encode("utf-8")
-        return result
+    if isinstance(result, dict):
+        # Treat as a response envelope only when it carries a `body`, an explicit
+        # `__response__` sentinel, or is `status`-only (`{"status": 204}` /
+        # `{"status": 200, "headers": [...]}`). A data dict with a `"status"`
+        # field *plus other keys* (`{"status": "ok", "products": 5}`) must be
+        # serialized as normal JSON, otherwise its body is silently dropped
+        # (BUG-1, PRODUCTION_PLAN.md P0.3).
+        keys = set(result.keys())
+        is_envelope = (
+            "body" in result
+            or result.get("__response__") is True
+            or (
+                "status" in result
+                and keys <= {"status", "headers", "__response__"}
+            )
+        )
+        if is_envelope:
+            if "body" in result and isinstance(result["body"], str):
+                result["body"] = result["body"].encode("utf-8")
+            return result
 
     body = _dumps(result)
     if isinstance(body, str):
@@ -96,9 +127,11 @@ def call_handler(handler, request):
 
         return result
     except Exception as e:
-        print(f"ERROR in call_handler: {repr(e)}")
-        traceback.print_exc()
+        if type(e).__name__ not in ("HTTPException", "RequestValidationError"):
+            print(f"ERROR in call_handler: {repr(e)}")
+            traceback.print_exc()
         raise e
+
 
 
 def call_batch_handler(handler, requests):
@@ -124,6 +157,21 @@ def call_batch_handler(handler, requests):
         raise e
 
 
+def parse_body(body_bytes):
+    """Parse a request body's JSON into a Python object (dict/list/scalar).
+
+    Returns ``None`` for an empty body or invalid JSON. Used by the dispatch
+    layer to attach the already-validated/parsed body to ``Request`` so schema
+    routes receive the parsed object instead of re-parsing raw bytes.
+    """
+    if not body_bytes:
+        return None
+    try:
+        return json.loads(body_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+
+
 def validate_body(schema_fn, body_bytes):
     """Validate a request body against a route's body schema.
 
@@ -144,19 +192,11 @@ def validate_body(schema_fn, body_bytes):
 
     # Schema subclass: validate via its JSON Schema through the Rust engine.
     schema_json = getattr(schema_fn, "_schema_json", None)
-    if callable(schema_json):
+    if callable(schema_json) and _rust_validate_value is not None:
         try:
-            from ._justapi import validate_value
-        except Exception:
-            try:
-                from justapi._justapi import validate_value
-            except Exception:
-                validate_value = None
-        if validate_value is not None:
-            try:
-                return validate_value(schema_json(), json.dumps(body_data))
-            except Exception as e:  # pragma: no cover - defensive
-                return [f"schema validation error: {e}"]
+            return _rust_validate_value(schema_json(), json.dumps(body_data))
+        except Exception as e:  # pragma: no cover - defensive
+            return [f"schema validation error: {e}"]
 
     # Legacy callable schema.
     result = schema_fn(body_data)

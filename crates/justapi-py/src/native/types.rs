@@ -70,6 +70,7 @@ pub(crate) struct HelperFunctions {
     pub(crate) call_handler: Py<PyAny>,
     pub(crate) call_batch_handler: Py<PyAny>,
     pub(crate) validate_body: Py<PyAny>,
+    pub(crate) parse_body: Py<PyAny>,
     pub(crate) call_plugin_hook: Py<PyAny>,
     pub(crate) wrap_result: Py<PyAny>,
     pub(crate) pump_stream: Py<PyAny>,
@@ -96,6 +97,8 @@ pub(crate) fn get_helper(py: Python<'_>) -> &HelperFunctions {
             .unbind();
         let validate_body =
             helper.getattr("validate_body").expect("validate_body function should exist").unbind();
+        let parse_body =
+            helper.getattr("parse_body").expect("parse_body function should exist").unbind();
         let call_plugin_hook = helper
             .getattr("call_plugin_hook")
             .expect("call_plugin_hook function should exist")
@@ -121,6 +124,7 @@ pub(crate) fn get_helper(py: Python<'_>) -> &HelperFunctions {
             call_handler,
             call_batch_handler,
             validate_body,
+            parse_body,
             call_plugin_hook,
             wrap_result,
             pump_stream,

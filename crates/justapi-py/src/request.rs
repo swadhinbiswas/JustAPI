@@ -173,6 +173,10 @@ pub struct Request {
     db_url_raw: Option<String>,
     form_data: Option<Py<PyDict>>,
     path_params_cached: Option<Py<PyDict>>,
+    /// Parsed/validated body (a Python object) attached when `body_schema` was
+    /// validated on the fast path, so the handler receives the already-parsed
+    /// value instead of re-parsing raw bytes. `None` until set or first parsed.
+    parsed_body: Option<Py<PyAny>>,
 }
 
 impl Request {
@@ -205,7 +209,26 @@ impl Request {
             http_version,
             state,
         };
-        Self { conn, body_raw: body, db_url_raw: db_url, form_data, path_params_cached: None }
+        Self {
+            conn,
+            body_raw: body,
+            db_url_raw: db_url,
+            form_data,
+            path_params_cached: None,
+            parsed_body: None,
+        }
+    }
+
+    /// Attach a parsed/validated body object (called from the dispatch layer
+    /// after `body_schema` validation succeeds). Returns the cached value.
+    pub fn set_parsed_body(&mut self, py: Python<'_>, value: Bound<'_, PyAny>) {
+        self.parsed_body = Some(value.unbind());
+        let _ = py;
+    }
+
+    /// Borrow the cached parsed body if present, else `None`.
+    pub fn parsed_body(&self, py: Python<'_>) -> Option<Py<PyAny>> {
+        self.parsed_body.as_ref().map(|v| v.clone_ref(py))
     }
 }
 
@@ -353,6 +376,11 @@ impl Request {
 
     #[pyo3(signature = ())]
     fn json<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        // If a `body_schema`-validated body was already parsed on the fast path,
+        // return that cached object directly (no re-parse, same identity).
+        if let Some(cached) = self.parsed_body(py) {
+            return Ok(cached.into_bound(py));
+        }
         // Pure synchronous parse: returns the parsed value directly so it works in
         // both sync and async handlers without requiring a running event loop.
         let json_module = py.import("json")?;
@@ -360,6 +388,13 @@ impl Request {
         let loads = json_module.getattr("loads")?;
         let parsed = loads.call1((body_bytes,))?;
         Ok(parsed)
+    }
+
+    /// The body parsed and validated on the `body_schema` fast path. Returns
+    /// `None` when the route registered no schema or the body was not JSON.
+    #[getter]
+    fn validated_body<'py>(&self, py: Python<'py>) -> PyResult<Py<PyAny>> {
+        Ok(self.parsed_body(py).unwrap_or_else(|| py.None()))
     }
 
     #[pyo3(signature = ())]
@@ -455,7 +490,16 @@ impl Request {
             "headers" => self.headers(py),
             "query_params" => self.query_params(py),
             "cookies" => self.cookies(py),
-            "body" => Ok(PyBytes::new(py, &self.body_raw).into_any().unbind()),
+            "body" => {
+                // When a `body_schema` was validated on the fast path, return the
+                // parsed object instead of raw bytes. `request["body"]` semantics
+                // then match `request.json()` for schema-registered routes.
+                if let Some(cached) = self.parsed_body(py) {
+                    Ok(cached)
+                } else {
+                    Ok(PyBytes::new(py, &self.body_raw).into_any().unbind())
+                }
+            }
             "db_url" => match &self.db_url_raw {
                 Some(db) => Ok(PyString::new(py, db).into_any().unbind()),
                 None => Ok(py.None()),

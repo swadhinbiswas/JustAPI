@@ -95,6 +95,8 @@ pub struct JustAPIApp {
         std::collections::HashMap<(hyper::Method, String), justapi_core::openapi::RouteMeta>,
     /// Named routes for `url_for` resolution, keyed by name -> path template.
     pub named_routes: std::collections::HashMap<String, String>,
+    /// Map of `(method, path)` -> handler index, allowing user routes to override built-in routes cleanly.
+    pub route_indices: std::collections::HashMap<(hyper::Method, String), usize>,
     /// Static frontend mounts (served as low-priority routes with SPA fallback).
     pub frontend_mounts: Vec<justapi_core::static_files::StaticMount>,
     /// Native MCP tool registry (agent surface). Stored in Rust; invoked as
@@ -206,10 +208,145 @@ fn schema_validator_cache() -> &'static Mutex<HashMap<String, Validator>> {
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// A `format` keyword checker: maps a string to a pass/fail boolean.
+type FormatChecker = dyn Fn(&str) -> bool + Send + Sync;
+
+/// Register the built-in `format` validators (email, uuid, uri, date-time,
+/// ...) once. `jsonschema` 0.46 ships `format` as an opt-in keyword;
+/// with `default-features = false` no formats are asserted unless we
+/// register them, so we provide lightweight Rust-side checkers. They are
+/// intentionally permissive (reject obvious junk, not RFC-exhaustive) —
+/// enough for request validation without pulling a format-parsing dependency.
+fn format_validators() -> &'static HashMap<String, Arc<FormatChecker>> {
+    static FMTS: OnceLock<HashMap<String, Arc<FormatChecker>>> = OnceLock::new();
+    FMTS.get_or_init(|| {
+        let mut m: HashMap<String, Arc<FormatChecker>> = HashMap::new();
+        m.insert(
+            "email".into(),
+            Arc::new(|s: &str| {
+                if s.is_empty() || s.contains(char::is_whitespace) || !s.contains('@') {
+                    return false;
+                }
+                let (local, domain) = s.split_once('@').unwrap();
+                !local.is_empty()
+                    && !domain.is_empty()
+                    && domain.contains('.')
+                    && !domain.starts_with('.')
+                    && !domain.ends_with('.')
+            }),
+        );
+        m.insert(
+            "uri".into(),
+            Arc::new(|s: &str| match s.split_once("://") {
+                Some((scheme, rest)) => {
+                    !scheme.is_empty()
+                        && scheme
+                            .chars()
+                            .all(|c| c.is_alphanumeric() || c == '+' || c == '-' || c == '.')
+                        && !rest.is_empty()
+                }
+                None => false,
+            }),
+        );
+        m.insert(
+            "uuid".into(),
+            Arc::new(|s: &str| {
+                let s = s.trim_matches(|c| c == '{' || c == '}');
+                let parts: Vec<&str> = s.split('-').collect();
+                parts.len() == 5
+                    && parts[0].len() == 8
+                    && parts[1].len() == 4
+                    && parts[2].len() == 4
+                    && parts[3].len() == 4
+                    && parts[4].len() == 12
+                    && parts.iter().all(|p| p.chars().all(|c| c.is_ascii_hexdigit()))
+            }),
+        );
+        m.insert(
+            "date-time".into(),
+            Arc::new(|s: &str| {
+                let (date, time) = match s.split_once('T') {
+                    Some((d, t)) => (d, t),
+                    None => return false,
+                };
+                let ds: Vec<&str> = date.split('-').collect();
+                if ds.len() != 3
+                    || ds.iter().any(|p| p.is_empty() || !p.chars().all(|c| c.is_ascii_digit()))
+                {
+                    return false;
+                }
+                let time = time.trim_end_matches('Z').trim_end_matches(['+', '-']);
+                let time = time.split('.').next().unwrap_or(time);
+                let ts: Vec<&str> = time.split(':').collect();
+                ts.len() >= 2
+                    && ts.len() <= 3
+                    && ts.iter().all(|p| {
+                        p.len() <= 2 && !p.is_empty() && p.chars().all(|c| c.is_ascii_digit())
+                    })
+            }),
+        );
+        m.insert(
+            "date".into(),
+            Arc::new(|s: &str| {
+                let ds: Vec<&str> = s.split('-').collect();
+                ds.len() == 3
+                    && ds.iter().all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+            }),
+        );
+        m.insert(
+            "hostname".into(),
+            Arc::new(|s: &str| {
+                !s.is_empty()
+                    && !s.starts_with('-')
+                    && !s.ends_with('-')
+                    && !s.contains("..")
+                    && s.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '.')
+            }),
+        );
+        m.insert(
+            "ipv4".into(),
+            Arc::new(|s: &str| {
+                let parts: Vec<&str> = s.split('.').collect();
+                parts.len() == 4
+                    && parts.iter().all(|p| {
+                        p.len() <= 3
+                            && !p.is_empty()
+                            && p.chars().all(|c| c.is_ascii_digit())
+                            && p.parse::<u8>().is_ok()
+                    })
+            }),
+        );
+        m
+    })
+}
+
+/// Build (and cache) a validator for `schema_value`, registering the built-in
+/// `format` checkers so `format: "email"` etc. are actually asserted.
+fn build_validator(schema_json: &str, schema_value: &serde_json::Value) -> PyResult<Validator> {
+    {
+        let cache = schema_validator_cache().lock().unwrap();
+        if let Some(v) = cache.get(schema_json) {
+            return Ok(v.clone());
+        }
+    }
+    let mut opts = jsonschema::options();
+    for (name, checker) in format_validators() {
+        let checker = checker.clone();
+        opts = opts.with_format(name.clone(), move |s: &str| checker(s));
+    }
+    let v = opts
+        .should_validate_formats(true)
+        .build(schema_value)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("schema error: {e}")))?;
+    schema_validator_cache().lock().unwrap().insert(schema_json.to_string(), v.clone());
+    Ok(v)
+}
+
 /// Validate a single JSON value (`value_json`) against a JSON Schema
 /// (`schema_json`). Returns a list of human-readable error strings; an empty
 /// list means the value is valid. The compiled schema is cached per unique
-/// schema string.
+/// schema string. `format` keywords (email, uuid, uri, ...) are enforced
+/// via the built-in validators in `format_validators`.
 #[pyfunction]
 pub fn validate_value(schema_json: String, value_json: String) -> PyResult<Vec<String>> {
     let schema_value: serde_json::Value = serde_json::from_str(&schema_json)
@@ -217,18 +354,7 @@ pub fn validate_value(schema_json: String, value_json: String) -> PyResult<Vec<S
     let value: serde_json::Value = serde_json::from_str(&value_json)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("invalid JSON value: {e}")))?;
 
-    let validator = {
-        let mut cache = schema_validator_cache().lock().unwrap();
-        if let Some(v) = cache.get(&schema_json) {
-            v.clone()
-        } else {
-            let v = jsonschema::options().build(&schema_value).map_err(|e| {
-                pyo3::exceptions::PyValueError::new_err(format!("schema error: {e}"))
-            })?;
-            cache.insert(schema_json.clone(), v.clone());
-            v
-        }
-    };
+    let validator = build_validator(&schema_json, &schema_value)?;
 
     let mut errors = Vec::new();
     for err in validator.iter_errors(&value) {
@@ -337,7 +463,9 @@ impl JustAPIApp {
             health_checks: Vec::new(),
             route_meta: std::collections::HashMap::new(),
             named_routes: std::collections::HashMap::new(),
+            route_indices: std::collections::HashMap::new(),
             frontend_mounts: Vec::new(),
+
             tools: Vec::new(),
             sessions: Mutex::new(HashMap::new()),
         }
@@ -447,6 +575,36 @@ impl JustAPIApp {
         match &self.metrics {
             Some(m) => m.prometheus(),
             None => "# metrics not yet initialised\n".to_string(),
+        }
+    }
+
+    /// Expose GraphQL gateway endpoint handling for Python app built-in route.
+    #[pyo3(name = "graphql_handle")]
+    fn graphql_handle(&self, method: String, body: Option<Vec<u8>>) -> (u16, String, String) {
+        if method == "GET" {
+            let source = justapi_core::graphql::graphiql_html();
+            (200, "text/html; charset=utf-8".to_string(), source)
+        } else {
+            let body_bytes = body.unwrap_or_default();
+            let schema = justapi_core::graphql::create_schema();
+            let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+                Ok(rt) => rt,
+                Err(_) => {
+                    return (
+                        500,
+                        "application/json".to_string(),
+                        r#"{"errors":[{"message":"runtime error"}]}"#.to_string(),
+                    )
+                }
+            };
+            let res_str = rt.block_on(async {
+                justapi_core::graphql::execute_graphql_bytes(&schema, &body_bytes)
+                    .await
+                    .unwrap_or_else(|e| {
+                        format!(r#"{{"errors":[{{"message":{:?}}}]}}"#, e.to_string())
+                    })
+            });
+            (200, "application/json".to_string(), res_str)
         }
     }
 
@@ -657,14 +815,32 @@ impl JustAPIApp {
         crud_table: Option<String>,
         crud_columns: Option<Vec<String>>,
     ) -> PyResult<()> {
-        let id = self.handlers.len();
-        self.handlers.push(handler);
-        self.native.push(native.unwrap_or(false));
-        self.crud.push(make_crud_spec(crud_table, crud_columns)?);
-        self.schemas.push(None);
-        self.schema_jsons.push(None);
-        self.query_schema_jsons.push(resolve_schema_json(py, query_schema)?);
-        self.batch_configs.push(None);
+        let key = (Method::GET, path.to_string());
+        let is_native = native.unwrap_or(false);
+        let crud_spec = make_crud_spec(crud_table, crud_columns)?;
+        let query_json = resolve_schema_json(py, query_schema)?;
+
+        if let Some(&id) = self.route_indices.get(&key) {
+            self.handlers[id] = handler;
+            self.native[id] = is_native;
+            self.crud[id] = crud_spec;
+            self.schemas[id] = None;
+            self.schema_jsons[id] = None;
+            self.query_schema_jsons[id] = query_json;
+        } else {
+            let id = self.handlers.len();
+            self.handlers.push(handler);
+            self.native.push(is_native);
+            self.crud.push(crud_spec);
+            self.schemas.push(None);
+            self.schema_jsons.push(None);
+            self.query_schema_jsons.push(query_json);
+            self.batch_configs.push(None);
+            self.route_indices.insert(key, id);
+            self.router
+                .insert(Method::GET, path, id)
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        }
         self.store_meta(
             py,
             "GET".to_string(),
@@ -685,9 +861,7 @@ impl JustAPIApp {
         if let Some(ref n) = name {
             self.named_routes.insert(n.clone(), path.to_string());
         }
-        self.router
-            .insert(Method::GET, path, id)
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1150,19 +1324,54 @@ impl JustAPIApp {
     }
 
     /// Set the database configuration.
+    ///
+    /// Accepts either a connection-string shorthand or a `dict` of tuning
+    /// options (as produced by `Database.config_dict()`). The Python-side
+    /// wrapper converts a `Database` object into that dict *before* crossing the
+    /// FFI, because reading `Option`/`f64` fields off a `Database` instance from
+    /// Rust hits a pyo3 `from_py_object` reconstruction quirk (values come back
+    /// as defaults). A plain `dict` extracts reliably.
     #[pyo3(signature = (db))]
     fn set_database(&mut self, _py: Python<'_>, db: &Bound<'_, PyAny>) -> PyResult<()> {
-        if let Ok(db_obj) = db.extract::<Database>() {
-            self.database = Some(db_obj);
-            Ok(())
-        } else if let Ok(url) = db.extract::<String>() {
+        // A plain connection string is the common shorthand.
+        if let Ok(url) = db.extract::<String>() {
             self.database = Some(Database::new(url, 10));
-            Ok(())
-        } else {
-            Err(pyo3::exceptions::PyTypeError::new_err(
-                "database must be a Database object or a connection string",
-            ))
+            return Ok(());
         }
+        // Otherwise expect a `dict` of config options.
+        let cfg: Py<PyDict> = match db.extract() {
+            Ok(d) => d,
+            Err(_) => {
+                return Err(pyo3::exceptions::PyTypeError::new_err(
+                    "database must be a connection string or a config dict",
+                ))
+            }
+        };
+        let cfg = cfg.bind(_py).as_any();
+        let url: String = cfg.get_item("url")?.extract()?;
+        let max_connections: u32 = cfg.get_item("max_connections")?.extract()?;
+        let init_sql: Option<String> = cfg.get_item("init_sql")?.extract()?;
+        let pragmas: Option<Vec<String>> = cfg.get_item("pragmas")?.extract()?;
+        let acquire_timeout: Option<f64> = cfg.get_item("acquire_timeout")?.extract()?;
+        let request_acquire_timeout: f64 = cfg.get_item("request_acquire_timeout")?.extract()?;
+        let idle_timeout: Option<f64> = cfg.get_item("idle_timeout")?.extract()?;
+        let max_lifetime: Option<f64> = cfg.get_item("max_lifetime")?.extract()?;
+        let health_check_interval: Option<f64> =
+            cfg.get_item("health_check_interval")?.extract()?;
+        let isolation: Option<String> = cfg.get_item("isolation")?.extract()?;
+        self.database = Some(Database {
+            url,
+            max_connections,
+            init_sql,
+            pragmas,
+            acquire_timeout,
+            request_acquire_timeout,
+            idle_timeout,
+            max_lifetime,
+            health_check_interval,
+            isolation,
+        });
+        Ok(())
     }
 
     /// Get the database configuration, or None.
