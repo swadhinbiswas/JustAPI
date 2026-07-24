@@ -233,6 +233,11 @@ def adaptive_batch(max_size: int = 32, window_ms: int = 10):
         return func
     return wrapper
 
+class _AppState:
+    def __setattr__(self, name, value):
+        self.__dict__[name] = value
+
+
 class JustAPIApp:
     def __init__(
         self,
@@ -241,6 +246,14 @@ class JustAPIApp:
         description: str = None,
         openapi_tags: list = None,
         dependencies: typing.List[Depends] = None,
+        servers: list = None,
+        contact: dict = None,
+        license_info: dict = None,
+        terms_of_service: str = None,
+        openapi_url: str = "/openapi.json",
+        docs_url: str = "/docs",
+        redoc_url: str = "/redoc",
+        scalar_url: str = "/scalar",
     ):
         self._app = _JustAPIApp()
         self.title = title
@@ -248,10 +261,21 @@ class JustAPIApp:
         self.description = description
         self.openapi_tags = openapi_tags or []
         self.dependencies = dependencies or []
+        self.servers = servers
+        self.contact = contact
+        self.license_info = license_info
+        self.terms_of_service = terms_of_service
+        self.openapi_url = openapi_url
+        self.docs_url = docs_url
+        self.redoc_url = redoc_url
+        self.scalar_url = scalar_url
         self.exception_handlers = {}
         self.middlewares = []
         self._named_routes = {}
         self.routes = []
+        self._startup_handlers = []
+        self._shutdown_handlers = []
+        self.state = _AppState()
 
 
         # Built-in probe/metrics endpoints for the Python app.
@@ -1203,6 +1227,79 @@ class JustAPIApp:
             return func
         return decorator
 
+    def add_api_route(self, path: str, endpoint: typing.Callable, methods: typing.List[str] = None, **kwargs):
+        """Register a route non-decoratively (FastAPI/Starlette parity).
+
+        Usage::
+
+            def my_handler(request):
+                return {"ok": True}
+
+            app.add_api_route("/path", my_handler, methods=["GET", "POST"])
+        """
+        for method in (methods or ["GET"]):
+            m = method.upper()
+            getattr(self, m.lower())(path, endpoint, **kwargs)
+
+    def add_api_websocket_route(self, path: str, endpoint: typing.Callable):
+        """Register a WebSocket route non-decoratively (FastAPI/Starlette parity).
+
+        Usage::
+
+            async def my_ws(ws):
+                await ws.accept()
+                await ws.send_text("connected")
+
+            app.add_api_websocket_route("/ws", my_ws)
+        """
+        self.websocket(path, endpoint)
+
+    def mount(self, path: str, app_or_directory, name: str = None):
+        """Mount a sub-application or static directory at a path.
+
+        Mirrors FastAPI/Starlette ``app.mount()``.
+
+        Usage::
+
+            # Mount a static directory
+            app.mount("/static", "static", name="static")
+
+            # Mount an APIRouter as a sub-app
+            app.mount("/api/v1", users_router)
+        """
+        if isinstance(app_or_directory, str):
+            return self.frontend(path, app_or_directory)
+        if hasattr(app_or_directory, "routes"):
+            return self.include_router(app_or_directory, prefix=path)
+        raise ValueError(
+            "mount() expects a directory path (str) or an APIRouter "
+            f"instance, got {type(app_or_directory).__name__}"
+        )
+
+    def on_event(self, event_type: str):
+        """Register a startup/shutdown event handler (FastAPI parity).
+
+        Usage::
+
+            @app.on_event("startup")
+            def init_db():
+                ...
+
+            @app.on_event("shutdown")
+            def close_pool():
+                ...
+        """
+        if event_type not in ("startup", "shutdown"):
+            raise ValueError(f"event_type must be 'startup' or 'shutdown', got {event_type!r}")
+
+        def decorator(func):
+            if event_type == "startup":
+                self._startup_handlers.append(func)
+            else:
+                self._shutdown_handlers.append(func)
+            return func
+        return decorator
+
     def include_router(self, router, prefix: str = "", tags: typing.List[str] = None):
         for route in router.routes:
             path = prefix + route["path"]
@@ -1383,6 +1480,14 @@ class JustAPIApp:
         return self
 
     def run(self, addr: str, max_body_size: int = 50 * 1024 * 1024):
+        # Execute startup handlers (FastAPI on_event parity).
+        for handler in self._startup_handlers:
+            if inspect.iscoroutinefunction(handler):
+                import asyncio
+                asyncio.run(handler())
+            else:
+                handler()
+
         # Start the native Rust scheduler (if any jobs were registered) so cron
         # and interval jobs run for the lifetime of the server.
         from ._justapi import Scheduler
@@ -1391,10 +1496,18 @@ class JustAPIApp:
         try:
             self._app.run(addr, max_body_size)
         except KeyboardInterrupt:
-            # Ctrl-C: the Rust runtime already performs a graceful drain/shutdown
-            # on the signal; swallow the Python traceback so the user just sees
-            # the clean "shutting down" log lines instead of a stack trace.
             pass
+        finally:
+            # Execute shutdown handlers (FastAPI on_event parity).
+            for handler in self._shutdown_handlers:
+                try:
+                    if inspect.iscoroutinefunction(handler):
+                        import asyncio
+                        asyncio.run(handler())
+                    else:
+                        handler()
+                except Exception:
+                    pass
 
     def schedule(self, cron_expr, func, *args, **kwargs):
         """Register a cron job (native Rust scheduler).

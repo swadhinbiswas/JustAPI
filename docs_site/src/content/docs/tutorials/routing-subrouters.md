@@ -1,10 +1,10 @@
 ---
 title: Routing & Sub-routers
-description: Organize your API with modular routers and route groups in JustAPI — a FastAPI alternative with Rust-powered routing.
-keywords: routing, sub-routers, APIRouter, modular routes, JustAPI, FastAPI alternative, radix-trie
+description: Organize your API with modular routers, sub-routers, and programmatic route registration in JustAPI — a FastAPI alternative with Rust-powered routing.
+keywords: routing, sub-routers, APIRouter, include_router, modular routes, JustAPI, FastAPI alternative, add_api_route, url_for, named routes
 ---
 
-JustAPI's routing system uses a radix-trie (via `matchit`) for O(1) route matching. Routes are registered with decorators and can be organized across multiple files using `APIRouter`.
+JustAPI's routing system uses a radix-trie (via `matchit`) for O(1) route matching. Routes can be registered with decorators, programmatically, or organized across multiple files using `APIRouter`.
 
 ## HTTP Method Decorators
 
@@ -13,31 +13,30 @@ from justapi import JustAPIApp
 
 app = JustAPIApp()
 
-
 @app.get("/users")
 def list_users(request):
     return [{"id": 1, "name": "Alice"}]
 
-
 @app.post("/users")
 def create_user(request):
     return {"message": "User created"}
-
-
-@app.put("/users/{user_id}")
-def update_user(request, user_id: int):
-    return {"user_id": user_id, "updated": True}
-
-
-@app.patch("/users/{user_id}")
-def patch_user(request, user_id: int):
-    return {"user_id": user_id, "patched": True}
-
-
-@app.delete("/users/{user_id}")
-def delete_user(request, user_id: int):
-    return {"deleted": user_id}
 ```
+
+All standard HTTP methods are supported: `@app.get()`, `@app.post()`, `@app.put()`, `@app.patch()`, `@app.delete()`, `@app.head()`, `@app.options()`, `@app.trace()`, and `@app.websocket()`.
+
+## Programmatic Route Registration (Non-Decorator)
+
+Register routes without decorators using `add_api_route()`:
+
+```python
+def read_item(request, item_id: int):
+    return {"item_id": item_id, "name": "Item"}
+
+app.add_api_route("/items/{item_id}", read_item, methods=["GET"])
+app.add_api_websocket_route("/ws", my_ws_handler)
+```
+
+This is useful when importing handler functions from other modules or when routes need to be registered conditionally.
 
 ## Using `APIRouter` for Modular Routes
 
@@ -49,90 +48,110 @@ from justapi import APIRouter
 
 router = APIRouter(prefix="/products", tags=["Products"])
 
-
 @router.get("/")
 def list_products(request):
     return [{"id": 1, "name": "Rust Book"}]
 
-
 @router.get("/{product_id}")
 def get_product(request, product_id: int):
-    return {"product_id": product_id, "name": f"Product {product_id}"}
-```
-
-```python
-# app/routers/reviews.py
-from justapi import APIRouter
-
-router = APIRouter(prefix="/products/{product_id}/reviews", tags=["Reviews"])
-
-
-@router.get("/")
-def list_reviews(request, product_id: int):
-    return [{"id": 1, "product_id": product_id, "rating": 5}]
+    return {"product_id": product_id}
 ```
 
 ```python
 # app/main.py
 from justapi import JustAPIApp
 from app.routers.products import router as products_router
-from app.routers.reviews import router as reviews_router
 
 app = JustAPIApp()
-app.include_router(products_router)
-app.include_router(reviews_router)
+app.include_router(products_router, prefix="/api/v1")
 ```
 
-## Route with Tags
+## Sub-Routers (Nested Routers)
 
-Tags group endpoints in the auto-generated OpenAPI documentation:
+APIRouter instances can include other APIRouter instances, creating nested route hierarchies:
 
 ```python
-@router.get("/", tags=["Products"])
-def list_products(request):
-    ...
+from justapi import APIRouter
+
+# Create a sub-router for user-related routes
+users_router = APIRouter(prefix="/users")
+
+@users_router.get("/{user_id}")
+def get_user(request, user_id: int):
+    return {"user_id": user_id}
+
+@users_router.get("/{user_id}/orders")
+def get_user_orders(request, user_id: int):
+    return [{"order_id": 1, "user_id": user_id}]
+
+# Create an admin router and include the users sub-router
+admin_router = APIRouter(prefix="/admin", tags=["Admin"])
+admin_router.include_router(users_router)
+
+# Include the admin router in the app
+app.include_router(admin_router, prefix="/api/v1")
+# Final URL: /api/v1/admin/users/{user_id}
 ```
 
-## Router-Level Middleware
+## Sub-Application Mounting
+
+Use `app.mount()` to mount APIRouters or static directories:
+
+```python
+# Mount an APIRouter as a sub-app
+app.mount("/api/v1", users_router)
+
+# Mount a static directory
+app.mount("/static", "static", name="static")
+```
+
+## Named Routes & URL Building
+
+Use the `name` parameter and `url_for()` to build URLs dynamically:
+
+```python
+@app.get("/items/{item_id}", name="get_item")
+def read_item(request, item_id: int):
+    ...
+
+# Build URL for a named route
+url = app.url_for("get_item", item_id=42)
+# Returns: "/items/42"
+```
+
+Named routes work with APIRouter too, and URLs are correctly resolved even with nested prefixes.
+
+## Router-Level Dependencies
 
 ```python
 from justapi import APIRouter, Depends, HTTPException, Header
 
 admin_router = APIRouter(prefix="/admin", tags=["Admin"])
 
-
 def require_admin(authorization: str = Header(...)):
     if authorization != "Bearer admin-token":
         raise HTTPException(403, "Admin access required")
 
-
 @admin_router.get("/users", dependencies=[Depends(require_admin)])
 def list_all_users(request):
     return [{"id": 1, "name": "Alice"}]
-
 
 app.include_router(admin_router)
 ```
 
 ## Route Ordering
 
-Routes are matched in the order they are registered. More specific routes should come before parameterized routes:
+Routes are matched in order of registration. Specific routes before parameterized:
 
 ```python
-# Specific route first
-@app.get("/users/me")
+@app.get("/users/me")      # Specific route first
 def get_current_user(request):
     return {"user": "current"}
 
-# Parameterized route second
-@app.get("/users/{user_id}")
+@app.get("/users/{user_id}")  # Parameterized route second
 def get_user(request, user_id: int):
     return {"user_id": user_id}
 ```
-
-## Route-Lookup Cache
-
-For high-traffic routes, JustAPI caches route lookups in a memoization table (ADR-064). This avoids radix-trie traversal on repeated requests to the same path.
 
 ## OpenAPI Documentation
 
@@ -149,4 +168,5 @@ All registered routes are automatically documented:
 
 - [API Reference: Routing](/api-reference/routing/) — Complete routing API
 - [API Reference: APIRouter](/api-reference/apirouter/) — Router reference
+- [API Reference: JustAPIApp](/api-reference/justapiapp/) — App configuration
 - [Multi-Protocol APIs](/advanced/multi-protocol-apis/) — REST, GraphQL, gRPC, JSON-RPC
