@@ -234,15 +234,25 @@ def adaptive_batch(max_size: int = 32, window_ms: int = 10):
     return wrapper
 
 class JustAPIApp:
-    def __init__(self, dependencies: typing.List[Depends] = None):
+    def __init__(
+        self,
+        title: str = "JustAPIApp",
+        version: str = "1.0.0",
+        description: str = None,
+        openapi_tags: list = None,
+        dependencies: typing.List[Depends] = None,
+    ):
         self._app = _JustAPIApp()
+        self.title = title
+        self.version = version
+        self.description = description
+        self.openapi_tags = openapi_tags or []
         self.dependencies = dependencies or []
         self.exception_handlers = {}
         self.middlewares = []
         self._named_routes = {}
         self.routes = []
-        self.title = "JustAPIApp"
-        self.version = "1.0.0"
+
 
         # Built-in probe/metrics endpoints for the Python app.
         self.get("/health", _builtin_health, include_in_schema=False, name="builtin_health")
