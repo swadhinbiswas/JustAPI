@@ -14,7 +14,8 @@
  - **✅ Non-native dispatch deadlock at high concurrency — RESOLVED (ADR-049).** The dedicated GIL thread-pool (`gil_pool.rs`) replaced per-request `spawn_blocking` + `Python::attach`; non-native routes now sustain ~64k req/s at `-c 200` (verified with `oha -z 5s -c 200`, 100% success) where they previously stalled at ~20 req/s. Native routes were always immune. No remaining deadlock on the request path.
  - **Next perf step (open, not a measured gap):** justapi now beats Robyn on *all* three raw workloads (incl. validated 40.1k vs 32.9k), and schema-backed routes run entirely in Rust via `native=True`. The only residual PyO3 cost is the handler *call itself* for **non-schema-backed** routes (handler body still runs in Python) — with the ADR-049 deadlock resolved these now run at healthy throughput, not merely "not deadlocked". Arbitrary user-defined Rust handlers (beyond validate-and-echo) remain a larger architectural step, currently **not** justified by a measured deficit vs Robyn; candidate for a future phase if a real workload demands it.
  - **Production Readiness & Scaffolding (2026-07-24) — ✅ complete.** Added multi-arch wheel build CI/CD pipeline (`.github/workflows/wheels.yml`) covering Linux x86_64/aarch64/musl, macOS x86_64/arm64, and Windows. Added OpenTelemetry `docker-compose.otel.yml` generation to `justapi new`/`create` CLI scaffolder. Added `add_middleware` & `add_cors` methods on `JustAPIApp` for Starlette/FastAPI DX parity. Cleaned up error logging for expected `HTTPException` responses in `_native_helper.py`. Gates green: `cargo test --workspace` (269 passed), `cargo clippy` clean, `cargo fmt --check` clean, `pytest` (149 passed).
- - **Last updated:** 2026-07-24 (Production readiness and multi-arch scaffolding complete; outstanding: real GPU weights benchmark).
+ - **Production hardening sweep (2026-07-24) — ✅ complete.** Fixed 21 weak points from comprehensive code review. WASM OOM via attacker-controlled output length; Mutex poisoning recovery on all global locks (`.lock().unwrap_or_else(|e| e.into_inner())`); GIL pool channel from `std::sync::mpsc` to bounded `tokio::sync::mpsc` with `try_send` + warmup; batcher routes through GIL pool (not `spawn_blocking`+`Python::attach`); generic `run_python<F,T>`; schema validation returns 422 on error; response envelope detection requires ALL recognized keys; `delete/head/options/trace` set `kw["native"]=native`; `APIRouter.include_router` deps merge order fixed; `RouteCache` single-`Mutex` design + 16384 capacity; `app.db` warns on error; cookie URL decoder processes bytes (correct `%C3%A9→é`); static dir blocks `%2e` traversal; named route collision warnings; Dockerfile `USER justapi` + pin maturin 1.8.3 + digest comments; hardcoded DB credentials removed from benchmarks; GraphQL/health cached tokio runtime; body bytes kept as `Bytes` (eliminates double-copy); `SharedArena` removed from connection hot path (wasted 16KB/conn). All 493 workspace tests pass, clippy clean, fmt clean, Python tests green.
+ - **Last updated:** 2026-07-24 (Production hardening sweep complete; 21/24 weak points fixed; outstanding: Prometheus/Swagger auth, real GPU weights benchmark).
  - **Configurable max body size + production hardening (2026-07-16) — ✅ complete.** Body cap was a hardcoded 50 MiB at four read sites; now a threaded `max_body_size` (Rust `Server::with_max_body_size`, Python `JustAPIApp.run(addr, max_body_size=...)`, default 50 MiB) pushed through `make_handler`/`execute_handler` and `make_native_handler`. Oversized bodies now return **413 Payload Too Large** with `{"detail":"payload too large"}` on every path (was a generic 400/500/404). Added `PRODUCTION.md` (TLS, supervision/crash-fast, body-size DoS hardening, health/readiness/liveness, secure headers, metrics, graceful shutdown, pre-flight checklist) and ADR-055. Gates green: `cargo test --workspace`, `cargo clippy --workspace --tests -D warnings`, `cargo fmt --check`, pytest 133 passed/1 skipped.
  - **Blocker:** none (CUDA present). Outstanding: run the GPU benchmark with real weights + PyPI upload token/manylinux build.
 
@@ -609,20 +610,16 @@ Don't duplicate that reasoning here — just reference the entry.
 Full plan in `PRODUCTION_PLAN.md` (written 2026-07-20 from the audit + live
 reproductions). Blockers tracked there; summary:
 
-- **P0.1 BUG-2a (CRITICAL, availability):** `normalize_db_url` (`justapi-core/src/db/pool.rs:93`)
-  mangles SQLite paths — `sqlite:///x.db`→`sqlite:/x.db` (root) and
-  `sqlite:////abs`→`sqlite://abs` (mangled). `app.run()` with a DB crashes with
-  `code 14 / unable to open database file` for *every* path. Reproduced 2026-07-20.
-  Fix: strip-prefix matcher matching the SQLAlchemy 3/4-slash convention.
-- **P0.2 BUG-2b/D3 (CRITICAL, perf):** SQLite pragmas are opt-in
-  (`pool.rs:252` only runs when caller passes `pragmas`); default pool = rollback
-  journal + `busy_timeout=0` → constant `SQLITE_BUSY` under the 10-conn default
-  pool → ~15 req/s / ~900 ms p50 (stress test). Fix: unconditional
-  `busy_timeout=5000` + `journal_mode=WAL` + `synchronous=NORMAL` for SQLite.
-- **P0.3 BUG-1 (CRITICAL, correctness):** any response dict with a top-level
-  `"status"` key is misclassified as a legacy envelope and returned with an
-  **empty body** (`justapi-py/src/native/handlers.rs:322-348`). Reproduced.
-  Fix: envelope detection requires `"body"`, not just `"status"`.
+- **P0.1 BUG-2a (CRITICAL, availability):** `normalize_db_url` **✅ FIXED** (2026-07-20, ADR-075).
+  `sqlite:///x.db`→`sqlite:/x.db` (root) and `sqlite:////abs`→`sqlite://abs` (mangled)
+  were both fixed by the existing `normalize_db_url` implementation; `test_normalize_db_url_sqlite_paths`
+  and `test_sqlite_connect_relative_and_absolute_file` pass.
+- **P0.2 BUG-2b/D3 (CRITICAL, perf):** SQLite pragmas **✅ FIXED** (2026-07-20, ADR-075).
+  Unconditional `busy_timeout=5000` + `journal_mode=WAL` + `synchronous=NORMAL` applied
+  for SQLite in `pool.rs:342-369`; caller pragmas are appended after and may override.
+- **P0.3 BUG-1 (CRITICAL, correctness):** response dict envelope detection **✅ FIXED** (2026-07-24).
+  Envelope detection requires ALL recognized keys (`{status,headers,body,__response__}`),
+  not just `"status"`. Both Rust `handlers.rs:373-391` and Python `_native_helper.py:86-95` updated.
 - **P1.1 BUG-3:** `body_schema=` delivers raw `bytes` to the Python handler, not
   a parsed Schema/dict (demo_shop workaround). **[FIXED 2026-07-20, ADR-073]** —
   `justapi.Schema` routes now receive the parsed/validated object via
@@ -651,6 +648,8 @@ reproductions). Blockers tracked there; summary:
   in the full-suite run — it passes in isolation).
 - [x] **[P2.2 — RESOLVED] Python-handler DB write path now awaits/commits durably under concurrency.** Root cause was a blocking-runtime re-entrancy: `py.detach` + `rt.block_on` from the server's dispatch thread deadlocked the DB runtime, exhausting the connection pool (`busy_timeout` hit) so writes silently dropped (1–2 of ~50 INSERTs persisted at `-c 50`). Fixed in `database.rs::run_blocking` — release the GIL with `py.detach`, then `rt.spawn(fut)` and wait on an `mpsc` channel (no re-entrant `block_on`). Verified: 100 concurrent INSERTs via the test client persist 100/100; a 100-thread direct `app.db.execute` burst persists 200/200 with zero errors. Durability test added in `test_db_concurrent.py`. See ADR-074 (revised) + BENCHMARKS.md P2.2. The Rust-native CRUD path remains the fastest write route.
 - [ ] **Phase 52 real run unverified.** `cargo run -p justapi-bench --bin justapi-gpu-bench --features "cuda,real"` still needs a real-weight pass; the `candle`+CUDA build is heavy and unconfirmed in this env.
+- [ ] **Prometheus `/metrics` + Swagger `/docs` have no auth guard.** Design decision needed on default auth (API key? internal-network-only?).
+- [ ] **JWT `aud`/`iss` validation not default.** Opt-in via `with_audience()`/`with_issuer()` already exists; consider making default.
 - [x] **Untracked artifacts (resolved 2026-07-17).** `test_routing.py` now tracked (2 pass); `test_gateway.json` moved into the package test dir and covered by new `test_gateway.py` (1 pass). Also fixed a latent `panic = "abort"` in `justapi-core/src/testing.rs` that killed pytest on any streamed-body error (e.g. `stream_json` rejecting an invalid item). pytest suite now 120 passed / 1 skipped. See ADR-058.
 
 ## Key architecture invariants
