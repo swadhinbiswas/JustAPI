@@ -46,7 +46,10 @@ def _builtin_ready(self):
     return JSONResponse(payload)
 
 
-def _builtin_metrics(self):
+def _builtin_metrics(self, request=None):
+    guard = _admin_guard(self, request)
+    if guard is not None:
+        return guard
     body = self._app.metrics_prometheus()
     return PlainTextResponse(body)
 
@@ -69,13 +72,19 @@ def _builtin_graphql(app, request=None):
 
 
 
-def _builtin_openapi(app):
+def _builtin_openapi(app, request=None):
     """Serve the generated OpenAPI 3.1 document for the Python app."""
+    guard = _admin_guard(app, request)
+    if guard is not None:
+        return guard
     return JSONResponse(build_openapi(app))
 
 
-def _builtin_docs(app):
+def _builtin_docs(app, request=None):
     """Serve Swagger UI (interactive API documentation) for the Python app."""
+    guard = _admin_guard(app, request)
+    if guard is not None:
+        return guard
     html = (
         "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n"
         "  <meta charset=\"UTF-8\">\n  <title>API Docs — Swagger UI</title>\n"
@@ -91,8 +100,11 @@ def _builtin_docs(app):
     return HTMLResponse(html)
 
 
-def _builtin_redoc(app):
+def _builtin_redoc(app, request=None):
     """Serve ReDoc (alternative API documentation) for the Python app."""
+    guard = _admin_guard(app, request)
+    if guard is not None:
+        return guard
     html = (
         "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n"
         "  <meta charset=\"UTF-8\">\n  <title>API Docs — ReDoc</title>\n"
@@ -104,7 +116,7 @@ def _builtin_redoc(app):
     return HTMLResponse(html)
 
 
-def _builtin_scalar(app):
+def _builtin_scalar(app, request=None):
     """Serve Scalar API Reference (modern interactive docs) for the Python app.
 
     Scalar reads the OpenAPI document from ``/openapi.json`` and renders a
@@ -239,6 +251,31 @@ class _AppState:
         self.__dict__[name] = value
 
 
+def _admin_guard(app, request):
+    """Check admin token if configured.
+
+    Returns a 403 JSONResponse when the token is set and the request does
+    not carry ``Authorization: Bearer <token>``, or ``None`` when authorized.
+    """
+    token = getattr(app, 'admin_token', None)
+    if token is None:
+        return None
+    auth_header = ""
+    if isinstance(request, dict):
+        hdrs = request.get("headers") or {}
+        if isinstance(hdrs, dict):
+            auth_header = hdrs.get("Authorization", "")
+        elif isinstance(hdrs, list):
+            for k, v in hdrs:
+                if k.lower() == b"authorization":
+                    auth_header = v if isinstance(v, str) else v.decode("utf-8", errors="replace")
+                    break
+    if not auth_header.startswith("Bearer ") or auth_header[7:] != token:
+        from .responses import JSONResponse
+        return JSONResponse({"detail": "Forbidden"}, status_code=403)
+    return None
+
+
 class JustAPIApp:
     def __init__(
         self,
@@ -255,6 +292,7 @@ class JustAPIApp:
         docs_url: str = "/docs",
         redoc_url: str = "/redoc",
         scalar_url: str = "/scalar",
+        admin_token: str = None,
     ):
         self._app = _JustAPIApp()
         self.title = title
@@ -277,22 +315,27 @@ class JustAPIApp:
         self._startup_handlers = []
         self._shutdown_handlers = []
         self.state = _AppState()
+        self.admin_token = admin_token
 
 
         # Built-in probe/metrics endpoints for the Python app.
+        # Health/live/ready are deliberately unprotected (K8s probes).
         self.get("/health", _builtin_health, include_in_schema=False, name="builtin_health")
         self.get("/live", _builtin_live, include_in_schema=False, name="builtin_live")
         self.get("/ready", lambda: _builtin_ready(self), include_in_schema=False, name="builtin_ready")
-        self.get("/metrics", lambda: _builtin_metrics(self), include_in_schema=False, name="builtin_metrics")
+        self.get("/metrics", lambda request=None: _builtin_metrics(self, request), include_in_schema=False, name="builtin_metrics")
         # Interactive API documentation for the Python app. The core server's
         # /docs, /redoc, /openapi.json live only in the default router, which the
         # Python app replaces via with_handler(); these builtin routes restore
         # that DX so the README's "automatic interactive API documentation"
         # claim holds for Python apps too.
-        self.get("/openapi.json", lambda: _builtin_openapi(self), include_in_schema=False, name="builtin_openapi")
-        self.get("/docs", lambda: _builtin_docs(self), include_in_schema=False, name="builtin_docs")
-        self.get("/redoc", lambda: _builtin_redoc(self), include_in_schema=False, name="builtin_redoc")
-        self.get("/scalar", lambda: _builtin_scalar(self), include_in_schema=False, name="builtin_scalar")
+        # Admin-protected: when `admin_token` is set, the request must carry
+        # `Authorization: Bearer <token>` to access these routes.
+        self.get("/openapi.json", lambda request=None: _builtin_openapi(self, request), include_in_schema=False, name="builtin_openapi")
+        self.get("/docs", lambda request=None: _builtin_docs(self, request), include_in_schema=False, name="builtin_docs")
+        self.get("/redoc", lambda request=None: _builtin_redoc(self, request), include_in_schema=False, name="builtin_redoc")
+        # The scalar docs page is also protected; the home page (/) is not.
+        self.get("/scalar", lambda request=None: _admin_guard(self, request) or _builtin_scalar(self, request), include_in_schema=False, name="builtin_scalar")
         # The home page opens the interactive API reference (Scalar) so the
         # docs are the first thing a visitor sees.
         self.get("/", lambda: _builtin_scalar(self), include_in_schema=False, name="builtin_index")
