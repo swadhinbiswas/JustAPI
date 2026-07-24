@@ -1702,6 +1702,7 @@ dependencies = [
  "arc-swap",
  "async-graphql",
  "async-trait",
+ "base64",
  "bytes",
  "flate2",
  "futures",
@@ -1722,6 +1723,7 @@ dependencies = [
  "opentelemetry-stdout",
  "opentelemetry_sdk",
  "prost 0.14.4",
+ "quick-xml",
  "rand 0.8.6",
  "redis",
  "serde",
@@ -2502,6 +2504,16 @@ dependencies = [
  "wasi",
  "web-sys",
  "winapi",
+]
+
+[[package]]
+name = "quick-xml"
+version = "0.36.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f7649a7b4df05aed9ea7ec6f628c67c9953a43869b8bc50929569b2999d443fe"
+dependencies = [
+ "memchr",
+ "serde",
 ]
 
 [[package]]
