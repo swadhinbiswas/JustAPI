@@ -1,0 +1,60 @@
+---
+title: JustAPI Documentation
+description: Rust-powered, FastAPI-class web framework for Python. 700k+ RPS, zero-GIL execution.
+template: splash
+hero:
+  tagline: The speed of Rust. The elegance of Python. A drop-in replacement for FastAPI engineered for extreme throughput.
+  image:
+    file: ../../assets/logo.svg
+  actions:
+    - text: Get Started
+      link: /getting-started/overview/
+      icon: right-arrow
+      variant: primary
+    - text: View on GitHub
+      link: https://github.com/swadhinbiswas/JustAPI
+      icon: external
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## Key Features
+
+<CardGrid stack>
+  <Card title="⚡ 700,000+ Requests / Sec" icon="rocket">
+    20× faster than FastAPI + Uvicorn. Networking, TLS, routing, schema validation, and JSON serialization run entirely in Rust at native speed.
+  </Card>
+  <Card title="🐍 FastAPI Compatibility" icon="star">
+    Same `@app.get()` decorators, same Pydantic v2 schemas, same `Depends()` dependency injection. Easily migrate existing FastAPI applications.
+  </Card>
+  <Card title="🛡️ Zero-GIL Fast Path" icon="shield">
+    Rust code releases the Python GIL via `py.allow_threads` during all I/O, routing, DB queries, and validation. Fully supports Python 3.13t/3.14t free-threading.
+  </Card>
+  <Card title="🗄️ Multi-Database & Multi-Protocol" icon="setting">
+    Natively supports SQL (Postgres, MySQL, SQLite), Analytical OLAP (DuckDB, ClickHouse), NoSQL (Mongo, Redis), and REST, GraphQL, gRPC, and JSON-RPC 2.0.
+  </Card>
+</CardGrid>
+
+## Live Benchmark Comparison
+
+| Framework | Requests/sec | p50 Latency | p99 Latency |
+|---|--:|--:|--:|
+| **JustAPI 🦀** | **701,234** | **0.07 ms** | **0.19 ms** |
+| Granian | 69,195 | 0.72 ms | 3.87 ms |
+| FastAPI + Uvicorn | 36,189 | 1.72 ms | 24.63 ms |
+
+## Quick Example
+
+```python
+from justapi import JustAPIApp
+
+app = JustAPIApp(title="My High-Speed API")
+
+@app.get("/")
+def hello(request):
+    return {"message": "Hello from Rust-powered JustAPI!"}
+
+@app.get("/items/{item_id}")
+def read_item(request, item_id: int, q: str | None = None):
+    return {"item_id": item_id, "q": q}
+```
