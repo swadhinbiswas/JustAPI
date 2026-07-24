@@ -65,3 +65,11 @@ path = "fuzz_targets/fuzz_jwt.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "fuzz_pipeline"
+path = "fuzz_targets/fuzz_pipeline.rs"
+test = false
+doc = false
+bench = false
+
