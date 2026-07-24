@@ -73,3 +73,16 @@ pub async fn handle_graphql(
         .header("content-type", "application/json")
         .body(body)?)
 }
+
+pub fn graphiql_html() -> String {
+    async_graphql::http::GraphiQLSource::build().endpoint("/graphql").finish()
+}
+
+pub async fn execute_graphql_bytes(
+    schema: &AppSchema,
+    body_bytes: &[u8],
+) -> anyhow::Result<String> {
+    let gql_req: async_graphql::Request = serde_json::from_slice(body_bytes)?;
+    let res = schema.execute(gql_req).await;
+    Ok(serde_json::to_string(&res)?)
+}

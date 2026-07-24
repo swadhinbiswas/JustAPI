@@ -86,6 +86,34 @@ pub fn validation_response(detail: &str) -> Response<ResponseBody> {
     error_response(hyper::StatusCode::UNPROCESSABLE_ENTITY, detail)
 }
 
+/// 503 Service Unavailable with a `Retry-After` hint, using the canonical
+/// `{"detail": ...}` envelope. Used for backpressure signals — e.g. a saturated
+/// DB connection pool that cannot serve a request within its acquire window.
+pub fn service_unavailable_response(detail: &str) -> Response<ResponseBody> {
+    Response::builder()
+        .status(hyper::StatusCode::SERVICE_UNAVAILABLE)
+        .header("content-type", "application/json")
+        .header("retry-after", "1")
+        .body(UnsyncBoxBody::new(
+            Full::new(Bytes::from(serde_json::json!({ "detail": detail }).to_string()))
+                .map_err(|e: std::convert::Infallible| -> anyhow::Error { match e {} }),
+        ))
+        .unwrap()
+}
+
+/// Map a SQLx error from a request-path DB operation to the right status.
+/// Saturation (`PoolTimedOut`/`PoolClosed`) becomes `503` (backpressure);
+/// everything else is a `500`.
+#[cfg(feature = "db")]
+pub fn db_error_response(e: &sqlx::Error) -> Response<ResponseBody> {
+    match e {
+        sqlx::Error::PoolTimedOut | sqlx::Error::PoolClosed => {
+            service_unavailable_response("database pool saturated; please retry shortly")
+        }
+        _ => error_response(hyper::StatusCode::INTERNAL_SERVER_ERROR, "database error"),
+    }
+}
+
 /// Lift an `anyhow::Result<Bytes>` stream into a streaming response.
 pub fn streaming_response(
     status: hyper::StatusCode,

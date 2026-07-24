@@ -1,4 +1,5 @@
 use std::fmt;
+use std::sync::OnceLock;
 
 use http_body_util::BodyExt;
 use http_body_util::Full;
@@ -8,6 +9,116 @@ use jsonschema::Validator;
 use serde::de::DeserializeOwned;
 
 use crate::ResponseBody;
+
+// ---------------------------------------------------------------------------
+// Built-in `format` validators
+// ---------------------------------------------------------------------------
+
+/// Register the built-in `format` validators (email, uuid, uri, date-time, ...)
+/// once. `jsonschema` 0.46 ships `format` as an opt-in keyword; with
+/// `default-features = false` no formats are asserted unless we register them,
+/// so we provide lightweight Rust-side checkers. They are intentionally
+/// permissive (reject obvious junk, not RFC-exhaustive) — enough for request
+/// validation without pulling a format-parsing dependency.
+type FormatChecker = (&'static str, fn(&str) -> bool);
+
+fn format_validators() -> &'static [FormatChecker] {
+    static FMTS: OnceLock<Vec<FormatChecker>> = OnceLock::new();
+    FMTS.get_or_init(|| {
+        vec![
+            ("email", |s: &str| {
+                if s.is_empty() || s.contains(char::is_whitespace) || !s.contains('@') {
+                    return false;
+                }
+                let (local, domain) = s.split_once('@').unwrap();
+                !local.is_empty()
+                    && !domain.is_empty()
+                    && domain.contains('.')
+                    && !domain.starts_with('.')
+                    && !domain.ends_with('.')
+            }),
+            ("uri", |s: &str| match s.split_once("://") {
+                Some((scheme, rest)) => {
+                    !scheme.is_empty()
+                        && scheme
+                            .chars()
+                            .all(|c| c.is_alphanumeric() || c == '+' || c == '-' || c == '.')
+                        && !rest.is_empty()
+                }
+                None => false,
+            }),
+            ("uuid", |s: &str| {
+                let s = s.trim_matches(|c| c == '{' || c == '}');
+                let parts: Vec<&str> = s.split('-').collect();
+                parts.len() == 5
+                    && parts[0].len() == 8
+                    && parts[1].len() == 4
+                    && parts[2].len() == 4
+                    && parts[3].len() == 4
+                    && parts[4].len() == 12
+                    && parts.iter().all(|p| p.chars().all(|c| c.is_ascii_hexdigit()))
+            }),
+            ("date-time", |s: &str| {
+                let (date, time) = match s.split_once('T') {
+                    Some((d, t)) => (d, t),
+                    None => return false,
+                };
+                let ds: Vec<&str> = date.split('-').collect();
+                if ds.len() != 3
+                    || ds.iter().any(|p| p.is_empty() || !p.chars().all(|c| c.is_ascii_digit()))
+                {
+                    return false;
+                }
+                let time = time.trim_end_matches('Z').trim_end_matches(['+', '-']);
+                let time = time.split('.').next().unwrap_or(time);
+                let ts: Vec<&str> = time.split(':').collect();
+                ts.len() >= 2
+                    && ts.len() <= 3
+                    && ts.iter().all(|p| {
+                        p.len() <= 2 && !p.is_empty() && p.chars().all(|c| c.is_ascii_digit())
+                    })
+            }),
+            ("date", |s: &str| {
+                let ds: Vec<&str> = s.split('-').collect();
+                ds.len() == 3
+                    && ds.iter().all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+            }),
+            ("hostname", |s: &str| {
+                !s.is_empty()
+                    && !s.starts_with('-')
+                    && !s.ends_with('-')
+                    && !s.contains("..")
+                    && s.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '.')
+            }),
+            ("ipv4", |s: &str| {
+                let parts: Vec<&str> = s.split('.').collect();
+                parts.len() == 4
+                    && parts.iter().all(|p| {
+                        p.len() <= 3
+                            && !p.is_empty()
+                            && p.chars().all(|c| c.is_ascii_digit())
+                            && p.parse::<u8>().is_ok()
+                    })
+            }),
+        ]
+    })
+}
+
+/// Build a JSON Schema validator, registering the built-in `format` checkers
+/// and asserting `format` regardless of draft default. This is the single
+/// source of truth for both one-shot and precompiled validation in the
+/// runtime. The validator is not cached here — callers that need caching
+/// (routes) should use [`compile_schema`].
+fn build_validator(
+    schema_value: &serde_json::Value,
+) -> Result<Validator, jsonschema::ValidationError<'static>> {
+    let mut opts = jsonschema::options();
+    opts = opts.should_validate_formats(true);
+    for (name, checker) in format_validators() {
+        opts = opts.with_format(*name, *checker);
+    }
+    opts.build(schema_value)
+}
 
 // ---------------------------------------------------------------------------
 // Validation error types
@@ -176,8 +287,7 @@ pub fn validate_json_schema(body: &[u8], schema_json: &str) -> Result<(), Valida
     let schema_value: serde_json::Value = serde_json::from_str(schema_json)
         .map_err(|e| ValidationError::new("schema", format!("Invalid schema JSON: {}", e)))?;
 
-    let validator = jsonschema::options()
-        .build(&schema_value)
+    let validator = build_validator(&schema_value)
         .map_err(|e| ValidationError::new("schema", format!("Schema compilation error: {}", e)))?;
 
     let mut verr = ValidationError { errors: Vec::new() };
@@ -237,8 +347,7 @@ impl CompiledValidator {
 pub fn compile_schema(schema_json: &str) -> Result<CompiledValidator, ValidationError> {
     let schema_value: serde_json::Value = serde_json::from_str(schema_json)
         .map_err(|e| ValidationError::new("schema", format!("Invalid schema JSON: {}", e)))?;
-    let validator = jsonschema::options()
-        .build(&schema_value)
+    let validator = build_validator(&schema_value)
         .map_err(|e| ValidationError::new("schema", format!("Schema compilation error: {}", e)))?;
     Ok(CompiledValidator(validator))
 }
