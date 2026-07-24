@@ -290,9 +290,30 @@ async def websocket_endpoint(ws):
         await ws.send_text(f"Echo: {data}")
 ```
 
+## Project Scaffolding CLI
+
+JustAPI includes an interactive project generator to create production-ready applications with zero boilerplate:
+
+```bash
+# Interactive project creation (prompts for DB engine and API architecture):
+justapi create my_app
+
+# Or specify flags directly:
+justapi create analytics_app --db duckdb --api-type rest
+justapi create graph_app --db postgres --api-type graphql
+justapi create rpc_service --db redis --api-type grpc
+justapi create jsonrpc_api --db sqlite --api-type jsonrpc
+```
+
+### Supported Backends & Protocols:
+* **Databases:** Transactional SQL (`sqlite`, `postgres`, `mysql`), Analytical OLAP (`duckdb`, `clickhouse`), NoSQL (`mongodb`, `redis`).
+* **Protocols:** REST (OpenAPI 3.1), GraphQL (GraphiQL UI), gRPC (Protobuf), JSON-RPC 2.0.
+* **Observability:** Includes pre-built OpenTelemetry & Jaeger stack (`docker-compose.otel.yml`).
+
 ## Features
 
 ### FastAPI-compatible, Rust-accelerated
+
 
 JustAPI gives you the same developer experience as FastAPI, but with a Rust engine underneath. Here's what you get:
 
