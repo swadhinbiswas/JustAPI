@@ -201,24 +201,26 @@ enum Commands {
         output: Option<PathBuf>,
     },
 
-    /// Create a new JustAPI project with a database backend wired in.
+    /// Create a new JustAPI project with a database backend and API protocol wired in.
     ///
-    /// Prompts are avoided: pass `--db` to pick the engine, or `--db-url` to
-    /// supply a full connection string (engine is inferred from the URL scheme).
-    /// Defaults to SQLite (zero-config, file-based).
+    /// Pass `--db` (`sqlite`, `postgres`, `mysql`, `duckdb`, `clickhouse`, `mongodb`, `redis`),
+    /// `--api-type` (`rest`, `graphql`, `grpc`, `jsonrpc`), or `--db-url`.
+    /// If omitted in an interactive terminal, prompts for choice.
     Create {
         /// Name of the project
         name: String,
         /// Output directory (defaults to project name)
         #[arg(short, long)]
         output: Option<PathBuf>,
-        /// Database engine: `sqlite` (default), `postgres`, or `mysql`.
-        #[arg(long, default_value = "sqlite")]
-        db: String,
-        /// Full database connection URL. Overrides `--db` (engine is inferred
-        /// from the scheme: `postgres://`, `sqlite://`, `mysql://`).
+        /// Database engine: `sqlite`, `postgres`, `mysql`, `duckdb`, `clickhouse`, `mongodb`, `redis`.
+        #[arg(long)]
+        db: Option<String>,
+        /// Full database connection URL. Overrides `--db`.
         #[arg(long)]
         db_url: Option<String>,
+        /// API architecture / protocol: `rest` (default), `graphql`, `grpc`, `jsonrpc`.
+        #[arg(long)]
+        api_type: Option<String>,
     },
 
     /// Profile a running JustAPI server (built-in load test)
@@ -339,11 +341,96 @@ fn emit_rich_error(err: &anyhow::Error) {
     }
 }
 
+/// Interactively prompt the user to select an API architecture style if running in a TTY.
+fn prompt_api_type_selection(name: &str) -> String {
+    use std::io::{IsTerminal, Write};
+    if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
+        println!();
+        println!("Select API architecture style for '{name}':");
+        println!("  [1] REST     (OpenAPI 3.1, JSON Endpoints) [default]");
+        println!("  [2] GraphQL  (Schema-driven GraphiQL API & Query engine)");
+        println!("  [3] gRPC     (Protobuf High-performance RPC protocol)");
+        println!("  [4] JSON-RPC (JSON-RPC 2.0 Protocol over HTTP)");
+        print!("Enter choice [1-4] (default: 1): ");
+        let _ = std::io::stdout().flush();
+
+        let mut input = String::new();
+        if std::io::stdin().read_line(&mut input).is_ok() {
+            let choice = input.trim();
+            match choice {
+                "2" | "graphql" => return "graphql".to_string(),
+                "3" | "grpc" => return "grpc".to_string(),
+                "4" | "jsonrpc" => return "jsonrpc".to_string(),
+                _ => {}
+            }
+        }
+    }
+    "rest".to_string()
+}
+
+/// Interactively prompt the user to select a database engine if running in a TTY.
+fn prompt_db_selection(name: &str) -> (String, String) {
+    use std::io::{IsTerminal, Write};
+    if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
+        println!("🚀 Welcome to JustAPI Project Scaffolder!");
+        println!("Select a database backend for '{name}':");
+        println!("  Relational (Transactional SQL / OLTP):");
+        println!("    [1] SQLite     (Zero-config, embedded file database) [default]");
+        println!("    [2] PostgreSQL (Production-grade relational database)");
+        println!("    [3] MySQL      (Scalable web relational database)");
+        println!("  Analytical (OLAP / Data Lake):");
+        println!("    [4] DuckDB     (Fast in-process analytical SQL & Parquet engine)");
+        println!("    [5] ClickHouse (High-throughput analytical column store)");
+        println!("  NoSQL / Key-Value / Document:");
+        println!("    [6] MongoDB    (NoSQL document database)");
+        println!("    [7] Redis      (NoSQL key-value store & cache)");
+        print!("Enter choice [1-7] (default: 1): ");
+        let _ = std::io::stdout().flush();
+
+        let mut input = String::new();
+        if std::io::stdin().read_line(&mut input).is_ok() {
+            let choice = input.trim();
+            match choice {
+                "2" | "postgres" | "postgresql" => {
+                    return (
+                        "postgres".to_string(),
+                        format!("postgres://postgres:postgres@localhost:5432/{name}"),
+                    );
+                }
+                "3" | "mysql" | "mariadb" => {
+                    return (
+                        "mysql".to_string(),
+                        format!("mysql://root:password@localhost:3306/{name}"),
+                    );
+                }
+                "4" | "duck" | "duckdb" => {
+                    return ("duckdb".to_string(), format!("duckdb://{name}.duckdb"));
+                }
+                "5" | "clickhouse" => {
+                    return (
+                        "clickhouse".to_string(),
+                        format!("clickhouse://localhost:9000/{name}"),
+                    );
+                }
+                "6" | "mongo" | "mongodb" => {
+                    return ("mongodb".to_string(), format!("mongodb://localhost:27017/{name}"));
+                }
+                "7" | "redis" => {
+                    return ("redis".to_string(), "redis://localhost:6379/0".to_string());
+                }
+                _ => {}
+            }
+        }
+    }
+    ("sqlite".to_string(), format!("sqlite://{name}.db"))
+}
+
 /// Resolve the database engine + connection URL for a scaffolded project.
-///
-/// `--db-url` wins (engine inferred from its scheme); otherwise `--db` picks a
-/// sensible default URL for the chosen engine.
-fn resolve_scaffold_db(db: &str, db_url: Option<String>) -> anyhow::Result<(String, String)> {
+fn resolve_scaffold_db(
+    name: &str,
+    db: Option<&str>,
+    db_url: Option<String>,
+) -> anyhow::Result<(String, String)> {
     if let Some(url) = db_url {
         let kind = if url.starts_with("postgres://") || url.starts_with("postgresql://") {
             "postgres"
@@ -351,82 +438,539 @@ fn resolve_scaffold_db(db: &str, db_url: Option<String>) -> anyhow::Result<(Stri
             "sqlite"
         } else if url.starts_with("mysql://") || url.starts_with("mariadb://") {
             "mysql"
+        } else if url.starts_with("duckdb://") || url.ends_with(".duckdb") {
+            "duckdb"
+        } else if url.starts_with("clickhouse://") {
+            "clickhouse"
+        } else if url.starts_with("mongodb://") || url.starts_with("mongodb+srv://") {
+            "mongodb"
+        } else if url.starts_with("redis://") || url.starts_with("rediss://") {
+            "redis"
         } else {
             anyhow::bail!("Unrecognized database URL scheme: {}", url);
         };
         Ok((kind.to_string(), url))
-    } else {
-        let kind = match db.to_ascii_lowercase().as_str() {
+    } else if let Some(db_kind) = db {
+        let kind = match db_kind.to_ascii_lowercase().as_str() {
             "postgres" | "postgresql" => "postgres",
             "mysql" | "mariadb" => "mysql",
             "sqlite" => "sqlite",
+            "duck" | "duckdb" => "duckdb",
+            "clickhouse" => "clickhouse",
+            "mongo" | "mongodb" => "mongodb",
+            "redis" => "redis",
             other => anyhow::bail!(
-                "Unsupported --db '{}'. Choose one of: sqlite, postgres, mysql",
+                "Unsupported --db '{}'. Choose one of: sqlite, postgres, mysql, duckdb, clickhouse, mongodb, redis",
                 other
             ),
         };
         let url = match kind {
-            "postgres" => "postgres://user:pass@localhost:5432/app".to_string(),
-            "mysql" => "mysql://user:pass@localhost:3306/app".to_string(),
-            _ => format!("sqlite://{name}.db", name = "{name}"),
+            "postgres" => format!("postgres://postgres:postgres@localhost:5432/{name}"),
+            "mysql" => format!("mysql://root:password@localhost:3306/{name}"),
+            "duckdb" => format!("duckdb://{name}.duckdb"),
+            "clickhouse" => format!("clickhouse://localhost:9000/{name}"),
+            "mongodb" => format!("mongodb://localhost:27017/{name}"),
+            "redis" => "redis://localhost:6379/0".to_string(),
+            _ => format!("sqlite://{name}.db"),
         };
         Ok((kind.to_string(), url))
+    } else {
+        Ok(prompt_db_selection(name))
     }
 }
 
-/// Generate the `app/main.py` for a scaffolded project, wired to the chosen DB.
-fn scaffold_main_py(name: &str, db_kind: &str, db_url: &str) -> String {
-    let db_setup = match db_kind {
+/// Generate dialect-specific SQL migration file (`migrations/0001_initial.sql`).
+fn scaffold_migration_sql(name: &str, db_kind: &str) -> String {
+    match db_kind {
         "postgres" => format!(
-            "app.set_database(\n    \"{url}\",\n    init_sql=\"\"\"\n    CREATE TABLE IF NOT EXISTS items (\n        id SERIAL PRIMARY KEY,\n        name TEXT NOT NULL,\n        qty INT NOT NULL DEFAULT 0\n    )\n    \"\"\",\n)",
-            url = db_url
+            "-- Migration 0001_initial for {name} (PostgreSQL)\n\
+            CREATE TABLE IF NOT EXISTS items (\n    \
+                id SERIAL PRIMARY KEY,\n    \
+                name VARCHAR(255) NOT NULL,\n    \
+                qty INT NOT NULL DEFAULT 0,\n    \
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP\n\
+            );\n"
         ),
         "mysql" => format!(
-            "app.set_database(\n    \"{url}\",\n    init_sql=\"\"\"\n    CREATE TABLE IF NOT EXISTS items (\n        id INT AUTO_INCREMENT PRIMARY KEY,\n        name VARCHAR(255) NOT NULL,\n        qty INT NOT NULL DEFAULT 0\n    )\n    \"\"\",\n)",
-            url = db_url
+            "-- Migration 0001_initial for {name} (MySQL)\n\
+            CREATE TABLE IF NOT EXISTS items (\n    \
+                id INT AUTO_INCREMENT PRIMARY KEY,\n    \
+                name VARCHAR(255) NOT NULL,\n    \
+                qty INT NOT NULL DEFAULT 0,\n    \
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n\
+            );\n"
+        ),
+        "duckdb" => format!(
+            "-- Migration 0001_initial for {name} (DuckDB Analytical Engine)\n\
+            CREATE TABLE IF NOT EXISTS analytics_events (\n    \
+                id VARCHAR PRIMARY KEY,\n    \
+                event_name VARCHAR NOT NULL,\n    \
+                user_id VARCHAR NOT NULL,\n    \
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n\
+            );\n"
+        ),
+        "clickhouse" => format!(
+            "-- Migration 0001_initial for {name} (ClickHouse Column Store)\n\
+            CREATE TABLE IF NOT EXISTS analytics_events (\n    \
+                event_date Date DEFAULT toDate(now()),\n    \
+                event_name String,\n    \
+                user_id String,\n    \
+                value UInt64\n\
+            ) ENGINE = MergeTree() ORDER BY (event_date, event_name);\n"
+        ),
+        "mongodb" => format!(
+            "// NoSQL Document collection initialization for {name}\n\
+            // Collection: items\n\
+            // Schema validation or index setup can be specified here.\n"
+        ),
+        "redis" => format!(
+            "# NoSQL Key-Value schema notes for {name}\n\
+            # Key pattern: items:{{item_id}}\n"
         ),
         _ => format!(
-            "app.set_database(\n    \"{url}\",\n    pragmas=[\"journal_mode=WAL\"],\n    init_sql=\"\"\"\n    CREATE TABLE IF NOT EXISTS items (\n        id INTEGER PRIMARY KEY AUTOINCREMENT,\n        name TEXT NOT NULL,\n        qty INTEGER NOT NULL DEFAULT 0\n    )\n    \"\"\",\n)",
-            url = db_url
+            "-- Migration 0001_initial for {name} (SQLite)\n\
+            CREATE TABLE IF NOT EXISTS items (\n    \
+                id INTEGER PRIMARY KEY AUTOINCREMENT,\n    \
+                name TEXT NOT NULL,\n    \
+                qty INTEGER NOT NULL DEFAULT 0,\n    \
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP\n\
+            );\n"
         ),
-    };
-    format!(
-        r#""""JustAPI application — {name}
+    }
+}
 
-Database backend: {kind} (URL: {url})
+/// Generate `app/main.py` for a scaffolded project, wired to the chosen DB dialect and API protocol.
+fn scaffold_main_py(name: &str, db_kind: &str, db_url: &str, api_type: &str) -> String {
+    // 1. GraphQL API Protocol template
+    if api_type == "graphql" {
+        return format!(
+            r#""""JustAPI application — {name}
+
+API Architecture: GraphQL (GraphiQL Playground at /graphql)
+Database Backend: {db_kind} (URL: {db_url})
 """
-from justapi import JustAPIApp, Database
+from justapi import JustAPIApp, Schema, HTTPException
 
-app = JustAPIApp()
+app = JustAPIApp(title="{name}", version="0.1.0")
 
-# Wire the database. `app.db` is available inside handlers once the server runs.
-{dbsetup}
-
-
-@app.get("/items")
-def list_items(request):
-    # Runs entirely in Rust (GIL released) with bound parameters.
-    return app.db.query("SELECT * FROM items ORDER BY id")
+# Mount built-in GraphQL route handler (GraphiQL UI + execution engine)
+app.graphql(path="/graphql")
 
 
-@app.post("/items")
-def add_item(request):
-    data = request.json()
-    app.db.execute(
-        "INSERT INTO items (name, qty) VALUES (?, ?)",
-        [data.get("name"), data.get("qty", 0)],
-    )
-    return {{"ok": True}}
+@app.get("/health")
+def health(request):
+    return {{"status": "ok", "app": "{name}", "api": "graphql", "endpoint": "/graphql"}}
 
 
 @app.get("/")
 def root(request):
-    return {{"message": "Hello from {name}!", "db": "{kind}"}}
-"#,
-        name = name,
-        kind = db_kind,
-        url = db_url,
-        dbsetup = db_setup,
+    return {{
+        "message": "Welcome to {name} GraphQL API!",
+        "graphiql_playground": "/graphql",
+        "database": "{db_kind}",
+    }}
+"#
+        );
+    }
+
+    // 2. gRPC / Protobuf RPC Protocol template
+    if api_type == "grpc" {
+        return format!(
+            r#""""JustAPI application — {name}
+
+API Architecture: gRPC / Protobuf RPC Protocol
+Database Backend: {db_kind} (URL: {db_url})
+"""
+from justapi import JustAPIApp, Schema, HTTPException
+from pydantic import Field
+
+app = JustAPIApp(title="{name}", version="0.1.0")
+
+
+class RPCRequest(Schema):
+    method: str = Field(..., description="RPC method to invoke")
+    params: dict = Field(default_factory=dict, description="Method payload")
+
+
+@app.post("/rpc", body_schema=RPCRequest)
+def handle_rpc(request):
+    """High-throughput RPC handler."""
+    data = request.json()
+    method = data.get("method")
+    params = data.get("params", {{}})
+    return {{
+        "status": "OK",
+        "method": method,
+        "result": f"Executed RPC method '{{method}}'",
+        "payload": params,
+    }}
+
+
+@app.get("/health")
+def health(request):
+    return {{"status": "ok", "app": "{name}", "api": "grpc", "endpoint": "/rpc"}}
+
+
+@app.get("/")
+def root(request):
+    return {{"message": "Welcome to {name} gRPC/RPC API!", "endpoint": "/rpc"}}
+"#
+        );
+    }
+
+    // 3. JSON-RPC 2.0 Protocol template
+    if api_type == "jsonrpc" {
+        return format!(
+            r#""""JustAPI application — {name}
+
+API Architecture: JSON-RPC 2.0 Protocol
+Database Backend: {db_kind} (URL: {db_url})
+"""
+from justapi import JustAPIApp, Schema, HTTPException
+from pydantic import Field
+
+app = JustAPIApp(title="{name}", version="0.1.0")
+
+
+class JSONRPCRequest(Schema):
+    jsonrpc: str = Field("2.0", description="Protocol version")
+    method: str = Field(..., description="Method name")
+    params: list | dict = Field(default_factory=list, description="Method arguments")
+    id: int | str = Field(1, description="Request identifier")
+
+
+@app.post("/jsonrpc", body_schema=JSONRPCRequest)
+def handle_jsonrpc(request):
+    """JSON-RPC 2.0 protocol endpoint."""
+    req = request.json()
+    method = req.get("method")
+    req_id = req.get("id", 1)
+
+    if method == "ping":
+        return {{"jsonrpc": "2.0", "result": "pong", "id": req_id}}
+    elif method == "echo":
+        return {{"jsonrpc": "2.0", "result": req.get("params"), "id": req_id}}
+    else:
+        return {{
+            "jsonrpc": "2.0",
+            "error": {{"code": -32601, "message": f"Method '{{method}}' not found"}},
+            "id": req_id,
+        }}
+
+
+
+@app.get("/health")
+def health(request):
+    return {{"status": "ok", "app": "{name}", "api": "jsonrpc", "endpoint": "/jsonrpc"}}
+
+
+@app.get("/")
+def root(request):
+    return {{"message": "Welcome to {name} JSON-RPC 2.0 API!", "endpoint": "/jsonrpc"}}
+"#
+        );
+    }
+
+    // 4. REST API Protocol (Default) — Specialized per DB backend
+    if db_kind == "duckdb" {
+        return format!(
+            r#""""JustAPI application — {name}
+
+Database Backend: DuckDB Analytical Engine (URL: {db_url})
+API Architecture: REST
+"""
+from justapi import JustAPIApp, Schema, HTTPException
+from pydantic import Field
+import duckdb
+
+app = JustAPIApp(title="{name}", version="0.1.0")
+
+# Wire DuckDB analytical engine
+conn = duckdb.connect("{name}.duckdb")
+conn.execute("""
+CREATE TABLE IF NOT EXISTS analytics_events (
+    id VARCHAR PRIMARY KEY,
+    event_name VARCHAR NOT NULL,
+    user_id VARCHAR NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+""")
+
+
+class EventCreate(Schema):
+    event_name: str = Field(..., min_length=1, description="Event name")
+    user_id: str = Field(..., min_length=1, description="User ID")
+
+
+@app.get("/health")
+def health(request):
+    return {{"status": "ok", "app": "{name}", "database": "duckdb"}}
+
+
+@app.get("/events")
+def list_events(request):
+    """Query analytical events from DuckDB."""
+    rel = conn.execute("SELECT * FROM analytics_events ORDER BY created_at DESC LIMIT 100")
+    cols = [d[0] for d in rel.description]
+    return [dict(zip(cols, row)) for row in rel.fetchall()]
+
+
+@app.post("/events", body_schema=EventCreate)
+def log_event(request):
+    """Insert event into DuckDB analytical store."""
+    import uuid
+    data = request.json()
+    event_id = str(uuid.uuid4())
+    conn.execute(
+        "INSERT INTO analytics_events (id, event_name, user_id) VALUES (?, ?, ?)",
+        [event_id, data["event_name"], data["user_id"]],
+    )
+    return {{"message": "Event logged", "event_id": event_id}}
+
+
+@app.get("/")
+def root(request):
+    return {{"message": "Welcome to {name} Analytics API (DuckDB OLAP)!", "docs": "/docs"}}
+"#
+        );
+    }
+
+    if db_kind == "clickhouse" {
+        return format!(
+            r#""""JustAPI application — {name}
+
+Database Backend: ClickHouse Columnar Database (URL: {db_url})
+API Architecture: REST
+"""
+from justapi import JustAPIApp, Schema, HTTPException
+from pydantic import Field
+
+app = JustAPIApp(title="{name}", version="0.1.0")
+
+
+class EventPayload(Schema):
+    event_name: str = Field(..., description="Event name")
+    user_id: str = Field(..., description="User ID")
+    value: int = Field(1, description="Event metric value")
+
+
+@app.get("/health")
+def health(request):
+    return {{"status": "ok", "app": "{name}", "database": "clickhouse"}}
+
+
+@app.post("/analytics/events", body_schema=EventPayload)
+def track_event(request):
+    """Track high-throughput metric event for ClickHouse."""
+    data = request.json()
+    return {{"status": "queued", "event": data}}
+
+
+@app.get("/")
+def root(request):
+    return {{"message": "Welcome to {name} ClickHouse Analytics API!", "docs": "/docs"}}
+"#
+        );
+    }
+
+    if db_kind == "mongodb" {
+        return format!(
+            r#""""JustAPI application — {name}
+
+Database backend: NoSQL MongoDB (URL: {db_url})
+API Architecture: REST
+"""
+from justapi import JustAPIApp, Schema, HTTPException
+from pydantic import Field
+from pymongo import MongoClient
+
+app = JustAPIApp(title="{name}", version="0.1.0")
+
+# Wire MongoDB connection
+mongo_client = MongoClient("{db_url}")
+db = mongo_client.get_database()
+items_col = db["items"]
+
+
+class ItemCreate(Schema):
+    name: str = Field(..., min_length=1, description="Item name")
+    qty: int = Field(0, ge=0, description="Quantity in stock")
+
+
+@app.get("/health")
+def health(request):
+    return {{"status": "ok", "app": "{name}", "database": "mongodb"}}
+
+
+@app.get("/items")
+def list_items(request):
+    """List all documents from MongoDB collection."""
+    return list(items_col.find({{}}, {{"_id": 0}}))
+
+
+@app.post("/items", body_schema=ItemCreate)
+def create_item(request):
+    """Create a new document in MongoDB."""
+    data = request.json()
+    items_col.insert_one(data.copy())
+    return {{"message": "Document created", "item": data}}
+
+
+@app.get("/")
+def root(request):
+    return {{"message": "Welcome to {name} API (MongoDB NoSQL)!", "docs": "/docs"}}
+"#
+        );
+    }
+
+    if db_kind == "redis" {
+        return format!(
+            r#""""JustAPI application — {name}
+
+Database backend: NoSQL Redis (URL: {db_url})
+API Architecture: REST
+"""
+from justapi import JustAPIApp, Schema, HTTPException
+from pydantic import Field
+import redis
+
+app = JustAPIApp(title="{name}", version="0.1.0")
+
+# Wire Redis client connection
+r = redis.Redis.from_url("{db_url}", decode_responses=True)
+
+
+class KeyValuePayload(Schema):
+    key: str = Field(..., min_length=1, description="Storage key")
+    value: str = Field(..., description="Value to store")
+
+
+@app.get("/health")
+def health(request):
+    return {{"status": "ok", "app": "{name}", "database": "redis"}}
+
+
+@app.get("/kv/{{key}}")
+def get_key(request, key: str):
+    """Get value by key from Redis."""
+    val = r.get(key)
+    if val is None:
+        raise HTTPException(status_code=404, detail=f"Key '{{key}}' not found")
+    return {{"key": key, "value": val}}
+
+
+@app.post("/kv", body_schema=KeyValuePayload)
+def set_key(request):
+    """Set key-value pair in Redis."""
+    data = request.json()
+    r.set(data["key"], data["value"])
+    return {{"message": "Stored in Redis", "key": data["key"], "value": data["value"]}}
+
+
+@app.get("/")
+def root(request):
+    return {{"message": "Welcome to {name} API (Redis NoSQL)!", "docs": "/docs"}}
+"#
+        );
+    }
+
+    let (db_setup, insert_sql, select_sql, delete_sql) = match db_kind {
+        "postgres" => (
+            format!(
+                "app.set_database(\n    \"{db_url}\",\n    init_sql=\"\"\"\n    CREATE TABLE IF NOT EXISTS items (\n        id SERIAL PRIMARY KEY,\n        name TEXT NOT NULL,\n        qty INT NOT NULL DEFAULT 0\n    )\n    \"\"\",\n)"
+            ),
+            "INSERT INTO items (name, qty) VALUES ($1, $2)",
+            "SELECT * FROM items WHERE id = $1",
+            "DELETE FROM items WHERE id = $1"
+        ),
+        "mysql" => (
+            format!(
+                "app.set_database(\n    \"{db_url}\",\n    init_sql=\"\"\"\n    CREATE TABLE IF NOT EXISTS items (\n        id INT AUTO_INCREMENT PRIMARY KEY,\n        name VARCHAR(255) NOT NULL,\n        qty INT NOT NULL DEFAULT 0\n    )\n    \"\"\",\n)"
+            ),
+            "INSERT INTO items (name, qty) VALUES (?, ?)",
+            "SELECT * FROM items WHERE id = ?",
+            "DELETE FROM items WHERE id = ?"
+        ),
+        _ => (
+            format!(
+                "app.set_database(\n    \"{db_url}\",\n    pragmas=[\"journal_mode=WAL\"],\n    init_sql=\"\"\"\n    CREATE TABLE IF NOT EXISTS items (\n        id INTEGER PRIMARY KEY AUTOINCREMENT,\n        name TEXT NOT NULL,\n        qty INTEGER NOT NULL DEFAULT 0\n    )\n    \"\"\",\n)"
+            ),
+            "INSERT INTO items (name, qty) VALUES (?, ?)",
+            "SELECT * FROM items WHERE id = ?",
+            "DELETE FROM items WHERE id = ?"
+        ),
+    };
+
+    format!(
+        r#""""JustAPI application — {name}
+
+Database backend: {db_kind} (URL: {db_url})
+"""
+from justapi import JustAPIApp, Schema, HTTPException
+from pydantic import Field
+
+app = JustAPIApp(title="{name}", version="0.1.0")
+
+# Wire database backend
+{db_setup}
+
+
+class ItemCreate(Schema):
+    name: str = Field(..., min_length=1, description="Item name")
+    qty: int = Field(0, ge=0, description="Quantity in stock")
+
+
+class ItemResponse(Schema):
+    id: int
+    name: str
+    qty: int
+
+
+@app.get("/health")
+def health(request):
+    return {{"status": "ok", "app": "{name}", "database": "{db_kind}"}}
+
+
+@app.get("/items")
+def list_items(request):
+    """List all items in the database (runs in Rust engine)."""
+    return app.db.query("SELECT * FROM items ORDER BY id")
+
+
+@app.get("/items/{{item_id}}")
+def get_item(request, item_id: int):
+    """Get a single item by ID."""
+    rows = app.db.query("{select_sql}", [item_id])
+    if not rows:
+        raise HTTPException(status_code=404, detail=f"Item {{item_id}} not found")
+    return rows[0]
+
+
+@app.post("/items", body_schema=ItemCreate)
+def create_item(request):
+    """Create a new item with request schema validation."""
+    data = request.json()
+    name = data["name"]
+    qty = data.get("qty", 0)
+
+    app.db.execute(
+        "{insert_sql}",
+        [name, qty],
+    )
+    return {{"message": "Item created successfully", "name": name, "qty": qty}}
+
+
+@app.delete("/items/{{item_id}}")
+def delete_item(request, item_id: int):
+    """Delete an item by ID."""
+    res = app.db.execute("{delete_sql}", [item_id])
+    return {{"message": f"Item {{item_id}} deleted", "affected": res.rows_affected}}
+
+
+@app.get("/")
+def root(request):
+    return {{"message": "Welcome to {name} API!", "database": "{db_kind}", "docs": "/docs"}}
+"#
     )
 }
 
@@ -436,6 +980,7 @@ fn scaffold_project(
     output: Option<PathBuf>,
     db_kind: &str,
     db_url: &str,
+    api_type: &str,
 ) -> anyhow::Result<()> {
     let project_dir = output.unwrap_or_else(|| PathBuf::from(name));
     if project_dir.exists() {
@@ -449,25 +994,50 @@ fn scaffold_project(
     std::fs::write(project_dir.join("app").join("__init__.py"), "")?;
     std::fs::write(
         project_dir.join("app").join("main.py"),
-        scaffold_main_py(name, db_kind, db_url),
+        scaffold_main_py(name, db_kind, db_url, api_type),
+    )?;
+    std::fs::write(
+        project_dir.join("migrations").join("0001_initial.sql"),
+        scaffold_migration_sql(name, db_kind),
     )?;
 
     let env = format!(
-        "# {name} configuration\nHOST=127.0.0.1\nPORT=8080\n# Database engine: {kind}\nDATABASE_URL={url}\n# SECRET_KEY=change-me\n",
+        "# {name} configuration\nHOST=127.0.0.1\nPORT=8080\nAPI_TYPE={api_type}\n# Database engine: {kind}\nDATABASE_URL={url}\n# SECRET_KEY=change-me\n",
         name = name,
+        api_type = api_type,
         kind = db_kind,
         url = db_url,
     );
     std::fs::write(project_dir.join(".env"), env)?;
 
-    std::fs::write(
-        project_dir.join("requirements.txt"),
-        "# Add your Python dependencies here\n# justapi is pre-installed with the runtime\n",
-    )?;
+    let reqs = match db_kind {
+        "duckdb" => "# Add Python dependencies here\njustapi\npydantic>=2.0\nduckdb>=0.9.0\n",
+        "clickhouse" => {
+            "# Add Python dependencies here\njustapi\npydantic>=2.0\nclickhouse-driver>=0.2.0\n"
+        }
+        "mongodb" => "# Add Python dependencies here\njustapi\npydantic>=2.0\npymongo>=4.0\n",
+        "redis" => "# Add Python dependencies here\njustapi\npydantic>=2.0\nredis>=5.0\n",
+        _ => "# Add Python dependencies here\njustapi\npydantic>=2.0\n",
+    };
+    std::fs::write(project_dir.join("requirements.txt"), reqs)?;
 
     let readme = format!(
-        "# {name}\n\nA JustAPI application (database backend: {kind}).\n\n## Quick start\n\n```bash\njustapi create {name} --db {kind}   # or: justapi new {name}\ncd {dir}\njustapi serve\n```\n\n## Database\n\nConnection: `{url}`\n\n```bash\n# Run migrations\njustapi db migrate --url \"{url}\"\n\n# Start with hot reload\njustapi serve --reload\n```\n",
+        "# {name}\n\n\
+        A modern high-performance JustAPI application powered by Rust (Protocol: `{api_type}`, Database: `{kind}`).\n\n\
+        ## Quick start\n\n\
+        ```bash\n\
+        cd {dir}\n\
+        justapi serve --reload\n\
+        ```\n\n\
+        Open http://localhost:8080/docs for interactive OpenAPI documentation.\n\n\
+        ## Database & Connection\n\n\
+        Connection string: `{url}`\n\n\
+        ```bash\n\
+        # Start server with hot reload\n\
+        justapi serve --reload\n\
+        ```\n",
         name = name,
+        api_type = api_type,
         kind = db_kind,
         dir = project_dir.display(),
         url = db_url,
@@ -476,18 +1046,56 @@ fn scaffold_project(
 
     std::fs::write(
         project_dir.join(".gitignore"),
-        "*.pyc\n__pycache__/\n.env\n*.egg-info/\ndist/\nbuild/\n*.db\n",
+        "*.pyc\n__pycache__/\n.env\n*.egg-info/\ndist/\nbuild/\n*.db\n*.duckdb\n",
     )?;
 
     std::fs::write(
         project_dir.join("Dockerfile"),
-        "FROM python:3.12-slim\nWORKDIR /app\nCOPY requirements.txt .\nRUN pip install justapi\nCOPY . .\nEXPOSE 8080\nCMD [\"justapi\", \"serve\", \"--host\", \"0.0.0.0\", \"--port\", \"8080\"]\n",
+        "FROM python:3.12-slim\n\
+        WORKDIR /app\n\
+        COPY requirements.txt .\n\
+        RUN pip install --no-cache-dir -r requirements.txt\n\
+        COPY . .\n\
+        EXPOSE 8080\n\
+        ENV HOST=0.0.0.0 PORT=8080\n\
+        CMD [\"justapi\", \"serve\", \"--host\", \"0.0.0.0\", \"--port\", \"8080\"]\n",
     )?;
 
-    println!("✅ Created new JustAPI project '{}' (database: {})", name, db_kind);
+    std::fs::write(
+        project_dir.join("docker-compose.otel.yml"),
+        format!(
+            "version: '3.8'\n\n\
+            services:\n  \
+              jaeger:\n    \
+                image: jaegertracing/all-in-one:latest\n    \
+                ports:\n      \
+                  - \"16686:16686\" # Jaeger UI\n      \
+                  - \"4317:4317\"   # OTLP gRPC receiver\n    \
+                environment:\n      \
+                  - COLLECTOR_OTLP_ENABLED=true\n\n  \
+              prometheus:\n    \
+                image: prom/prometheus:latest\n    \
+                ports:\n      \
+                  - \"9090:9090\"\n\n  \
+              app:\n    \
+                build: .\n    \
+                ports:\n      \
+                  - \"8080:8080\"\n    \
+                environment:\n      \
+                  - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317\n      \
+                  - OTEL_SERVICE_NAME={name}\n",
+            name = name
+        ),
+    )?;
+
+    println!(
+        "✨ Created new JustAPI project '{}' (API: {}, database: {})",
+        name, api_type, db_kind
+    );
+    println!("   └─ OpenTelemetry observability compose file: docker-compose.otel.yml");
     println!();
     println!("  cd {}", project_dir.display());
-    println!("  justapi serve");
+    println!("  justapi serve --reload");
     Ok(())
 }
 
@@ -1143,13 +1751,16 @@ async fn run() -> anyhow::Result<()> {
             Ok(())
         }
         Commands::New { name, output } => {
-            // Default scaffold: SQLite (zero-config).
-            scaffold_project(&name, output, "sqlite", "sqlite://app.db")
+            let (kind, url) = resolve_scaffold_db(&name, None, None)?;
+            let api_type = prompt_api_type_selection(&name);
+            scaffold_project(&name, output, &kind, &url, &api_type)
         }
-        Commands::Create { name, output, db, db_url } => {
-            let (kind, url) = resolve_scaffold_db(&db, db_url)?;
-            scaffold_project(&name, output, &kind, &url)
+        Commands::Create { name, output, db, db_url, api_type } => {
+            let (kind, url) = resolve_scaffold_db(&name, db.as_deref(), db_url)?;
+            let proto = api_type.unwrap_or_else(|| prompt_api_type_selection(&name));
+            scaffold_project(&name, output, &kind, &url, &proto)
         }
+
         Commands::Profile { addr, duration, connections, output } => {
             println!("🔬 JustAPI Profiler");
             println!("  Target:       {addr}");
