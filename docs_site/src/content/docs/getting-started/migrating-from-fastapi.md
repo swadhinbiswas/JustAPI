@@ -1,6 +1,7 @@
 ---
 title: Migrating from FastAPI
-description: How to switch your existing FastAPI project to JustAPI for 20x performance with minimal code changes.
+description: Switch your existing FastAPI project to JustAPI — the ultimate FastAPI alternative — for 20x performance with minimal code changes. Drop-in FastAPI replacement.
+keywords: [migrate from FastAPI, FastAPI to JustAPI, FastAPI replacement, FastAPI alternative migration, switch from FastAPI, Python web framework migration]
 ---
 
 JustAPI is engineered as a **drop-in replacement for FastAPI**. In most cases, migration is as simple as changing imports.

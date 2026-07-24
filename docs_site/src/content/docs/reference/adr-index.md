@@ -1,6 +1,7 @@
 ---
 title: ADR Index
-description: Architecture Decision Records — key decisions that shaped JustAPI.
+description: Architecture Decision Records — key decisions that shaped JustAPI, a high-performance FastAPI alternative built in Rust.
+keywords: architecture decision records, ADR, FastAPI alternative, Rust web framework, technical decisions
 ---
 
 JustAPI documents significant architectural decisions as Architecture Decision Records (ADRs) in `DECISIONS.md`.

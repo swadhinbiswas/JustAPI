@@ -1,6 +1,7 @@
 ---
 title: LLM Serving API
-description: OpenAI-compatible API endpoints for LLM inference.
+description: OpenAI-compatible API endpoints for LLM inference with JustAPI — a high-performance FastAPI alternative built in Rust.
+keywords: LLM serving API, OpenAI compatible, FastAPI alternative, Rust web framework, inference API
 ---
 
 When the `inference` feature is enabled, JustAPI exposes an OpenAI-compatible API for LLM serving.

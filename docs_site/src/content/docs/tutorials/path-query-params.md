@@ -1,6 +1,7 @@
 ---
 title: Path & Query Parameters
-description: Declare and type-validate path and query parameters in JustAPI.
+description: Declare and type-validate path and query parameters in JustAPI, the Rust-powered FastAPI alternative.
+keywords: path parameters, query parameters, URL params, type validation, JustAPI routing, FastAPI alternative
 ---
 
 Path and query parameters let you extract variables from the HTTP request URL. JustAPI handles type conversion and validation automatically using Python type hints.

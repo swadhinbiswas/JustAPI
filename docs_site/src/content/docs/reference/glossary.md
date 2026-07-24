@@ -1,6 +1,7 @@
 ---
 title: Glossary
-description: Key terms and concepts used throughout the JustAPI documentation.
+description: Key terms and concepts used throughout the JustAPI documentation for a high-performance FastAPI alternative built in Rust.
+keywords: glossary, terminology, FastAPI alternative, Rust web framework, JustAPI concepts
 ---
 
 ## A

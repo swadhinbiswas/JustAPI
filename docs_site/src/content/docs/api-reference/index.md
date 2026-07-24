@@ -1,6 +1,7 @@
 ---
 title: API Reference Overview
-description: Complete reference for all JustAPI classes, functions, and parameters.
+description: "API reference overview for JustAPI, the FastAPI alternative — covers all classes, functions, and parameters."
+keywords: [api reference, fastapi alternative, justapi, framework documentation]
 ---
 
 The API Reference covers every public class, function, and configuration option in the JustAPI framework.

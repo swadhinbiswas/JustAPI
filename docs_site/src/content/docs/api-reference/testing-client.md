@@ -1,6 +1,7 @@
 ---
 title: Testing Client API
-description: Reference for the in-process HTTP test client.
+description: "API reference for the test client in JustAPI, the FastAPI alternative — in-process HTTP test client for testing routes without a server."
+keywords: [testing client, fastapi alternative, justapi, test client, justapitestclient, integration testing]
 ---
 
 ## `JustAPITestClient`

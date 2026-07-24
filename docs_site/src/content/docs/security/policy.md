@@ -1,6 +1,7 @@
 ---
 title: Security Policy
-description: Supported versions, vulnerability reporting, and disclosure process.
+description: Supported versions, vulnerability reporting, and disclosure process for JustAPI — a high-performance FastAPI alternative built in Rust.
+keywords: security policy, vulnerability reporting, FastAPI alternative, Rust web framework, JustAPI security
 ---
 
 ## Supported Versions

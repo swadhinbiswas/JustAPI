@@ -1,6 +1,7 @@
 ---
 title: Session API (Agent System)
-description: Reference for Rust-backed agent session state management.
+description: "API reference for session management in JustAPI, the FastAPI alternative — Rust-backed agent session state management."
+keywords: [session, fastapi alternative, justapi, session management, agent system, state management]
 ---
 
 ## `Session` Object

@@ -1,6 +1,7 @@
 ---
 title: Middleware
-description: Intercept requests and responses with middleware for logging, timing, CORS, and custom processing.
+description: Intercept requests and responses with JustAPI middleware for logging, timing, CORS, and custom processing — a FastAPI alternative built on Rust.
+keywords: middleware, CORS, request interception, JustAPI, FastAPI alternative, Rust middleware
 ---
 
 Middleware lets you run code before and after every request. JustAPI supports the same middleware pattern as FastAPI and Starlette.

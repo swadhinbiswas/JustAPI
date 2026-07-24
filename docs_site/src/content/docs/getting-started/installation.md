@@ -1,6 +1,7 @@
 ---
 title: Installation Guide
-description: How to install JustAPI via pip, cargo, or building from source.
+description: Install JustAPI — the fastest FastAPI alternative — via pip, uv, cargo, or build from source. JustAPI is a Rust-powered Python web framework with 700k+ RPS.
+keywords: [JustAPI, FastAPI alternative, install JustAPI, pip install, uv install, Python web framework, Rust Python, FastAPI replacement]
 ---
 
 ## Prerequisites
@@ -21,6 +22,34 @@ To install optional features (Pydantic v2, Jinja2, XML support):
 ```bash
 pip install "justapi[full]"
 ```
+
+## Install via uv
+
+[uv](https://docs.astral.sh/uv/) is a fast Python package manager written in Rust. Install JustAPI with uv:
+
+```bash
+uv pip install justapi
+```
+
+With optional features:
+
+```bash
+uv pip install "justapi[full]"
+```
+
+## Run without Installing (via uvx)
+
+[uvx](https://docs.astral.sh/uv/guides/tools/) lets you run JustAPI CLI commands without a permanent install:
+
+```bash
+# Scaffold a new project (no install needed)
+uvx justapi create my_app
+
+# Run the dev server
+uvx justapi serve --reload
+```
+
+This is ideal for CI pipelines, quick prototyping, and ephemeral environments.
 
 ### Verify Installation
 

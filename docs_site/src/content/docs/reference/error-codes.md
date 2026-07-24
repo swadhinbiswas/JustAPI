@@ -1,6 +1,7 @@
 ---
 title: Error Codes
-description: JustAPI error code catalog and troubleshooting guide.
+description: JustAPI error code catalog and troubleshooting guide for a high-performance FastAPI alternative built in Rust.
+keywords: error codes, troubleshooting, FastAPI alternative, Rust web framework, debugging
 ---
 
 ## CLI Error Codes

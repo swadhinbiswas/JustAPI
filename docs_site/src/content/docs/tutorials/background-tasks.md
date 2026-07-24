@@ -1,6 +1,7 @@
 ---
 title: Background Tasks
-description: Execute tasks after sending the response using BackgroundTasks.
+description: Execute tasks after sending the response using BackgroundTasks in JustAPI — a FastAPI alternative built on Rust.
+keywords: background tasks, BackgroundTasks, async processing, JustAPI, FastAPI alternative
 ---
 
 Background tasks let you run code after the HTTP response has been sent, without blocking the client. This is useful for operations like sending emails, processing uploads, or triggering webhooks.

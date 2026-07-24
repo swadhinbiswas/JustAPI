@@ -1,6 +1,7 @@
 ---
 title: Metrics & Monitoring
-description: Export Prometheus metrics and monitor your JustAPI application.
+description: Export Prometheus metrics and monitor your JustAPI application — a high-performance FastAPI alternative built in Rust.
+keywords: Prometheus metrics, monitoring, FastAPI alternative, Rust web framework, observability
 ---
 
 ## Metrics Endpoint

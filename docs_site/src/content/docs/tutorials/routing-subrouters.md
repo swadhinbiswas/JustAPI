@@ -1,6 +1,7 @@
 ---
 title: Routing & Sub-routers
-description: Organize your API with modular routers and route groups.
+description: Organize your API with modular routers and route groups in JustAPI — a FastAPI alternative with Rust-powered routing.
+keywords: routing, sub-routers, APIRouter, modular routes, JustAPI, FastAPI alternative, radix-trie
 ---
 
 JustAPI's routing system uses a radix-trie (via `matchit`) for O(1) route matching. Routes are registered with decorators and can be organized across multiple files using `APIRouter`.

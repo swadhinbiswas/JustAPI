@@ -1,6 +1,7 @@
 ---
 title: Response Classes
-description: Return responses with different content types, status codes, and streaming capabilities.
+description: "API reference for response classes in JustAPI, the FastAPI alternative — return responses with different content types, status codes, and streaming."
+keywords: [responses, fastapi alternative, justapi, jsonresponse, streamingresponse, http response]
 ---
 
 JustAPI provides several response classes optimized for zero-copy data transfer from Rust to Python.

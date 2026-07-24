@@ -1,6 +1,7 @@
 ---
 title: Database Integration
-description: Connect to SQL and NoSQL databases with JustAPI's Rust-native connection pool.
+description: Connect to SQL and NoSQL databases with JustAPI's Rust-native connection pool — a FastAPI alternative for high-performance data access.
+keywords: database integration, SQL, NoSQL, connection pool, JustAPI, FastAPI alternative, sqlx, PostgreSQL, SQLite
 ---
 
 JustAPI provides a built-in database connection pool manager (`app.db`) that executes queries in Rust via `sqlx`, keeping the GIL released for maximum throughput.

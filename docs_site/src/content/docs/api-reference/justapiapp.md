@@ -1,6 +1,7 @@
 ---
 title: JustAPIApp
-description: The core application class — register routes, middleware, plugins, and run the server.
+description: "API reference for JustAPIApp — the core application class of the FastAPI alternative JustAPI. Register routes, middleware, plugins, and run the server."
+keywords: [justapiapp, fastapi alternative, justapi, application class, route registration, middleware]
 ---
 
 `JustAPIApp` is the central class of any JustAPI application. It manages route registration, middleware chains, plugin lifecycle, database connections, and server startup.

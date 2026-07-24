@@ -1,6 +1,7 @@
 ---
 title: Rust Core Deep Dive
-description: How the Rust runtime handles networking, routing, middleware, and serialization.
+description: How the Rust runtime handles networking, routing, middleware, and serialization in JustAPI, the high-performance FastAPI alternative.
+keywords: JustAPI, FastAPI alternative, Rust core, runtime, networking, routing, middleware, serialization
 ---
 
 This guide explores the internals of `justapi-core`, the Rust engine that powers JustAPI.

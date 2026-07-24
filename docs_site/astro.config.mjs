@@ -2,12 +2,15 @@ import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import sitemap from '@astrojs/sitemap';
 
+const site = 'https://justapi.dev';
+
 export default defineConfig({
-  site: 'https://justapi.dev',
+  site,
+  trailingSlash: 'always',
   integrations: [
     starlight({
-      title: 'JustAPI',
-      description: 'Rust-powered, FastAPI-class web framework for Python. 700k+ RPS, zero-GIL execution.',
+      title: 'JustAPI — FastAPI Alternative | Rust-Powered Python Web Framework',
+      description: 'Rust-powered Python web framework — a drop-in replacement for FastAPI with 20x performance, zero-GIL execution, and 700k+ RPS. The fastest FastAPI alternative for production Python APIs.',
       logo: {
         src: './src/assets/logo.svg',
         replacesTitle: false,
@@ -20,21 +23,77 @@ export default defineConfig({
         baseUrl: 'https://github.com/swadhinbiswas/JustAPI/edit/main/docs_site',
       },
       head: [
+        { tag: 'meta', attrs: { charset: 'utf-8' } },
+        { tag: 'meta', attrs: { name: 'viewport', content: 'width=device-width, initial-scale=1' } },
+        { tag: 'meta', attrs: { name: 'generator', content: 'Astro v7 + Starlight' } },
+        { tag: 'meta', attrs: { name: 'robots', content: 'index, follow, max-snippet:-1, max-image-preview:large' } },
+        { tag: 'meta', attrs: { name: 'keywords', content: 'JustAPI, FastAPI alternative, FastAPI replacement, Python web framework, Rust web framework, high performance Python, async Python, zero-GIL, 700k RPS, API framework, FastAPI vs JustAPI, Python API server, Rust Python, PyO3, ASGI alternative, uvicorn alternative, web framework comparison, Python REST API, production Python API' } },
+        { tag: 'link', attrs: { rel: 'canonical', href: site } },
+        { tag: 'meta', attrs: { property: 'og:type', content: 'website' } },
+        { tag: 'meta', attrs: { property: 'og:url', content: site } },
+        { tag: 'meta', attrs: { property: 'og:site_name', content: 'JustAPI' } },
+        { tag: 'meta', attrs: { property: 'og:title', content: 'JustAPI — Rust-Powered Python Web Framework | FastAPI Alternative' } },
+        { tag: 'meta', attrs: { property: 'og:description', content: 'The fastest FastAPI alternative. Drop-in replacement for FastAPI with Rust-native performance — 700k+ RPS, zero-GIL execution, automatic OpenAPI docs. Switch from FastAPI with one import change.' } },
+        { tag: 'meta', attrs: { property: 'og:image', content: 'https://justapi.dev/og-image.png' } },
+        { tag: 'meta', attrs: { property: 'og:image:width', content: '1200' } },
+        { tag: 'meta', attrs: { property: 'og:image:height', content: '630' } },
+        { tag: 'meta', attrs: { property: 'og:image:alt', content: 'JustAPI — Rust-Powered Python Web Framework, the fastest FastAPI alternative' } },
+        { tag: 'meta', attrs: { property: 'og:locale', content: 'en_US' } },
+        { tag: 'meta', attrs: { name: 'twitter:card', content: 'summary_large_image' } },
+        { tag: 'meta', attrs: { name: 'twitter:title', content: 'JustAPI — The Fastest FastAPI Alternative | Rust-Powered Python Framework' } },
+        { tag: 'meta', attrs: { name: 'twitter:description', content: 'Drop-in replacement for FastAPI with 20x throughput. Rust-native, zero-GIL, 700k+ RPS. Switch with one import change.' } },
+        { tag: 'meta', attrs: { name: 'twitter:image', content: 'https://justapi.dev/og-image.png' } },
         {
-          tag: 'meta',
-          attrs: { property: 'og:title', content: 'JustAPI — Rust-Powered Python Web Framework' },
-        },
-        {
-          tag: 'meta',
-          attrs: { property: 'og:description', content: 'The speed of Rust. The elegance of Python. A drop-in replacement for FastAPI engineered for extreme throughput.' },
-        },
-        {
-          tag: 'meta',
-          attrs: { property: 'og:image', content: 'https://justapi.dev/og-image.png' },
-        },
-        {
-          tag: 'meta',
-          attrs: { name: 'twitter:card', content: 'summary_large_image' },
+          tag: 'script',
+          attrs: { type: 'application/ld+json' },
+          content: JSON.stringify({
+            '@context': 'https://schema.org',
+            '@graph': [
+              {
+                '@type': 'WebSite',
+                '@id': `${site}/#website`,
+                url: site,
+                name: 'JustAPI',
+                description: 'Rust-powered Python web framework. A drop-in replacement for FastAPI with 20x performance.',
+                inLanguage: 'en-US',
+                publisher: { '@id': `${site}/#organization` },
+              },
+              {
+                '@type': 'Organization',
+                '@id': `${site}/#organization`,
+                name: 'JustAPI',
+                url: site,
+                logo: `${site}/logo.svg`,
+                description: 'JustAPI is a high-performance Python web framework built on a Rust runtime engine.',
+              },
+              {
+                '@type': 'SoftwareApplication',
+                '@id': `${site}/#software`,
+                name: 'JustAPI',
+                applicationCategory: 'WebApplication',
+                operatingSystem: 'Linux, macOS, Windows',
+                description: 'A high-performance Python web framework built on Rust. Drop-in FastAPI replacement with 700k+ RPS, zero-GIL execution, and native database, GraphQL, gRPC support.',
+                url: site,
+                downloadUrl: 'https://pypi.org/project/justapi/',
+                installUrl: 'https://pypi.org/project/justapi/',
+                softwareVersion: '2.0.0',
+                offers: {
+                  '@type': 'Offer',
+                  price: '0',
+                  priceCurrency: 'USD',
+                },
+                author: { '@id': `${site}/#organization` },
+              },
+              {
+                '@type': 'BreadcrumbList',
+                '@id': `${site}/#breadcrumb`,
+                itemListElement: [
+                  { '@type': 'ListItem', position: 1, name: 'Home', item: site },
+                  { '@type': 'ListItem', position: 2, name: 'Documentation', item: `${site}/getting-started/overview/` },
+                ],
+              },
+            ],
+          }),
         },
       ],
       sidebar: [
@@ -168,6 +227,10 @@ export default defineConfig({
         },
       ],
     }),
-    sitemap(),
+    sitemap({
+      changefreq: 'weekly',
+      priority: 0.7,
+      lastmod: new Date(),
+    }),
   ],
 });

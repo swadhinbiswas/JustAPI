@@ -1,6 +1,7 @@
 ---
 title: Cloudflare Pages Deployment
-description: Deploy your JustAPI documentation site to Cloudflare Pages.
+description: Deploy your JustAPI documentation site to Cloudflare Pages — fast static hosting for the FastAPI alternative.
+keywords: JustAPI, FastAPI alternative, Cloudflare Pages, deployment, documentation, static site
 ---
 
 This documentation site is built with Astro and Starlight, making it 100% static-site generator (SSG) compatible.

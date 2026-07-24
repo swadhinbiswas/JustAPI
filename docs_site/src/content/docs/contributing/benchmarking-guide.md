@@ -1,6 +1,7 @@
 ---
 title: Benchmarking Guide
-description: How to run and interpret JustAPI benchmarks.
+description: How to run and interpret JustAPI benchmarks — a high-performance FastAPI alternative built in Rust.
+keywords: benchmarking, performance testing, FastAPI alternative, Rust web framework, RPS
 ---
 
 ## Setup

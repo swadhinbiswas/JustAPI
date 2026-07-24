@@ -1,6 +1,7 @@
 ---
 title: Streaming Output
-description: Stream responses with Rust-side validation using @app.stream_json and StreamingResponse.
+description: Stream responses with Rust-side validation using @app.stream_json and StreamingResponse in JustAPI, the FastAPI alternative.
+keywords: JustAPI, FastAPI alternative, streaming, stream_json, StreamingResponse, Rust validation
 ---
 
 JustAPI supports two streaming approaches: the validated `@app.stream_json` and the flexible `StreamingResponse`.

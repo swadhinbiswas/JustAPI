@@ -1,6 +1,7 @@
 ---
 title: Documentation Guide
-description: How to contribute to the JustAPI documentation site.
+description: How to contribute to the JustAPI documentation site — a high-performance FastAPI alternative built in Rust.
+keywords: documentation guide, contribution, FastAPI alternative, Rust web framework, docs
 ---
 
 ## Tech Stack

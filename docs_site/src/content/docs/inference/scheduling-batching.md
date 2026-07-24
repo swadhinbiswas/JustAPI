@@ -1,6 +1,7 @@
 ---
 title: Scheduling & Batching
-description: Continuous batching and scheduling strategies for LLM inference.
+description: Continuous batching and scheduling strategies for LLM inference with JustAPI — a high-performance FastAPI alternative built in Rust.
+keywords: continuous batching, scheduling, LLM inference, FastAPI alternative, Rust web framework
 ---
 
 JustAPI's inference scheduler implements continuous batching, prefix caching, and disaggregated prefill/decode for maximum LLM throughput.

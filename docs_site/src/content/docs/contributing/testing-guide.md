@@ -1,6 +1,7 @@
 ---
 title: Testing Guide
-description: How to write and run tests for JustAPI.
+description: How to write and run tests for JustAPI — a high-performance FastAPI alternative built in Rust.
+keywords: testing guide, pytest, FastAPI alternative, Rust web framework, test automation
 ---
 
 ## Running Tests
@@ -14,6 +15,9 @@ cargo test -p justapi-core
 
 # Python tests
 pytest
+
+# With uv
+uv run pytest
 
 # Miri (unsafe validation)
 cargo +nightly miri test -p justapi-core

@@ -1,6 +1,7 @@
 ---
 title: Plugin System API
-description: Reference for extending JustAPI with Python and Rust plugins.
+description: "API reference for the plugin system in JustAPI, the FastAPI alternative — extend JustAPI with Python and Rust plugins."
+keywords: [plugins, fastapi alternative, justapi, plugin system, python plugins, rust plugins, extensibility]
 ---
 
 JustAPI's plugin system supports Python plugins (for flexibility) and Rust plugins (for maximum performance).

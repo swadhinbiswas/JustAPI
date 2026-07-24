@@ -1,6 +1,7 @@
 ---
 title: Background Tasks API
-description: Reference for post-response background task execution.
+description: "API reference for background tasks in JustAPI, the FastAPI alternative — post-response background task execution."
+keywords: [background tasks, fastapi alternative, justapi, backgroundtasks, async tasks, post-response]
 ---
 
 ## `BackgroundTasks` Object

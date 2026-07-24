@@ -1,6 +1,7 @@
 ---
 title: Overview & Core Philosophy
-description: Learn why JustAPI is built on Rust and how it delivers FastAPI compatibility with 20x performance.
+description: Learn why JustAPI — the fastest FastAPI alternative — is built on Rust and delivers FastAPI compatibility with 20x performance. 700k+ RPS, zero-GIL.
+keywords: [JustAPI, FastAPI alternative, FastAPI replacement, Rust Python web framework, high performance Python, Python API framework, drop-in FastAPI replacement]
 ---
 
 **JustAPI** is a high-performance Python web framework built on top of a multi-threaded **Rust runtime engine** (`justapi-core`).

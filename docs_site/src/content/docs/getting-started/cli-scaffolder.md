@@ -1,6 +1,7 @@
 ---
 title: Project Scaffolder CLI
-description: How to generate complete multi-database and multi-protocol project templates with zero boilerplate.
+description: Generate complete multi-database and multi-protocol project templates with zero boilerplate using JustAPI's CLI scaffolder — the FastAPI alternative for production Python.
+keywords: [JustAPI, FastAPI alternative, project scaffolder, Python project generator, CLI tool, Rust Python, web framework CLI]
 ---
 
 JustAPI features an interactive CLI project generator (`justapi create`) to scaffold complete applications with your choice of database and API architecture.
@@ -10,8 +11,11 @@ JustAPI features an interactive CLI project generator (`justapi create`) to scaf
 Ensure you have the CLI installed:
 
 ```bash
+# Via cargo
 cargo install justapi-cli
-justapi --version
+
+# Or via uvx (no permanent install)
+uvx justapi --version
 ```
 
 ## Interactive Mode
@@ -20,6 +24,9 @@ Run `justapi create` without arguments to launch the TTY interactive wizard:
 
 ```bash
 justapi create my_app
+
+# Or with uvx (no install needed)
+uvx justapi create my_app
 ```
 
 The wizard will prompt you to select:

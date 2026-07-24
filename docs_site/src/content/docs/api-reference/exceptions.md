@@ -1,6 +1,7 @@
 ---
 title: Exceptions & Error Handling API
-description: Reference for HTTPException, validation errors, and exception handlers.
+description: "API reference for exceptions and error handling in JustAPI, the FastAPI alternative — HTTPException, validation errors, and exception handlers."
+keywords: [exceptions, fastapi alternative, justapi, httpexception, error handling, validation errors]
 ---
 
 ## `HTTPException`

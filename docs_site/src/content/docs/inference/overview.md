@@ -1,6 +1,7 @@
 ---
 title: Inference Engine Overview
-description: JustAPI's native Rust inference engine for LLM serving.
+description: JustAPI's native Rust inference engine for LLM serving — a high-performance FastAPI alternative built in Rust.
+keywords: inference engine, LLM serving, FastAPI alternative, Rust web framework, machine learning
 ---
 
 JustAPI includes a Rust-native inference engine (`justapi-inference`) built on the [Candle](https://github.com/huggingface/candle) ML framework. It provides efficient LLM serving with continuous batching, PagedAttention KV-cache, prefix caching, and speculative decoding.

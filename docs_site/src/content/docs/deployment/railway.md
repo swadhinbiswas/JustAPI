@@ -1,6 +1,7 @@
 ---
 title: Railway
-description: Deploy JustAPI to Railway for zero-config cloud deployment.
+description: Deploy JustAPI to Railway for zero-config cloud deployment — the FastAPI alternative that deploys effortlessly.
+keywords: JustAPI, FastAPI alternative, Railway, zero-config, cloud deployment
 ---
 
 ## 1. Create `railway.json`

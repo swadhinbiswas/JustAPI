@@ -1,6 +1,7 @@
 ---
 title: Agent System (MCP Tools & Sessions)
-description: Build AI agents with native MCP tools, durable session state, and validated streaming.
+description: Build AI agents with native MCP tools, durable session state, and validated streaming in JustAPI, the FastAPI alternative built for AI.
+keywords: JustAPI, FastAPI alternative, AI agents, MCP tools, sessions, streaming, agent system
 ---
 
 JustAPI includes a first-class agent-native system that differentiates it from traditional web frameworks. It provides **MCP tools**, **durable sessions**, and **validated streaming** — all owned by Rust.

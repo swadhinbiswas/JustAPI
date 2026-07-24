@@ -1,6 +1,7 @@
 ---
 title: GPU & CUDA Configuration
-description: Configure GPU acceleration for LLM inference with CUDA.
+description: Configure GPU acceleration for LLM inference with CUDA on JustAPI — a high-performance FastAPI alternative built in Rust.
+keywords: GPU acceleration, CUDA, LLM inference, FastAPI alternative, Rust web framework
 ---
 
 > **Note:** GPU inference is feature-gated behind `cuda` and `real` features. Real GPU benchmarks are deferred to the 2.0.8 release (ADR-067). Structural CPU benchmarks pass.

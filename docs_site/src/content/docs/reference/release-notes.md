@@ -1,6 +1,7 @@
 ---
 title: Release Notes
-description: Version history and changelog for JustAPI.
+description: Version history and changelog for JustAPI — a high-performance FastAPI alternative built in Rust.
+keywords: release notes, changelog, version history, FastAPI alternative, Rust web framework
 ---
 
 ## 2.0.0 (2026-07-24)

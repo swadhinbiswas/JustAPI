@@ -1,6 +1,7 @@
 ---
 title: Fly.io
-description: Deploy JustAPI to Fly.io for global edge deployment.
+description: Deploy JustAPI to Fly.io for global edge deployment — the FastAPI alternative with edge computing support.
+keywords: JustAPI, FastAPI alternative, Fly.io, edge deployment, global deployment
 ---
 
 ## 1. Install flyctl

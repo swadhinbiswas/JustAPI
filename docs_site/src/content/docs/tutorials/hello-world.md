@@ -1,6 +1,6 @@
 ---
 title: Hello World in 2 Minutes
-description: Build and run your first JustAPI application from scratch.
+description: Build and run your first JustAPI application from scratch — the high-performance Rust-powered FastAPI alternative.
 ---
 
 This tutorial walks through creating a complete JustAPI application, step by step. By the end, you'll have a running API server with multiple endpoints.
@@ -28,7 +28,11 @@ def root(request):
 ## 2. Run It
 
 ```bash
+# Using Python directly
 python main.py
+
+# Or with UV (faster startup)
+uv run main.py
 ```
 
 Expected output:

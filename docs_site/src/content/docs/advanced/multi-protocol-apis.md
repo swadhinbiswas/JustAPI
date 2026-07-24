@@ -1,6 +1,7 @@
 ---
 title: Multi-Protocol APIs
-description: Serve REST, GraphQL, gRPC, and JSON-RPC from a single JustAPI application.
+description: Serve REST, GraphQL, gRPC, and JSON-RPC from a single JustAPI application — multi-protocol support no FastAPI alternative offers.
+keywords: JustAPI, FastAPI alternative, REST, GraphQL, gRPC, JSON-RPC, multi-protocol
 ---
 
 JustAPI supports four API protocols out of the box, all within a single application.

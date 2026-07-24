@@ -1,6 +1,7 @@
 ---
 title: First Steps with JustAPI
-description: Create your first API endpoint in under 2 minutes.
+description: Create your first API endpoint in under 2 minutes with JustAPI — the fastest FastAPI alternative. Rust-powered Python framework with 700k+ RPS.
+keywords: [JustAPI, FastAPI alternative, Python API, first API, Rust Python, web framework tutorial, FastAPI tutorial]
 ---
 
 This guide walks you through building and running your first JustAPI application from scratch.
@@ -36,6 +37,12 @@ Run directly using Python:
 
 ```bash
 python main.py
+```
+
+Or with uv:
+
+```bash
+uv run main.py
 ```
 
 You should see output similar to:
