@@ -1,0 +1,129 @@
+---
+import starlight from '@astrojs/starlight';
+---
+
+<div class="justapi-hero">
+  <div class="hero-content">
+    <h1 class="hero-gradient">JustAPI</h1>
+    <p class="hero-tagline">The speed of Rust. The elegance of Python.</p>
+    <p class="hero-subtitle">A drop-in replacement for FastAPI engineered for extreme throughput — <strong>700k+ RPS</strong>.</p>
+    <div class="hero-actions">
+      <a href="/getting-started/overview/" class="hero-button primary">Get Started</a>
+      <a href="https://github.com/swadhinbiswas/JustAPI" class="hero-button secondary">View on GitHub</a>
+    </div>
+  </div>
+  <div class="hero-benchmark">
+    <div class="bench-stat">
+      <span class="bench-value hero-gradient">701,234</span>
+      <span class="bench-label">Requests / Sec</span>
+    </div>
+    <div class="bench-stat">
+      <span class="bench-value hero-gradient">0.07 ms</span>
+      <span class="bench-label">p50 Latency</span>
+    </div>
+    <div class="bench-stat">
+      <span class="bench-value hero-gradient">0.19 ms</span>
+      <span class="bench-label">p99 Latency</span>
+    </div>
+  </div>
+</div>
+
+<style is:global>
+  .justapi-hero {
+    text-align: center;
+    padding: 4rem 1rem;
+    max-width: 900px;
+    margin: 0 auto;
+  }
+
+  .hero-content h1 {
+    font-size: 3.5rem;
+    font-weight: 800;
+    margin-bottom: 0.5rem;
+    line-height: 1.1;
+  }
+
+  .hero-tagline {
+    font-size: 1.5rem;
+    color: var(--sl-color-gray-2);
+    margin-bottom: 0.5rem;
+  }
+
+  .hero-subtitle {
+    font-size: 1.1rem;
+    color: var(--sl-color-gray-3);
+    margin-bottom: 2rem;
+    line-height: 1.6;
+  }
+
+  .hero-actions {
+    display: flex;
+    gap: 1rem;
+    justify-content: center;
+    margin-bottom: 3rem;
+    flex-wrap: wrap;
+  }
+
+  .hero-button {
+    display: inline-block;
+    padding: 0.75rem 2rem;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 1rem;
+    text-decoration: none;
+    transition: all 0.2s;
+  }
+
+  .hero-button.primary {
+    background: linear-gradient(135deg, #8b5cf6, #3b82f6);
+    color: white;
+  }
+
+  .hero-button.primary:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 20px rgba(139, 92, 246, 0.4);
+  }
+
+  .hero-button.secondary {
+    border: 1px solid var(--sl-color-gray-4);
+    color: var(--sl-color-gray-2);
+  }
+
+  .hero-button.secondary:hover {
+    border-color: var(--sl-color-accent);
+    color: var(--sl-color-accent-high);
+  }
+
+  .hero-benchmark {
+    display: flex;
+    justify-content: center;
+    gap: 3rem;
+    flex-wrap: wrap;
+  }
+
+  .bench-stat {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .bench-value {
+    font-size: 2rem;
+    font-weight: 800;
+  }
+
+  .bench-label {
+    font-size: 0.875rem;
+    color: var(--sl-color-gray-3);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-top: 0.25rem;
+  }
+
+  @media (max-width: 640px) {
+    .hero-content h1 { font-size: 2.5rem; }
+    .hero-tagline { font-size: 1.2rem; }
+    .hero-benchmark { gap: 1.5rem; }
+    .bench-value { font-size: 1.5rem; }
+  }
+</style>

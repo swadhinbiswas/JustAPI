@@ -10,6 +10,8 @@
   --sl-color-gray-5: #1f2937;
   --sl-color-gray-6: #111827;
   --sl-color-black: #0b0f19;
+  --sl-color-orange: #e6522c;
+  --sl-color-blue: #3b82f6;
 }
 
 [data-theme='dark'] {
@@ -22,6 +24,7 @@
   background: linear-gradient(135deg, #e6522c 0%, #8b5cf6 50%, #3b82f6 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
 
 .benchmark-card {
@@ -31,4 +34,108 @@
   background: rgba(17, 24, 39, 0.7);
   backdrop-filter: blur(12px);
   margin-bottom: 1.5rem;
+}
+
+.site-title {
+  font-weight: 700;
+}
+
+.content h2 {
+  margin-top: 2.5rem;
+  border-bottom: 1px solid var(--sl-color-gray-5);
+  padding-bottom: 0.5rem;
+}
+
+.content h3 {
+  margin-top: 2rem;
+}
+
+.content table {
+  font-size: 0.875rem;
+}
+
+.content th {
+  background: var(--sl-color-gray-6);
+  font-weight: 600;
+}
+
+.content td,
+.content th {
+  border-color: var(--sl-color-gray-5);
+}
+
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1.5rem;
+  margin: 2rem 0;
+}
+
+.feature-card {
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: 12px;
+  padding: 1.5rem;
+  background: var(--sl-color-gray-6);
+  transition: border-color 0.2s, transform 0.2s;
+}
+
+.feature-card:hover {
+  border-color: var(--sl-color-accent);
+  transform: translateY(-2px);
+}
+
+.feature-card h3 {
+  margin-top: 0;
+  font-size: 1.1rem;
+}
+
+.performance-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.performance-table th {
+  text-align: left;
+  padding: 0.75rem 1rem;
+}
+
+.performance-table td {
+  padding: 0.75rem 1rem;
+  text-align: right;
+}
+
+.performance-table td:first-child {
+  text-align: left;
+  font-weight: 600;
+}
+
+.performance-table .winner {
+  color: var(--sl-color-accent-high);
+  font-weight: 700;
+}
+
+code {
+  font-size: 0.85em;
+  border-radius: 4px;
+}
+
+pre {
+  border-radius: 8px;
+  border: 1px solid var(--sl-color-gray-5);
+}
+
+.starlight-aside {
+  border-radius: 8px;
+}
+
+.starlight-aside--note {
+  border-left-color: var(--sl-color-blue);
+}
+
+.starlight-aside--tip {
+  border-left-color: var(--sl-color-accent);
+}
+
+.starlight-aside--caution {
+  border-left-color: var(--sl-color-orange);
 }
