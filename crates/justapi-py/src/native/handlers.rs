@@ -729,7 +729,7 @@ where
             let (body_bytes, multipart_form_res) = if is_multipart {
                 let ct = content_type.unwrap();
                 match justapi_core::multipart::parse_multipart(req_body, &ct).await {
-                    Ok(form) => (vec![], Some(Ok::<_, anyhow::Error>(form))),
+                    Ok(form) => (Bytes::new(), Some(Ok::<_, anyhow::Error>(form))),
                     Err(e) => {
                         let msg = e.to_string();
                         if msg.contains("exceeds maximum size") {
@@ -745,30 +745,27 @@ where
                     }
                 }
             } else {
-                let b = match http_body_util::Limited::new(req_body, max_body_size).collect().await
-                {
-                    Ok(c) => c.to_bytes(),
-                    Err(e) if e.to_string().contains("length limit") => {
-                        return Ok(json_response(
-                            StatusCode::PAYLOAD_TOO_LARGE,
-                            r#"{"detail":"payload too large"}"#,
-                        ));
-                    }
-                    Err(e) => return Err(anyhow::anyhow!("Body error: {}", e)),
-                };
-                let mut body = b.to_vec();
+                let body =
+                    match http_body_util::Limited::new(req_body, max_body_size).collect().await {
+                        Ok(c) => c.to_bytes(),
+                        Err(e) if e.to_string().contains("length limit") => {
+                            return Ok(json_response(
+                                StatusCode::PAYLOAD_TOO_LARGE,
+                                r#"{"detail":"payload too large"}"#,
+                            ));
+                        }
+                        Err(e) => return Err(anyhow::anyhow!("Body error: {}", e)),
+                    };
                 // Normalize an XML request body into JSON so downstream
                 // JSON-speaking validation/handlers receive a uniform shape.
                 let ct_lower = content_type.as_deref().unwrap_or("").to_ascii_lowercase();
-                if ct_lower.contains("application/xml") || ct_lower.contains("text/xml") {
+                let body = if ct_lower.contains("application/xml") || ct_lower.contains("text/xml")
+                {
                     match xml::xml_to_json(&body) {
-                        Ok(value) => {
-                            if let Ok(json_bytes) = serde_json::to_vec(&value) {
-                                body = json_bytes;
-                            }
-                            // On JSON serialization failure, fall through with
-                            // the original bytes.
-                        }
+                        Ok(value) => match serde_json::to_vec(&value) {
+                            Ok(json_bytes) => Bytes::from(json_bytes),
+                            Err(_) => body,
+                        },
                         Err(e) => {
                             return Ok(json_response(
                                 StatusCode::BAD_REQUEST,
@@ -776,7 +773,9 @@ where
                             ));
                         }
                     }
-                }
+                } else {
+                    body
+                };
                 (body, None)
             };
 
