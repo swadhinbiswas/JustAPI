@@ -1,28 +1,48 @@
 ---
-title: Release Notes - JustAPI v2.0.0
-description: Official release notes for JustAPI 2.0.0.
+title: Release Notes
+description: Version history and changelog for JustAPI.
 ---
 
-## 🚀 JustAPI v2.0.0 Release Highlights
+## 2.0.0 (2026-07-24)
 
-We are thrilled to announce **JustAPI 2.0.0** — the flagship production release of the Rust-powered Python web framework!
+### Breaking Changes
 
-### 🌟 Key Changes in 2.0.0
+- `FastAPI` → `JustAPIApp` rename
+- Server startup: `app.run()` replaces uvicorn
+- Middleware response manipulation uses tuple-based headers
 
-1. **Multi-Database Project Scaffolder:**
-   * Interactive CLI wizard (`justapi create`) supporting DuckDB, ClickHouse, PostgreSQL, MySQL, SQLite, MongoDB, and Redis.
+### New Features
 
-2. **Multi-Protocol Architecture:**
-   * Built-in support for REST (OpenAPI 3.1 & Scalar UI), GraphQL (`app.graphql()`), gRPC/Protobuf (`/rpc`), and JSON-RPC 2.0 (`/jsonrpc`).
+- Multi-database project scaffolder (`justapi create`)
+- Multi-protocol support (REST, GraphQL, gRPC, JSON-RPC)
+- Native MCP tool registration (`@app.tool`)
+- Validated streaming output (`@app.stream_json`)
+- Rust-backed agent session store
+- OpenTelemetry Jaeger stack generator
+- Multi-arch PyPI wheels (Linux, macOS, Windows, ARM64)
+- Load-based auto-scaling (`justapi serve --scale`)
+- Unix domain socket support
 
-3. **OpenTelemetry Jaeger Stack Generator:**
-   * Automatically generates `docker-compose.otel.yml` for zero-config distributed tracing and Prometheus monitoring.
+### Performance
 
-4. **Multi-Arch Binary Wheel Pipeline:**
-   * Published multi-architecture PyPI wheels for Linux x86_64, Linux ARM64 (AWS Graviton), Linux Musl (Alpine), macOS x86_64/arm64, and Windows x64.
+- 701,234 RPS hello-world (20x FastAPI)
+- 724,038 RPS native fast path
+- 456,168 RPS native DB query path
+- Sub-0.2 ms p99 latency
 
-5. **Starlette Parity:**
-   * Added `app.add_middleware()`, `app.add_cors()`, and FastAPI-standard `JustAPIApp(title=..., version=...)` kwargs.
+### Security
 
-6. **Hardened Security & Fuzzing:**
-   * Untrusted input pipeline fuzzing targets verified clean across Miri and LLVM libFuzzer suites.
+- OWASP Top 10 compliance (A01-A10 coverage)
+- 7 cargo-fuzz targets in CI
+- Rustls TLS (TLS 1.2/1.3 only)
+- Secure-by-default CORS + security headers
+
+## 1.0.0 (2026-07-15)
+
+Initial release with core routing, middleware, database support, and FastAPI compatibility.
+
+## See Also
+
+- [ADR Index](/reference/adr-index/) — Architecture Decision Records
+- [Changelog](https://github.com/swadhinbiswas/JustAPI/releases)
+- [Roadmap](https://github.com/swadhinbiswas/JustAPI/blob/main/ROADMAP.md)
