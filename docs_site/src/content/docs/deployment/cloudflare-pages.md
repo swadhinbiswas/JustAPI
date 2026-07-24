@@ -1,37 +1,33 @@
 ---
-title: Cloudflare Pages Deployment Guide
-description: Deploy your JustAPI Astro documentation site to Cloudflare Pages with zero-config CI/CD.
+title: Cloudflare Pages Deployment
+description: Deploy your JustAPI documentation site to Cloudflare Pages.
 ---
 
-This documentation site is built with **Astro** and **Starlight**, making it 100% static-site generator (SSG) compatible and ready for instant deployment on **Cloudflare Pages**.
+This documentation site is built with Astro and Starlight, making it 100% static-site generator (SSG) compatible.
 
 ## Method 1: Git Integration (Recommended)
 
-1. Push your repository to **GitHub** or **GitLab**.
-2. Log into the **Cloudflare Dashboard** and navigate to **Workers & Pages**.
-3. Click **Create Application** → **Pages** → **Connect to Git**.
-4. Select your `JustAPI` repository and choose the branch (e.g. `main` or `initial-setup`).
-5. Configure the Build Settings:
-   * **Framework Preset:** `Astro`
-   * **Root Directory:** `docs_site`
-   * **Build Command:** `npm run build`
-   * **Build Output Directory:** `dist`
-6. Click **Save and Deploy**. Cloudflare Pages will automatically build and publish your site with free global CDN edge distribution and SSL!
+1. Push your repository to GitHub or GitLab
+2. Log into Cloudflare Dashboard → Workers & Pages → Create Application → Pages → Connect to Git
+3. Select your repository and branch
+4. Configure build settings:
+   - **Framework Preset:** Astro
+   - **Root Directory:** `docs_site`
+   - **Build Command:** `npm run build`
+   - **Build Output Directory:** `dist`
+5. Click **Save and Deploy**
 
-## Method 2: Direct CLI Deployment (`wrangler`)
+Cloudflare Pages automatically builds and publishes with free global CDN, SSL, and edge distribution.
 
-Deploy directly from your local terminal using Cloudflare's `wrangler` CLI:
+## Method 2: CLI Deployment (wrangler)
 
 ```bash
-# Build the static site output
 cd docs_site
 npm run build
-
-# Deploy to Cloudflare Pages
 npx wrangler pages deploy dist --project-name=justapi-docs
 ```
 
-## Cloudflare Pages Configuration (`wrangler.jsonc`)
+## Cloudflare Pages Configuration
 
 ```json
 {
@@ -39,3 +35,14 @@ npx wrangler pages deploy dist --project-name=justapi-docs
   "pages_build_output_dir": "./dist"
 }
 ```
+
+## Custom Domain
+
+1. Go to Cloudflare Pages → your project → Custom Domains
+2. Add your domain (e.g., `docs.justapi.dev`)
+3. Update DNS records
+
+## See Also
+
+- [Docker](/deployment/docker/) — Container deployment
+- [Kubernetes / Helm](/deployment/kubernetes-helm/) — K8s deployment
