@@ -1,6 +1,7 @@
 ---
 title: WebSockets & Server-Sent Events
-description: Build real-time applications with WebSockets and SSE streaming.
+description: Build real-time applications with JustAPI WebSockets and SSE streaming — a FastAPI alternative powered by Rust.
+keywords: WebSockets, Server-Sent Events, SSE, real-time, JustAPI, FastAPI alternative, streaming
 ---
 
 JustAPI supports both WebSockets (full-duplex) and Server-Sent Events (server-to-client streaming) for real-time communication.

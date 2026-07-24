@@ -1,6 +1,7 @@
 ---
 title: Configuration Reference
-description: Environment variables, app settings, and server configuration options.
+description: Environment variables, app settings, and server configuration options for JustAPI — a high-performance FastAPI alternative built in Rust.
+keywords: configuration, environment variables, FastAPI alternative, Rust web framework, server settings
 ---
 
 ## Environment Variables

@@ -1,6 +1,7 @@
 ---
 title: Native Fast Path
-description: Execute routes entirely in Rust for maximum performance (724k+ RPS).
+description: Execute routes entirely in Rust for maximum performance (724k+ RPS) — JustAPI's native fast path leaves other FastAPI alternatives behind.
+keywords: JustAPI, FastAPI alternative, native fast path, Rust routes, performance, RPS
 ---
 
 The **Native Fast Path** is JustAPI's most powerful performance feature. With `native=True`, a route executes **entirely in Rust** — no Python bytecode, no GIL overhead.

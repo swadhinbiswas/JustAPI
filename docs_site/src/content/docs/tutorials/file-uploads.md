@@ -1,6 +1,7 @@
 ---
 title: File Uploads
-description: Handle file uploads with multipart form data using UploadFile and File annotations.
+description: Handle file uploads in JustAPI with multipart form data using UploadFile and File annotations — a FastAPI alternative built in Rust.
+keywords: file uploads, multipart form data, UploadFile, JustAPI, FastAPI alternative, Rust
 ---
 
 JustAPI provides robust support for file uploads via `multipart/form-data` using Rust's `multer` parser, with streaming to temporary files to avoid memory exhaustion.

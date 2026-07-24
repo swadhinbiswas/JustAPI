@@ -1,6 +1,7 @@
 ---
 title: APIRouter
-description: Modular router for grouping related routes in separate files.
+description: "API reference for APIRouter in JustAPI, the FastAPI alternative — modular router for grouping related routes in separate files."
+keywords: [apirouter, fastapi alternative, justapi, modular router, route groups, sub-routers]
 ---
 
 `APIRouter` lets you organize routes into modular groups, then include them in the main application.

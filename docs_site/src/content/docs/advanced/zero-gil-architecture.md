@@ -1,6 +1,7 @@
 ---
 title: Zero-GIL Architecture & PyO3 Threads
-description: Deep dive into how JustAPI releases the Python GIL for native performance.
+description: Deep dive into how JustAPI releases the Python GIL for native performance, outperforming FastAPI alternatives.
+keywords: JustAPI, FastAPI alternative, GIL, zero-GIL, PyO3, threads, Python, Rust, performance
 ---
 
 ## How the GIL Works

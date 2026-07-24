@@ -1,6 +1,7 @@
 ---
 title: Error Handling
-description: Handle errors gracefully with HTTPException, custom exception handlers, and validation error responses.
+description: Handle errors gracefully in JustAPI with HTTPException, custom exception handlers, and validation error responses — a FastAPI alternative.
+keywords: error handling, HTTPException, exception handlers, JustAPI, FastAPI alternative, validation errors
 ---
 
 JustAPI provides a structured error-handling system that lets you return consistent error responses across your API.

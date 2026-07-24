@@ -1,6 +1,7 @@
 ---
 title: Schema & Validation API
-description: Reference for Schema, Field, and validation functions.
+description: "API reference for schema validation in JustAPI, the FastAPI alternative — Schema, Field, and validation functions."
+keywords: [schema validation, fastapi alternative, justapi, schema class, field, validation, pydantic]
 ---
 
 JustAPI provides two validation paths: the built-in `Schema` class (validated in Rust) and Pydantic models (validated in Python).

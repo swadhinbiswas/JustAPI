@@ -1,6 +1,7 @@
 ---
 title: Production Checklist
-description: Essential settings and configuration for running JustAPI in production.
+description: Essential settings and configuration for running JustAPI in production — the FastAPI alternative you can trust.
+keywords: JustAPI, FastAPI alternative, production, checklist, configuration, deployment
 ---
 
 ## 1. Build for Production

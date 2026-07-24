@@ -1,6 +1,7 @@
 ---
 title: Penetration Testing Guide
-description: Guidelines and test scenarios for security testing JustAPI applications.
+description: Guidelines and test scenarios for security testing JustAPI applications — a high-performance FastAPI alternative.
+keywords: penetration testing, security testing, FastAPI alternative, Rust web framework, pentest guide
 ---
 
 ## Attack Surface

@@ -1,6 +1,7 @@
 ---
 title: Scheduler API
-description: Reference for the Rust-native cron-based task scheduler.
+description: "API reference for the task scheduler in JustAPI, the FastAPI alternative — Rust-native cron-based periodic task scheduler."
+keywords: [scheduler, fastapi alternative, justapi, cron, periodic tasks, pyscheduler, rust native]
 ---
 
 ## `PyScheduler` Object

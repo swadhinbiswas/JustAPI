@@ -1,6 +1,7 @@
 ---
 title: Google Cloud (GKE)
-description: Deploy JustAPI to Google Kubernetes Engine.
+description: Deploy JustAPI to Google Kubernetes Engine — run the high-performance FastAPI alternative on GCP.
+keywords: JustAPI, FastAPI alternative, GKE, Google Cloud, Kubernetes, deployment
 ---
 
 ## 1. Create GKE Cluster

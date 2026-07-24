@@ -1,6 +1,7 @@
 ---
 title: Kubernetes & Helm
-description: Deploy JustAPI on Kubernetes using the official Helm chart.
+description: Deploy JustAPI on Kubernetes using the official Helm chart — the FastAPI alternative built for production.
+keywords: JustAPI, FastAPI alternative, Kubernetes, Helm, deployment, production
 ---
 
 ## Prerequisites

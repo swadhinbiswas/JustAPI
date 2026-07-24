@@ -1,6 +1,7 @@
 ---
 title: Resilience Patterns
-description: Protect your application with circuit breakers, rate limiting, bulkheads, and graceful degradation.
+description: Protect your application with circuit breakers, rate limiting, bulkheads, and graceful degradation in JustAPI, the resilient FastAPI alternative.
+keywords: JustAPI, FastAPI alternative, resilience, circuit breaker, rate limiting, bulkheads
 ---
 
 JustAPI incorporates enterprise resilience primitives directly in the Rust engine.

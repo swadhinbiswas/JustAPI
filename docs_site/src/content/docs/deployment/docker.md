@@ -1,6 +1,7 @@
 ---
 title: Docker & Docker Compose
-description: Containerize your JustAPI application for development and production.
+description: Containerize your JustAPI application for development and production. Docker deployment guide for the fastest FastAPI alternative — Rust-powered Python web framework.
+keywords: [JustAPI Docker, FastAPI alternative Docker, containerize Python API, Docker Compose, Rust Python Docker, Python web framework Docker]
 ---
 
 ## Multi-Stage Dockerfile
@@ -91,6 +92,19 @@ services:
       - "16686:16686"  # UI
       - "4318:4318"    # OTLP HTTP
 ```
+
+### Using uv in Docker (Smaller & Faster Builds)
+
+For smaller Docker images and faster builds, replace pip with uv in your Dockerfile:
+
+```dockerfile
+FROM python:3.12-slim-bookworm AS builder
+RUN pip install uv
+COPY --from=builder /app/wheels /tmp/wheels
+RUN uv pip install --system --no-cache /tmp/wheels/*.whl
+```
+
+This reduces layer size and install time significantly.
 
 ## Production Image Optimizations
 

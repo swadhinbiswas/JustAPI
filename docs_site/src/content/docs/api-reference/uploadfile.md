@@ -1,6 +1,7 @@
 ---
 title: UploadFile API
-description: Reference for uploaded file representation.
+description: "API reference for UploadFile in JustAPI, the FastAPI alternative — representation of uploaded files via multipart/form-data."
+keywords: [uploadfile, fastapi alternative, justapi, file upload, multipart form data, upload]
 ---
 
 ## `UploadFile` Object

@@ -1,6 +1,7 @@
 ---
 title: Secure Configuration
-description: Hardening guide for running JustAPI securely in production.
+description: Hardening guide for running JustAPI securely in production — a high-performance FastAPI alternative built in Rust.
+keywords: secure configuration, production hardening, FastAPI alternative, Rust web framework, security guide
 ---
 
 ## Security Headers

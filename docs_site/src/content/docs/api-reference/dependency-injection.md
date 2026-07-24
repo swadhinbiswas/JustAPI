@@ -1,6 +1,7 @@
 ---
 title: Dependency Injection API
-description: Reference for Depends and parameter extraction functions.
+description: "API reference for dependency injection in JustAPI, the FastAPI alternative — Depends, Path, Query, Header, Cookie, Body, File, and Form extractors."
+keywords: [dependency injection, fastapi alternative, justapi, depends, path, query, header, request extraction]
 ---
 
 ## `Depends()`

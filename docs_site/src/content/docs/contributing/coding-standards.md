@@ -1,6 +1,7 @@
 ---
 title: Coding Standards
-description: Conventions and guidelines for contributing to JustAPI.
+description: Conventions and guidelines for contributing to JustAPI — a high-performance FastAPI alternative built in Rust.
+keywords: coding standards, contribution guide, FastAPI alternative, Rust web framework, developer guidelines
 ---
 
 ## Rust-First Mandate

@@ -1,6 +1,7 @@
 ---
 title: Amazon EKS
-description: Deploy JustAPI to Amazon Elastic Kubernetes Service.
+description: Deploy JustAPI to Amazon Elastic Kubernetes Service — run the premier FastAPI alternative on AWS.
+keywords: JustAPI, FastAPI alternative, EKS, Amazon, AWS, Kubernetes, deployment
 ---
 
 ## 1. Create EKS Cluster

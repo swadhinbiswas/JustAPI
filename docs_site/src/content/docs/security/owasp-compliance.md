@@ -1,6 +1,7 @@
 ---
 title: OWASP Top 10 Compliance
-description: JustAPI's compliance status against OWASP Top 10 (2021) security categories.
+description: JustAPI's compliance status against OWASP Top 10 (2021) security categories — a secure FastAPI alternative built in Rust.
+keywords: OWASP Top 10, security compliance, FastAPI alternative, Rust web framework, web security
 ---
 
 ## A01: Broken Access Control

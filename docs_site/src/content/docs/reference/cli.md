@@ -1,6 +1,7 @@
 ---
 title: CLI Reference
-description: Complete reference for the justapi command-line tool.
+description: Complete reference for the justapi CLI — the command-line tool for the fastest FastAPI alternative. Serve, scaffold, migrate, and profile your Rust-powered Python APIs.
+keywords: [JustAPI CLI, FastAPI alternative, justapi serve, justapi create, Python CLI, Rust CLI, web framework CLI, API development tools]
 ---
 
 The `justapi` CLI provides development, scaffolding, and management commands.
@@ -8,8 +9,12 @@ The `justapi` CLI provides development, scaffolding, and management commands.
 ## Installation
 
 ```bash
+# Via cargo (permanent install)
 cargo install justapi-cli
 justapi --version
+
+# Via uvx (run without installing)
+uvx justapi --version
 ```
 
 ## Commands

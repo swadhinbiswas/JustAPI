@@ -1,6 +1,7 @@
 ---
 title: Routing API
-description: Complete reference for HTTP method decorators and route registration.
+description: "API reference for HTTP routing in JustAPI, the FastAPI alternative — method decorators and route registration."
+keywords: [routing, fastapi alternative, justapi, http decorators, route registration, radix trie]
 ---
 
 ## Method Decorators

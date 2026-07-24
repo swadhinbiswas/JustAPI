@@ -1,6 +1,7 @@
 ---
 title: Structured Logging
-description: Configure structured JSON logging with tracing-subscriber.
+description: Configure structured JSON logging with tracing-subscriber for JustAPI — a high-performance FastAPI alternative built in Rust.
+keywords: structured logging, JSON logging, tracing-subscriber, FastAPI alternative, Rust web framework
 ---
 
 JustAPI uses `tracing` for structured logging, supporting both human-readable text and machine-parseable JSON formats.

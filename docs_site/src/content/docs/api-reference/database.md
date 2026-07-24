@@ -1,6 +1,7 @@
 ---
 title: Database API
-description: Reference for the Rust-native database connection pool and query interface.
+description: "API reference for the database interface in JustAPI, the FastAPI alternative — Rust-native connection pool and query interface."
+keywords: [database, fastapi alternative, justapi, connection pool, sql queries, postgresql, mysql, sqlite]
 ---
 
 ## `app.set_database()`

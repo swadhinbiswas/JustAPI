@@ -1,6 +1,7 @@
 ---
 title: Request Body & Validation
-description: Parse and validate JSON request bodies with Pydantic schemas and JustAPI's native fast path.
+description: Parse and validate JSON request bodies with Pydantic schemas and JustAPI's native Rust fast path — a high-performance FastAPI alternative.
+keywords: request body, JSON validation, Pydantic, Rust validation, JustAPI, FastAPI alternative, schema
 ---
 
 JustAPI validates request bodies against schemas defined with Pydantic models or the built-in `Schema` class. Validation runs in Rust by default, keeping the GIL released.

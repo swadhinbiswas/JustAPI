@@ -1,6 +1,7 @@
 ---
 title: Performance Tuning
-description: Optimize your JustAPI application for maximum throughput and minimum latency.
+description: Optimize your JustAPI application for maximum throughput and minimum latency — performance tuning for the fastest FastAPI alternative.
+keywords: JustAPI, FastAPI alternative, performance tuning, throughput, latency, optimization
 ---
 
 ## Worker Configuration

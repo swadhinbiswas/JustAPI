@@ -1,6 +1,7 @@
 ---
 title: Development Setup
-description: Set up your local environment for JustAPI development.
+description: Set up your local environment for JustAPI development — the Rust-powered FastAPI alternative. Build, test, and contribute to the fastest Python web framework.
+keywords: [JustAPI, FastAPI alternative, development setup, Rust Python, PyO3, maturin, contribute to JustAPI]
 ---
 
 ## Prerequisites
@@ -18,10 +19,20 @@ cd JustAPI
 
 ## Python Environment
 
+### Using standard venv + pip
+
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install maturin pydantic
+```
+
+### Using uv (recommended for speed)
+
+```bash
+uv venv
+source .venv/bin/activate
+uv pip install maturin pydantic
 ```
 
 ## Build the Rust Extension
@@ -48,8 +59,11 @@ cargo install --path crates/justapi-cli
 # Rust
 cargo build --workspace
 
-# Python
+# Python (with pip)
 pip install -e ".[dev]"
+
+# Python (with uv)
+uv pip install -e ".[dev]"
 ```
 
 ## Editor Setup

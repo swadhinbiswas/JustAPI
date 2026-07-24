@@ -1,6 +1,7 @@
 ---
 title: Azure AKS
-description: Deploy JustAPI to Azure Kubernetes Service.
+description: Deploy JustAPI to Azure Kubernetes Service — run the leading FastAPI alternative on Microsoft Azure.
+keywords: JustAPI, FastAPI alternative, AKS, Azure, Kubernetes, deployment
 ---
 
 ## 1. Create AKS Cluster

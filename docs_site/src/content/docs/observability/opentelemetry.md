@@ -1,6 +1,7 @@
 ---
 title: OpenTelemetry Tracing
-description: Distributed tracing with OpenTelemetry and Jaeger.
+description: Distributed tracing with OpenTelemetry and Jaeger for JustAPI — a high-performance FastAPI alternative built in Rust.
+keywords: OpenTelemetry, distributed tracing, Jaeger, FastAPI alternative, Rust web framework
 ---
 
 JustAPI includes built-in OpenTelemetry tracing with OTLP gRPC export.

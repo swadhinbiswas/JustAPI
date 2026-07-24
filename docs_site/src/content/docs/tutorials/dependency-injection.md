@@ -1,6 +1,7 @@
 ---
 title: Dependency Injection
-description: Use Depends to inject reusable components into your route handlers.
+description: Use Depends to inject reusable components into your JustAPI route handlers — a FastAPI-compatible DI system.
+keywords: dependency injection, Depends, route handlers, FastAPI alternative, JustAPI, reusable components
 ---
 
 Dependency Injection (DI) lets you declare reusable components that are automatically resolved and injected into your route handlers. JustAPI's DI system mirrors FastAPI's, making migration seamless.

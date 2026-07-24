@@ -1,6 +1,7 @@
 ---
 title: Examples Gallery
-description: Runnable code examples demonstrating JustAPI features.
+description: Runnable code examples demonstrating JustAPI features — the Rust-powered FastAPI alternative. From hello world to full e-commerce APIs.
+keywords: [JustAPI examples, FastAPI alternative examples, Python API examples, Rust Python, JustAPI demo, API code examples]
 ---
 
 ## Getting Started

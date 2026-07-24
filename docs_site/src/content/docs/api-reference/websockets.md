@@ -1,6 +1,7 @@
 ---
 title: WebSockets API
-description: Reference for WebSocket handler registration and connection management.
+description: "API reference for WebSocket support in JustAPI, the FastAPI alternative — handler registration and connection management."
+keywords: [websockets, fastapi alternative, justapi, websocket handler, real-time, bidirectional]
 ---
 
 ## `@app.websocket()`

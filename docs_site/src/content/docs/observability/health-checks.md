@@ -1,6 +1,7 @@
 ---
 title: Health Checks
-description: Liveness, readiness, and custom health check endpoints.
+description: Liveness, readiness, and custom health check endpoints for JustAPI — a high-performance FastAPI alternative built in Rust.
+keywords: health checks, liveness probe, readiness probe, FastAPI alternative, Rust web framework
 ---
 
 ## Built-in Endpoints

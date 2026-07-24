@@ -1,6 +1,7 @@
 ---
 title: PyO3 & FFI Safety
-description: How JustAPI safely crosses the Rust-Python boundary without sacrificing performance.
+description: How JustAPI safely crosses the Rust-Python boundary without sacrificing performance — a key advantage over other FastAPI alternatives.
+keywords: JustAPI, FastAPI alternative, PyO3, FFI safety, Rust-Python boundary, performance
 ---
 
 ## The Challenge

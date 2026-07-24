@@ -1,6 +1,7 @@
 ---
 title: Request Object
-description: Access incoming HTTP request data through the Request object.
+description: "API reference for the Request object in JustAPI, the FastAPI alternative — access incoming HTTP request data with zero-copy performance."
+keywords: [request object, fastapi alternative, justapi, http request, zero copy, request data]
 ---
 
 The `Request` object provides zero-copy access to the incoming HTTP request. It's passed as the first parameter to every route handler.
