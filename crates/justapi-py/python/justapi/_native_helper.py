@@ -85,11 +85,14 @@ def wrap_result(result):
         # (BUG-1, PRODUCTION_PLAN.md P0.3).
         keys = set(result.keys())
         is_envelope = (
-            "body" in result
-            or result.get("__response__") is True
+            result.get("__response__") is True
             or (
                 "status" in result
                 and keys <= {"status", "headers", "__response__"}
+            )
+            or (
+                "body" in result
+                and keys <= {"body", "status", "headers", "__response__"}
             )
         )
         if is_envelope:

@@ -9,6 +9,11 @@ use pyo3::types::{PyAnyMethods, PyDict, PyList, PyString, PyTuple};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+/// Cached tokio runtime for synchronous pyclass methods that need async execution
+/// (e.g. graphql_handle, health_ready). Created once to avoid the ~1-2ms runtime
+/// creation cost on every call.
+static CACHED_TOKIO_RT: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
+
 /// Await a SIGTERM (Unix only). Returns when the process receives the signal.
 #[cfg(unix)]
 async fn term_signal() {
@@ -587,16 +592,12 @@ impl JustAPIApp {
         } else {
             let body_bytes = body.unwrap_or_default();
             let schema = justapi_core::graphql::create_schema();
-            let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
-                Ok(rt) => rt,
-                Err(_) => {
-                    return (
-                        500,
-                        "application/json".to_string(),
-                        r#"{"errors":[{"message":"runtime error"}]}"#.to_string(),
-                    )
-                }
-            };
+            let rt = CACHED_TOKIO_RT.get_or_init(|| {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("failed to build cached tokio runtime")
+            });
             let res_str = rt.block_on(async {
                 justapi_core::graphql::execute_graphql_bytes(&schema, &body_bytes)
                     .await
@@ -616,20 +617,18 @@ impl JustAPIApp {
     fn health_ready(&self) -> (bool, String) {
         match &self.health_registry {
             Some(reg) => {
-                let rt = tokio::runtime::Builder::new_current_thread().enable_all().build();
-                match rt {
-                    Ok(rt) => {
-                        let report = rt.block_on(reg.check_all());
-                        let ready = !matches!(
-                            report.overall(),
-                            justapi_core::health::OverallHealth::Unhealthy
-                        );
-                        let json = serde_json::to_string(&report)
-                            .unwrap_or_else(|_| "{\"status\":\"unknown\"}".to_string());
-                        (ready, json)
-                    }
-                    Err(_) => (true, "{\"status\":\"ready\"}".to_string()),
-                }
+                let rt = CACHED_TOKIO_RT.get_or_init(|| {
+                    tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .expect("failed to build cached tokio runtime")
+                });
+                let report = rt.block_on(reg.check_all());
+                let ready =
+                    !matches!(report.overall(), justapi_core::health::OverallHealth::Unhealthy);
+                let json = serde_json::to_string(&report)
+                    .unwrap_or_else(|_| "{\"status\":\"unknown\"}".to_string());
+                (ready, json)
             }
             None => (true, "{\"status\":\"ready\"}".to_string()),
         }
@@ -1744,79 +1743,77 @@ impl JustAPIApp {
                                 let handlers_arc = handlers_arc.clone();
                                 let db_url_str2 = db_url_str2.clone();
                                 async move {
-                                    tokio::task::spawn_blocking(move || {
-                                        Python::attach(|py| {
-                                            let py_handler = handlers_arc[id].clone_ref(py);
-                                            let helper = get_helper(py);
-                                            let py_list = pyo3::types::PyList::empty(py);
-                                            for req in &batch {
-                                                let r = Bound::new(py, crate::request::Request::new(
-                                                    py,
-                                                    req.method.clone(),
-                                                    req.path.clone(),
-                                                    req.path_params.to_vec(),
-                                                    req.query_string.to_vec(),
-                                                    req.headers.to_vec(),
-                                                    req.body.to_vec(),
-                                                    db_url_str2.as_deref().map(|s| s.to_string()),
-                                                    None,
-                                                    "http".to_string(),
-                                                    None,
-                                                    None,
-                                                    "1.1".to_string(),
-                                                )).unwrap();
-                                                py_list.append(r).unwrap();
+                                    crate::gil_pool::run_python(move |py| {
+                                        let py_handler = handlers_arc[id].clone_ref(py);
+                                        let helper = get_helper(py);
+                                        let py_list = pyo3::types::PyList::empty(py);
+                                        for req in &batch {
+                                            let r = Bound::new(py, crate::request::Request::new(
+                                                py,
+                                                req.method.clone(),
+                                                req.path.clone(),
+                                                req.path_params.to_vec(),
+                                                req.query_string.to_vec(),
+                                                req.headers.to_vec(),
+                                                req.body.to_vec(),
+                                                db_url_str2.as_deref().map(|s| s.to_string()),
+                                                None,
+                                                "http".to_string(),
+                                                None,
+                                                None,
+                                                "1.1".to_string(),
+                                            )).unwrap();
+                                            py_list.append(r).unwrap();
+                                        }
+
+                                        let result = helper.call_batch_handler.bind(py).call1((py_handler.bind(py), py_list));
+                                        let final_res = match result {
+                                            Ok(res) => {
+                                                let is_future = res.hasattr("result").unwrap_or(false) && !res.is_instance_of::<pyo3::types::PyList>();
+                                                if is_future {
+                                                    res.call_method0("result")
+                                                } else {
+                                                    Ok(res)
+                                                }
                                             }
+                                            Err(e) => Err(e),
+                                        };
 
-                                            let result = helper.call_batch_handler.bind(py).call1((py_handler.bind(py), py_list));
-                                            let final_res = match result {
-                                                Ok(res) => {
-                                                    let is_future = res.hasattr("result").unwrap_or(false) && !res.is_instance_of::<pyo3::types::PyList>();
-                                                    if is_future {
-                                                        res.call_method0("result")
-                                                    } else {
-                                                        Ok(res)
-                                                    }
-                                                }
-                                                Err(e) => Err(e),
-                                            };
-
-                                            let mut results = Vec::new();
-                                            match final_res {
-                                                Ok(res_list) => {
-                                                    if let Ok(list) = res_list.extract::<Vec<pyo3::Bound<'_, pyo3::PyAny>>>() {
-                                                        for item in list.iter() {
-                                                            let status: u16 = item.get_item("status").ok().and_then(|v| v.extract().ok()).unwrap_or(200);
-                                                            let headers: Vec<(Vec<u8>, Vec<u8>)> = item.get_item("headers").ok().and_then(|v| v.extract().ok()).unwrap_or_default();
-                                                            let body: Vec<u8> = item.get_item("body").ok().and_then(|v| v.extract().ok()).unwrap_or_default();
-                                                            results.push(NativeResponse { status, headers, body: NativeBody::Bytes(body) });
-                                                        }
-                                                    }
-                                                }
-                                                Err(e) => {
-                                                    tracing::error!("Batch handler error: {}", e);
-                                                    for _ in 0..batch.len() {
-                                                        results.push(NativeResponse {
-                                                            status: 500,
-                                                            headers: vec![],
-                                                            body: NativeBody::Bytes(b"Internal Server Error".to_vec()),
-                                                        });
+                                        let mut results = Vec::new();
+                                        match final_res {
+                                            Ok(res_list) => {
+                                                if let Ok(list) = res_list.extract::<Vec<pyo3::Bound<'_, pyo3::PyAny>>>() {
+                                                    for item in list.iter() {
+                                                        let status: u16 = item.get_item("status").ok().and_then(|v| v.extract().ok()).unwrap_or(200);
+                                                        let headers: Vec<(Vec<u8>, Vec<u8>)> = item.get_item("headers").ok().and_then(|v| v.extract().ok()).unwrap_or_default();
+                                                        let body: Vec<u8> = item.get_item("body").ok().and_then(|v| v.extract().ok()).unwrap_or_default();
+                                                        results.push(NativeResponse { status, headers, body: NativeBody::Bytes(body) });
                                                     }
                                                 }
                                             }
-
-                                            // Handle case where user returns wrong number of elements
-                                            while results.len() < batch.len() {
-                                                results.push(NativeResponse {
-                                                    status: 500,
-                                                    headers: vec![],
-                                                    body: NativeBody::Bytes(b"Batch length mismatch".to_vec()),
-                                                });
+                                            Err(e) => {
+                                                tracing::error!("Batch handler error: {}", e);
+                                                for _ in 0..batch.len() {
+                                                    results.push(NativeResponse {
+                                                        status: 500,
+                                                        headers: vec![],
+                                                        body: NativeBody::Bytes(b"Internal Server Error".to_vec()),
+                                                    });
+                                                }
                                             }
-                                            results.truncate(batch.len());
+                                        }
 
-                                            results
-                                        })
+                                        // Handle case where user returns wrong number of elements
+                                        while results.len() < batch.len() {
+                                            results.push(NativeResponse {
+                                                status: 500,
+                                                headers: vec![],
+                                                body: NativeBody::Bytes(b"Batch length mismatch".to_vec()),
+                                            });
+                                        }
+                                        results.truncate(batch.len());
+
+                                        results
                                     }).await.unwrap_or_default()
                                 }
                             }

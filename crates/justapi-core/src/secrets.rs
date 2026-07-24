@@ -70,12 +70,12 @@ impl SecretsRegistry {
     }
 
     pub fn register(&self, secret: Secret) {
-        let mut map = self.secrets.write().unwrap();
+        let mut map = self.secrets.write().unwrap_or_else(|e| e.into_inner());
         map.insert(secret.name.clone(), secret);
     }
 
     pub fn resolve(&self, name: &str) -> Result<String, anyhow::Error> {
-        let map = self.secrets.read().unwrap();
+        let map = self.secrets.read().unwrap_or_else(|e| e.into_inner());
         match map.get(name) {
             Some(secret) => secret.resolve(),
             None => anyhow::bail!("secret '{}' not registered", name),
@@ -84,7 +84,7 @@ impl SecretsRegistry {
 
     /// Resolve all secrets eagerly. Useful for startup validation.
     pub fn resolve_all(&self) -> Vec<(String, Result<String, anyhow::Error>)> {
-        let map = self.secrets.read().unwrap();
+        let map = self.secrets.read().unwrap_or_else(|e| e.into_inner());
         map.iter().map(|(name, secret)| (name.clone(), secret.resolve())).collect()
     }
 }

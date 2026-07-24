@@ -60,10 +60,24 @@ impl WasmEngine {
         let result = process_request.call_async(&mut store, (ptr, len)).await?;
 
         let out_ptr = (result >> 32) as i32;
-        let out_len = (result & 0xFFFFFFFF) as i32;
+        let out_len_signed = (result & 0xFFFFFFFF) as i32;
 
-        let mut out_bytes = vec![0u8; out_len as usize];
-        memory.read(&mut store, out_ptr as usize, &mut out_bytes)?;
+        if out_ptr < 0 || out_len_signed < 0 {
+            anyhow::bail!("WASM returned negative pointer or length");
+        }
+        let out_ptr = out_ptr as usize;
+        let out_len = out_len_signed as usize;
+
+        let memory_size: u64 = memory.size(&store);
+        let wasm_page_size: u64 = 65536;
+        let max_safe_len =
+            (memory_size * wasm_page_size).saturating_sub(out_ptr as u64).min(1_048_576) as usize;
+        if out_len > max_safe_len {
+            anyhow::bail!("WASM output length {} exceeds max safe {}", out_len, max_safe_len);
+        }
+
+        let mut out_bytes = vec![0u8; out_len];
+        memory.read(&mut store, out_ptr, &mut out_bytes)?;
 
         let out_str = String::from_utf8(out_bytes)?;
 

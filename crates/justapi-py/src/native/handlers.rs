@@ -117,6 +117,15 @@ pub(crate) fn call_python_handler(
             }
             Err(e) => {
                 tracing::error!("Body validation error: {}", e);
+                let error_body = serde_json::json!({
+                    "detail": format!("body validation error: {}", e)
+                })
+                .to_string();
+                return NativeResponse {
+                    status: 422,
+                    headers: vec![(b"content-type".to_vec(), b"application/json".to_vec())],
+                    body: NativeBody::Bytes(error_body.into_bytes()),
+                };
             }
         }
     }
@@ -362,24 +371,20 @@ pub(crate) fn serialize_response(
     // must fall through to normal JSON serialization, otherwise its body is
     // silently dropped (BUG-1, PRODUCTION_PLAN.md P0.3).
     if res.is_instance_of::<pyo3::types::PyDict>() {
-        let has_body = res.get_item("body").is_ok();
         let is_explicit_envelope =
             res.get_item("__response__").and_then(|v| v.extract::<bool>()).unwrap_or(false);
-        // A status-only envelope (`{"status": 204}` / `{"status": 200,
-        // "headers": [...]}` with no other keys) is treated as a response
-        // envelope so handlers can set a status code with no body. A data dict
-        // that carries a `"status"` field *plus other keys* (e.g.
-        // `{"status": "ok", "products": 5}`) must NOT be treated as an envelope,
-        // otherwise its payload is silently dropped (BUG-1, P0.3).
-        let is_status_only_envelope = {
-            let keys: Vec<String> = res
-                .extract::<std::collections::HashMap<String, pyo3::Py<pyo3::PyAny>>>()
-                .map(|m| m.keys().cloned().collect())
-                .unwrap_or_default();
-            let has_status = keys.iter().any(|k| k == "status");
-            has_status && keys.iter().all(|k| k == "status" || k == "headers") && !has_body
-        };
-        if has_body || is_explicit_envelope || is_status_only_envelope {
+        // Envelope detection: only treat a dict as a response envelope when
+        // ALL its keys are recognized envelope keys (status/headers/body).
+        // A data dict like `{"body": "text", "title": "hello"}` falls through
+        // to normal JSON serialization instead of silently dropping `title`.
+        let keys: Vec<String> = res
+            .extract::<std::collections::HashMap<String, pyo3::Py<pyo3::PyAny>>>()
+            .map(|m| m.keys().cloned().collect())
+            .unwrap_or_default();
+        let is_envelope = keys
+            .iter()
+            .all(|k| k == "status" || k == "headers" || k == "body" || k == "__response__");
+        if is_envelope || is_explicit_envelope {
             let status: u16 =
                 res.get_item("status").ok().and_then(|v| v.extract::<u16>().ok()).unwrap_or(200);
             let headers: Vec<(Vec<u8>, Vec<u8>)> = res

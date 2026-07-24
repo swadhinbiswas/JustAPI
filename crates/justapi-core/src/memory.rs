@@ -80,11 +80,11 @@ impl SharedArena {
     }
 
     pub fn reset(&self) {
-        self.inner.lock().unwrap().reset();
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).reset();
     }
 
     pub fn alloc_str(&self, s: &str) -> Option<String> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         inner.alloc_str(s).map(|r| r.to_string())
     }
 }
@@ -121,7 +121,7 @@ impl BufferPool {
     /// Acquire a buffer with at least `min_size` capacity.
     pub fn acquire(&self, min_size: usize) -> Vec<u8> {
         let idx = Self::bucket_index(min_size);
-        let mut pool = self.buckets[idx].lock().unwrap();
+        let mut pool = self.buckets[idx].lock().unwrap_or_else(|e| e.into_inner());
         pool.pop().unwrap_or_else(|| Vec::with_capacity(BUCKET_SIZES[idx]))
     }
 
@@ -129,7 +129,7 @@ impl BufferPool {
     pub fn release(&self, mut buf: Vec<u8>) {
         buf.clear();
         let idx = Self::bucket_index(buf.capacity());
-        let mut pool = self.buckets[idx].lock().unwrap();
+        let mut pool = self.buckets[idx].lock().unwrap_or_else(|e| e.into_inner());
         if pool.len() < 128 {
             pool.push(buf);
         }

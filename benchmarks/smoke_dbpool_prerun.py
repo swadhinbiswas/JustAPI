@@ -1,7 +1,8 @@
 import time, threading, urllib.request
 from justapi import JustAPIApp, Database
 
-URL = "postgres://avnadmin:<SECRET_PASSWORD>@dexmorgan-examhallorhell-5f8c.d.aivencloud.com:11100/defaultdb?sslmode=require"
+# TODO: set JUSTAPI_PG_URL or pass via env var — never commit live credentials
+URL = None  # overridden by environment
 
 app = JustAPIApp()
 app.set_database(

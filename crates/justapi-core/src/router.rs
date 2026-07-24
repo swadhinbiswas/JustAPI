@@ -36,45 +36,50 @@ enum CacheEntry<T> {
     NotFound,
 }
 
-/// Bounded, lock-free-enough route-lookup cache. A `Mutex<HashMap>` with FIFO
-/// eviction keeps the working set small; the critical section is a single map
-/// op so contention is negligible next to the I/O it saves.
+/// Bounded route-lookup cache. A single `Mutex<HashMap>` with embedded FIFO
+/// eviction avoids the deadlock-prone dual-mutex approach.
 #[derive(Debug)]
 struct RouteCache<T> {
-    map: Mutex<HashMap<(Method, String), CacheEntry<T>>>,
-    order: Mutex<Vec<(Method, String)>>,
+    inner: Mutex<CacheInner<T>>,
     capacity: usize,
+}
+
+#[derive(Debug)]
+struct CacheInner<T> {
+    map: HashMap<(Method, String), CacheEntry<T>>,
+    order: Vec<(Method, String)>,
 }
 
 impl<T: Clone> RouteCache<T> {
     fn new(capacity: usize) -> Self {
         Self {
-            map: Mutex::new(HashMap::with_capacity(capacity)),
-            order: Mutex::new(Vec::with_capacity(capacity)),
+            inner: Mutex::new(CacheInner {
+                map: HashMap::with_capacity(capacity),
+                order: Vec::with_capacity(capacity),
+            }),
             capacity: capacity.max(1),
         }
     }
 
-    /// Look up a cached resolution. Returns `None` on a negative (not-found)
-    /// entry or a miss.
+    /// Look up a cached resolution.
     fn get(&self, key: &(Method, String)) -> Option<CacheEntry<T>> {
-        self.map.lock().unwrap().get(key).cloned()
+        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        inner.map.get(key).cloned()
     }
 
     /// Insert a cacheable entry, evicting the oldest key if at capacity.
     fn insert(&self, key: (Method, String), entry: CacheEntry<T>) {
-        let mut map = self.map.lock().unwrap();
-        let mut order = self.order.lock().unwrap();
-        if !map.contains_key(&key) {
-            order.push(key.clone());
-            if order.len() > self.capacity {
-                if let Some(old) = order.first().cloned() {
-                    map.remove(&old);
-                    order.remove(0);
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        if !inner.map.contains_key(&key) {
+            inner.order.push(key.clone());
+            if inner.order.len() > self.capacity {
+                if let Some(old) = inner.order.first().cloned() {
+                    inner.map.remove(&old);
+                    inner.order.remove(0);
                 }
             }
         }
-        map.insert(key, entry);
+        inner.map.insert(key, entry);
     }
 }
 
@@ -88,13 +93,13 @@ pub struct Router<T> {
 }
 
 impl<T: Clone> Router<T> {
-    /// Create a router with an always-on route cache (default capacity 1024).
+    /// Create a router with an always-on route cache (default capacity 16384).
     pub fn new() -> Self {
         Self {
             routes: HashMap::new(),
             fallback: None,
             route_list: Vec::new(),
-            cache: Some(Arc::new(RouteCache::new(1024))),
+            cache: Some(Arc::new(RouteCache::new(16384))),
         }
     }
 

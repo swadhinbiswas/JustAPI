@@ -160,21 +160,26 @@ where
 // ---------------------------------------------------------------------------
 
 /// Minimal URL-decoding (percent-encoding and '+') for cookie values.
+/// Processes bytes, not chars, to correctly decode multi-byte UTF-8 sequences.
 fn url_decode(s: &str) -> String {
-    let mut result = String::with_capacity(s.len());
-    let mut chars = s.chars();
-    while let Some(c) = chars.next() {
-        if c == '%' {
-            let hi = chars.next().and_then(|c| c.to_digit(16)).unwrap_or(0);
-            let lo = chars.next().and_then(|c| c.to_digit(16)).unwrap_or(0);
-            result.push((hi as u8 * 16 + lo as u8) as char);
-        } else if c == '+' {
-            result.push(' ');
+    let bytes = s.as_bytes();
+    let mut result = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hi = (bytes[i + 1] as char).to_digit(16).unwrap_or(0);
+            let lo = (bytes[i + 2] as char).to_digit(16).unwrap_or(0);
+            result.push(hi as u8 * 16 + lo as u8);
+            i += 3;
+        } else if bytes[i] == b'+' {
+            result.push(b' ');
+            i += 1;
         } else {
-            result.push(c);
+            result.push(bytes[i]);
+            i += 1;
         }
     }
-    result
+    String::from_utf8(result).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
 }
 
 // ---------------------------------------------------------------------------
