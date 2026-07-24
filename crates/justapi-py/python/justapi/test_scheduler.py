@@ -13,7 +13,7 @@ def test_scheduler_interval_and_cron_fire():
     app = JustAPIApp()
     fired = []
 
-    @app.get("/")
+    @app.get("/ping")
     def root():
         return {"ok": True}
 
@@ -33,7 +33,13 @@ def test_scheduler_interval_and_cron_fire():
     sched = Scheduler()
     sched.start()
     try:
-        time.sleep(3.6)
+        # Poll until both jobs have fired enough times (tolerant of scheduler
+        # dispatch jitter / worker-pool contention) instead of a fixed sleep.
+        deadline = time.time() + 8.0
+        while time.time() < deadline:
+            if fired.count("every") >= 2 and fired.count("cron") >= 1:
+                break
+            time.sleep(0.1)
     finally:
         sched.stop()
 

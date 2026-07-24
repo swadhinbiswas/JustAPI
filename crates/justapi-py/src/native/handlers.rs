@@ -12,7 +12,23 @@ use justapi_core::router::Router;
 use justapi_core::xml;
 use justapi_core::{json_response, ResponseBody};
 
-use justapi_core::db::AnyPool;
+use justapi_core::db::{AnyPool, DbAcquireError};
+
+/// Translate a request-path DB acquire failure into the correct response.
+/// A saturated/closed pool is backpressure → `503` (so clients retry); any
+/// other SQLx error is a genuine failure → `500`.
+fn db_acquire_error_response(e: DbAcquireError) -> Response<ResponseBody> {
+    match e {
+        DbAcquireError::TimedOut | DbAcquireError::PoolClosed => {
+            justapi_core::service_unavailable_response(
+                "database pool saturated; please retry shortly",
+            )
+        }
+        DbAcquireError::Other(_) => {
+            justapi_core::error_response(StatusCode::INTERNAL_SERVER_ERROR, "database error")
+        }
+    }
+}
 
 /// Shared, per-route Rust-native CRUD config: `Some((table, columns,
 /// id_column))` means the route is served by `crud_dispatch_bytes` with the
@@ -105,28 +121,48 @@ pub(crate) fn call_python_handler(
         }
     }
 
+    // When a `body_schema` was registered *and* it is a `justapi.Schema`
+    // subclass (distinguished from a legacy callable validator by the presence
+    // of a `_schema_json` method), parse the body once on the fast path and
+    // attach it to the `Request`. The handler then receives the already-parsed,
+    // already-validated object via `request.json()` / `request["body"]` instead
+    // of raw bytes. Legacy callable schemas keep `request["body"]` as raw bytes
+    // so existing handlers doing `json.loads(request["body"])` keep working.
+    let schema_is_justapi_schema =
+        schema.map(|s| s.bind(py).hasattr("_schema_json").unwrap_or(false)).unwrap_or(false);
+    let parsed_body: Option<Py<PyAny>> = if schema_is_justapi_schema {
+        helper
+            .parse_body
+            .bind(py)
+            .call1((body,))
+            .ok()
+            .and_then(|v| v.extract::<Option<Py<PyAny>>>().ok())
+            .flatten()
+    } else {
+        None
+    };
+
     let _tb0 = std::time::Instant::now();
     let request: Bound<'_, PyAny> = if needs_request {
-        Bound::new(
+        let mut req = crate::request::Request::new(
             py,
-            crate::request::Request::new(
-                py,
-                method.to_string(),
-                path.to_string(),
-                path_params.to_vec(),
-                query_string.to_vec(),
-                headers.to_vec(),
-                body.to_vec(),
-                db_url.map(|s| s.to_string()),
-                multipart_form,
-                scheme,
-                client,
-                app,
-                http_version,
-            ),
-        )
-        .unwrap()
-        .into_any()
+            method.to_string(),
+            path.to_string(),
+            path_params.to_vec(),
+            query_string.to_vec(),
+            headers.to_vec(),
+            body.to_vec(),
+            db_url.map(|s| s.to_string()),
+            multipart_form,
+            scheme,
+            client,
+            app,
+            http_version,
+        );
+        if let Some(pb) = parsed_body {
+            req.set_parsed_body(py, pb.into_bound(py));
+        }
+        Bound::new(py, req).unwrap().into_any()
     } else {
         // Handlers with no request-dependent parameters (0-param endpoints,
         // no dependencies/query/path/etc.) skip building the Python `Request`
@@ -319,11 +355,31 @@ pub(crate) fn serialize_response(
         return NativeResponse { status, headers, body: NativeBody::Bytes(body) };
     }
 
-    // 2. Legacy response dict (`{"status": ..., "body": ...}`) -> passthrough.
+    // 2. Legacy response envelope dict (`{"status": ..., "body": ...}`) -> passthrough.
+    // Only enter this branch when the dict actually looks like an envelope — it
+    // MUST carry a `"body"` key. A plain data dict that merely happens to
+    // contain a top-level `"status"` field (e.g. `{"status": "ok", "products": 5}`)
+    // must fall through to normal JSON serialization, otherwise its body is
+    // silently dropped (BUG-1, PRODUCTION_PLAN.md P0.3).
     if res.is_instance_of::<pyo3::types::PyDict>() {
         let has_body = res.get_item("body").is_ok();
-        let has_status = res.get_item("status").is_ok();
-        if has_body || has_status {
+        let is_explicit_envelope =
+            res.get_item("__response__").and_then(|v| v.extract::<bool>()).unwrap_or(false);
+        // A status-only envelope (`{"status": 204}` / `{"status": 200,
+        // "headers": [...]}` with no other keys) is treated as a response
+        // envelope so handlers can set a status code with no body. A data dict
+        // that carries a `"status"` field *plus other keys* (e.g.
+        // `{"status": "ok", "products": 5}`) must NOT be treated as an envelope,
+        // otherwise its payload is silently dropped (BUG-1, P0.3).
+        let is_status_only_envelope = {
+            let keys: Vec<String> = res
+                .extract::<std::collections::HashMap<String, pyo3::Py<pyo3::PyAny>>>()
+                .map(|m| m.keys().cloned().collect())
+                .unwrap_or_default();
+            let has_status = keys.iter().any(|k| k == "status");
+            has_status && keys.iter().all(|k| k == "status" || k == "headers") && !has_body
+        };
+        if has_body || is_explicit_envelope || is_status_only_envelope {
             let status: u16 =
                 res.get_item("status").ok().and_then(|v| v.extract::<u16>().ok()).unwrap_or(200);
             let headers: Vec<(Vec<u8>, Vec<u8>)> = res
@@ -464,10 +520,10 @@ pub(crate) fn try_native_fast_path(
     }
     let result = match validators.get(handler_id).and_then(|v| v.as_ref()) {
         Some(v) => v.validate(body),
-        None => match schema_jsons.get(handler_id).and_then(|s| s.as_ref()) {
-            Some(sj) => justapi_core::validate::validate_json_schema(body, sj),
-            None => return None,
-        },
+        None => {
+            let sj = schema_jsons.get(handler_id).and_then(|s| s.as_ref())?;
+            justapi_core::validate::validate_json_schema(body, sj)
+        }
     };
     match result {
         Ok(()) => Some(NativeResponse {
@@ -827,14 +883,11 @@ where
             let is_write = matches!(method, Method::POST | Method::PUT | Method::DELETE);
             let tx = if is_write {
                 if let Some(ref pool) = *db_pool {
-                    match pool.begin().await {
+                    match pool.begin_request().await {
                         Ok(tx) => Some(tx),
                         Err(e) => {
-                            tracing::error!("Failed to begin transaction: {}", e);
-                            return Ok(json_response(
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                r#"{"detail":"database error"}"#,
-                            ));
+                            tracing::error!("Failed to begin transaction: {:?}", e);
+                            return Ok(db_acquire_error_response(e));
                         }
                     }
                 } else {
@@ -1091,14 +1144,11 @@ where
             let is_write = matches!(method, Method::POST | Method::PUT | Method::DELETE);
             let tx = if is_write {
                 if let Some(ref pool) = *db_pool {
-                    match pool.begin().await {
+                    match pool.begin_request().await {
                         Ok(tx) => Some(tx),
                         Err(e) => {
-                            tracing::error!("Failed to begin transaction: {}", e);
-                            return Ok(justapi_core::json_response(
-                                hyper::StatusCode::INTERNAL_SERVER_ERROR,
-                                r#"{"detail":"database error"}"#,
-                            ));
+                            tracing::error!("Failed to begin transaction: {:?}", e);
+                            return Ok(db_acquire_error_response(e));
                         }
                     }
                 } else {

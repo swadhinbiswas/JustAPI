@@ -6,7 +6,7 @@ use justapi_core::db::{DatabaseConfig, IsolationLevel};
 /// A database connection pool configuration for JustAPI.
 ///
 /// Initialized lazily when the app starts via `JustAPIApp.run()`.
-#[pyclass(from_py_object)]
+#[pyclass(skip_from_py_object)]
 #[derive(Clone)]
 pub struct Database {
     #[pyo3(get)]
@@ -22,6 +22,13 @@ pub struct Database {
     /// Max seconds to wait for a connection from the pool.
     #[pyo3(get)]
     pub acquire_timeout: Option<f64>,
+    /// Fast-fail window (seconds) for per-request connection acquires. When the
+    /// pool is saturated, a request that cannot get a connection within this
+    /// window fails immediately with `503` (backpressure) instead of hanging.
+    /// Defaults to 3s. (Stored as a plain `f64` because `Option<f64>` fields are
+    /// dropped across the pyo3 `from_py_object` FFI for this class.)
+    #[pyo3(get)]
+    pub request_acquire_timeout: f64,
     /// Max seconds a connection may stay idle before recycling.
     #[pyo3(get)]
     pub idle_timeout: Option<f64>,
@@ -40,13 +47,14 @@ pub struct Database {
 #[pymethods]
 impl Database {
     #[new]
-    #[pyo3(signature = (url, max_connections=10, init_sql=None, pragmas=None, acquire_timeout=None, idle_timeout=None, max_lifetime=None, health_check_interval=None, isolation=None))]
+    #[pyo3(signature = (url, max_connections=10, init_sql=None, pragmas=None, acquire_timeout=None, request_acquire_timeout=3.0, idle_timeout=None, max_lifetime=None, health_check_interval=None, isolation=None))]
     fn py_new(
         url: String,
         max_connections: u32,
         init_sql: Option<String>,
         pragmas: Option<Vec<String>>,
         acquire_timeout: Option<f64>,
+        request_acquire_timeout: f64,
         idle_timeout: Option<f64>,
         max_lifetime: Option<f64>,
         health_check_interval: Option<f64>,
@@ -58,6 +66,7 @@ impl Database {
             init_sql,
             pragmas,
             acquire_timeout,
+            request_acquire_timeout,
             idle_timeout,
             max_lifetime,
             health_check_interval,
@@ -67,6 +76,24 @@ impl Database {
 
     fn __repr__(&self) -> String {
         format!("Database(url={})", self.url)
+    }
+
+    /// Emit the full config as a plain `dict`, built in Rust from `self` so no
+    /// `from_py_object` extraction round-trip is needed (that path silently
+    /// drops `Option` fields in this pyo3 version). Consumed by `set_database`.
+    fn config_dict(&self, py: Python<'_>) -> Py<PyDict> {
+        let d = PyDict::new(py);
+        d.set_item("url", &self.url).ok();
+        d.set_item("max_connections", self.max_connections).ok();
+        d.set_item("init_sql", self.init_sql.clone()).ok();
+        d.set_item("pragmas", self.pragmas.clone()).ok();
+        d.set_item("acquire_timeout", self.acquire_timeout).ok();
+        d.set_item("request_acquire_timeout", self.request_acquire_timeout).ok();
+        d.set_item("idle_timeout", self.idle_timeout).ok();
+        d.set_item("max_lifetime", self.max_lifetime).ok();
+        d.set_item("health_check_interval", self.health_check_interval).ok();
+        d.set_item("isolation", self.isolation.clone()).ok();
+        d.into()
     }
 }
 
@@ -78,6 +105,7 @@ impl Database {
             init_sql: None,
             pragmas: None,
             acquire_timeout: Some(30.0),
+            request_acquire_timeout: 3.0,
             idle_timeout: None,
             max_lifetime: Some(1800.0),
             health_check_interval: None,
@@ -94,6 +122,9 @@ impl Database {
             init_sql: self.init_sql.clone(),
             pragmas: self.pragmas.clone(),
             acquire_timeout: self.acquire_timeout.map(std::time::Duration::from_secs_f64),
+            request_acquire_timeout: Some(std::time::Duration::from_secs_f64(
+                self.request_acquire_timeout,
+            )),
             idle_timeout: self.idle_timeout.map(std::time::Duration::from_secs_f64),
             max_lifetime: self.max_lifetime.map(std::time::Duration::from_secs_f64),
             health_check_interval: self
@@ -172,6 +203,44 @@ impl DbPool {
     pub fn as_any_pool(&self) -> justapi_core::db::AnyPool {
         self.inner.clone()
     }
+
+    /// Run a DB future to completion on the pool's dedicated multi-threaded
+    /// tokio runtime, returning the resolved value or a `PyRuntimeError`.
+    ///
+    /// Design (P2.2 / ADR-074):
+    ///   * `py.detach` releases the GIL for the wait, so other Python handlers
+    ///     and the server's I/O loop keep making progress (preserves the high
+    ///     SELECT throughput the old `py.detach`+`block_on` path had).
+    ///   * We must NOT `rt.block_on(fut)` from the calling thread: when the
+    ///     caller is itself serviced by that runtime (or shares its executor)
+    ///     `block_on` deadlocks — the connection pool is never returned, every
+    ///     subsequent acquire blocks for `busy_timeout` and writes are silently
+    ///     lost (49/50 inserts vanished in repro). Instead we `rt.spawn` the
+    ///     future onto the DB runtime's own worker threads and block the caller
+    ///     on an `mpsc` channel. The task runs to completion and commits; the
+    ///     caller just waits, with no re-entrant runtime driving.
+    ///
+    /// The closure returns a plain `anyhow::Result` because `py.detach`
+    /// requires its return type to be `Ungil` (no Python refs); the `PyErr`
+    /// conversion happens after the GIL is re-acquired.
+    fn run_blocking<'py, F, T>(&self, py: Python<'py>, fut: F) -> PyResult<T>
+    where
+        F: std::future::Future<Output = Result<T, anyhow::Error>> + Send + 'static,
+        T: Send + 'static,
+    {
+        let res: Result<T, anyhow::Error> = py.detach(|| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            self.rt.spawn(async move {
+                // The future runs purely in Rust; any error is forwarded to
+                // the waiting thread via the channel.
+                let _ = tx.send(fut.await);
+            });
+            // Wait for the spawned task without driving the runtime ourselves
+            // (avoids the re-entrant block_on deadlock).
+            rx.recv().map_err(|_| anyhow::anyhow!("db task dropped before completion"))?
+        });
+        res.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
 }
 
 #[pymethods]
@@ -193,17 +262,12 @@ impl DbPool {
             None => Vec::new(),
         };
         let inner = self.inner.clone();
-        let rt = self.rt.clone();
-        let rows: serde_json::Value = py
-            .detach(move || {
-                rt.block_on(async move {
-                    inner
-                        .query_with_params(&sql, &params_json)
-                        .await
-                        .map_err(|e| anyhow::anyhow!(e.to_string()))
-                })
-            })
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        let rows: serde_json::Value = self.run_blocking(py, async move {
+            inner
+                .query_with_params(&sql, &params_json)
+                .await
+                .map_err(|e| anyhow::anyhow!(e.to_string()))
+        })?;
         json_to_python(py, &rows)
     }
 
@@ -223,17 +287,12 @@ impl DbPool {
             None => Vec::new(),
         };
         let inner = self.inner.clone();
-        let rt = self.rt.clone();
-        let affected: u64 = py
-            .detach(move || {
-                rt.block_on(async move {
-                    inner
-                        .execute_with_params(&sql, &params_json)
-                        .await
-                        .map_err(|e| anyhow::anyhow!(e.to_string()))
-                })
-            })
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        let affected: u64 = self.run_blocking(py, async move {
+            inner
+                .execute_with_params(&sql, &params_json)
+                .await
+                .map_err(|e| anyhow::anyhow!(e.to_string()))
+        })?;
         Ok(affected.into_pyobject(py)?.into_any())
     }
 
@@ -265,34 +324,25 @@ impl DbPool {
             .collect::<PyResult<Vec<_>>>()?;
         let iso = isolation.as_deref().and_then(parse_isolation);
         let inner = self.inner.clone();
-        let rt = self.rt.clone();
-        let res: serde_json::Value = py
-            .detach(move || {
-                rt.block_on(async move {
-                    match iso {
-                        Some(level) => {
-                            let typed: Vec<(String, Vec<_>)> = stmts_json
-                                .iter()
-                                .map(|(s, p)| {
-                                    (
-                                        s.clone(),
-                                        p.iter().map(justapi_core::db::Param::from).collect(),
-                                    )
-                                })
-                                .collect();
-                            inner
-                                .transaction_with_isolation(&typed, Some(level))
-                                .await
-                                .map_err(|e| anyhow::anyhow!(e.to_string()))
-                        }
-                        None => inner
-                            .transaction(&stmts_json)
-                            .await
-                            .map_err(|e| anyhow::anyhow!(e.to_string())),
-                    }
-                })
-            })
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        let res: serde_json::Value = self.run_blocking(py, async move {
+            match iso {
+                Some(level) => {
+                    let typed: Vec<(String, Vec<_>)> = stmts_json
+                        .iter()
+                        .map(|(s, p)| {
+                            (s.clone(), p.iter().map(justapi_core::db::Param::from).collect())
+                        })
+                        .collect();
+                    inner
+                        .transaction_with_isolation(&typed, Some(level))
+                        .await
+                        .map_err(|e| anyhow::anyhow!(e.to_string()))
+                }
+                None => {
+                    inner.transaction(&stmts_json).await.map_err(|e| anyhow::anyhow!(e.to_string()))
+                }
+            }
+        })?;
         json_to_python(py, &res)
     }
 
@@ -314,19 +364,13 @@ impl DbPool {
             None => Vec::new(),
         };
         let inner = self.inner.clone();
-        let rt = self.rt.clone();
-        let chunks: Vec<serde_json::Value> = py
-            .detach(move || {
-                rt.block_on(async move {
-                    let typed: Vec<_> =
-                        params_json.iter().map(justapi_core::db::Param::from).collect();
-                    inner
-                        .query_stream(&sql, &typed, chunk)
-                        .await
-                        .map_err(|e| anyhow::anyhow!(e.to_string()))
-                })
-            })
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        let chunks: Vec<serde_json::Value> = self.run_blocking(py, async move {
+            let typed: Vec<_> = params_json.iter().map(justapi_core::db::Param::from).collect();
+            inner
+                .query_stream(&sql, &typed, chunk)
+                .await
+                .map_err(|e| anyhow::anyhow!(e.to_string()))
+        })?;
         json_to_python(py, &serde_json::Value::Array(chunks))
     }
 
@@ -345,26 +389,22 @@ impl DbPool {
             data_json.as_object().map(|o| o.keys().cloned().collect()).unwrap_or_default()
         });
         let inner = self.inner.clone();
-        let rt = self.rt.clone();
-        let row: serde_json::Value = py
-            .detach(move || {
-                rt.block_on(async move {
-                    inner
-                        .insert_returning(&table, &cols, &data_json)
-                        .await
-                        .map_err(|e| anyhow::anyhow!(e.to_string()))
-                })
-            })
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        let row: serde_json::Value = self.run_blocking(py, async move {
+            inner
+                .insert_returning(&table, &cols, &data_json)
+                .await
+                .map_err(|e| anyhow::anyhow!(e.to_string()))
+        })?;
         json_to_python(py, &row)
     }
 
     /// Ping the database; raises on failure.
     fn health<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        let rt = self.rt.clone();
-        py.detach(move || rt.block_on(async move { inner.health_check().await }))
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        self.run_blocking(py, async move {
+            inner.health_check().await.map_err(|e| anyhow::anyhow!(e.to_string()))
+        })
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
         Ok(true.into_pyobject(py)?.as_any().clone())
     }
 }

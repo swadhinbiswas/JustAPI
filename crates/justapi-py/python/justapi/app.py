@@ -50,6 +50,24 @@ def _builtin_metrics(self):
     return PlainTextResponse(body)
 
 
+def _builtin_graphql(app, request=None):
+    if request is None:
+        request = {}
+    method = request.get("method", "GET")
+    body = request.get("body", b"")
+    if isinstance(body, str):
+        body = body.encode("utf-8")
+    status, content_type, res_body = app._app.graphql_handle(method, body)
+    if "text/html" in content_type:
+        return HTMLResponse(res_body, status_code=status)
+    try:
+        data = json.loads(res_body)
+    except Exception:
+        data = res_body
+    return JSONResponse(data, status_code=status)
+
+
+
 def _builtin_openapi(app):
     """Serve the generated OpenAPI 3.1 document for the Python app."""
     return JSONResponse(build_openapi(app))
@@ -243,6 +261,15 @@ class JustAPIApp:
         # The home page opens the interactive API reference (Scalar) so the
         # docs are the first thing a visitor sees.
         self.get("/", lambda: _builtin_scalar(self), include_in_schema=False, name="builtin_index")
+        # Built-in GraphQL & Federation Gateway routes.
+        self.get("/graphql", lambda request=None: _builtin_graphql(self, request), include_in_schema=False, name="builtin_graphql_get")
+        self.post("/graphql", lambda request=None: _builtin_graphql(self, request), include_in_schema=False, name="builtin_graphql_post")
+
+    def graphql(self, path: str = "/graphql"):
+        """Register GraphQL & Federation Gateway routes on the specified path (default /graphql)."""
+        self.get(path, lambda request=None: _builtin_graphql(self, request), include_in_schema=False, name="graphql_get")
+        self.post(path, lambda request=None: _builtin_graphql(self, request), include_in_schema=False, name="graphql_post")
+
 
     def _record(self, method, path, handler, *, body_schema=None, schema=None,
                  experimental=False, **kw):
@@ -281,6 +308,56 @@ class JustAPIApp:
                 self.middlewares.append(func)
             return func
         return decorator
+
+    def add_middleware(self, middleware_class, **options):
+        """Add a middleware class (compatible with Starlette / FastAPI middleware syntax)."""
+        name = getattr(middleware_class, "__name__", "")
+        if "CORS" in name or "cors" in name.lower():
+            allow_origins = options.get("allow_origins", ["*"])
+            allow_methods = options.get("allow_methods", ["*"])
+            allow_headers = options.get("allow_headers", ["*"])
+            allow_credentials = options.get("allow_credentials", False)
+            self.add_cors(
+                allow_origins=allow_origins,
+                allow_methods=allow_methods,
+                allow_headers=allow_headers,
+                allow_credentials=allow_credentials,
+            )
+        else:
+            try:
+                instance = middleware_class(app=self, **options)
+                self.middlewares.append(instance)
+            except Exception:
+                self.middlewares.append(middleware_class)
+
+    def add_cors(
+        self,
+        allow_origins=None,
+        allow_methods=None,
+        allow_headers=None,
+        allow_credentials=False,
+    ):
+        """Configure CORS origins, methods, and headers for the application."""
+        origins = allow_origins or ["*"]
+        methods = allow_methods or ["*"]
+        headers = allow_headers or ["*"]
+
+        def cors_middleware(request, call_next):
+            response = call_next(request)
+            if isinstance(response, dict):
+                response = JSONResponse(response)
+            if hasattr(response, "headers"):
+                response.headers["Access-Control-Allow-Origin"] = (
+                    origins[0] if len(origins) == 1 else "*"
+                )
+                response.headers["Access-Control-Allow-Methods"] = ", ".join(methods)
+                response.headers["Access-Control-Allow-Headers"] = ", ".join(headers)
+                if allow_credentials:
+                    response.headers["Access-Control-Allow-Credentials"] = "true"
+            return response
+
+        self.middlewares.append(cors_middleware)
+
 
     def add_exception_handler(self, exc_class, handler):
         self.exception_handlers[exc_class] = handler
@@ -912,6 +989,7 @@ class JustAPIApp:
         max_lifetime=None,
         health_check_interval=None,
         isolation=None,
+        request_acquire_timeout=None,
     ):
         def _build(existing):
             return Database(
@@ -928,6 +1006,9 @@ class JustAPIApp:
                 if health_check_interval is not None
                 else existing.health_check_interval,
                 isolation=isolation if isolation is not None else existing.isolation,
+                request_acquire_timeout=request_acquire_timeout
+                if request_acquire_timeout is not None
+                else existing.request_acquire_timeout,
             )
 
         if isinstance(db, str):
@@ -940,6 +1021,9 @@ class JustAPIApp:
                 max_lifetime=max_lifetime,
                 health_check_interval=health_check_interval,
                 isolation=isolation,
+                request_acquire_timeout=3.0
+                if request_acquire_timeout is None
+                else request_acquire_timeout,
             )
         else:
             db = _build(db)
@@ -957,8 +1041,14 @@ class JustAPIApp:
                 max_lifetime=db.max_lifetime,
                 health_check_interval=db.health_check_interval,
                 isolation=db.isolation,
+                request_acquire_timeout=db.request_acquire_timeout,
             )
-        self._app.set_database(db)
+        # Hand the config to Rust as a plain `dict` (via the Python-side
+        # `config_dict()`, which reads the real `Database` fields). Reading
+        # `Option`/`f64` fields off a `Database` instance from Rust hits a
+        # pyo3 reconstruction quirk and returns defaults, so we never pass the
+        # object directly across the FFI.
+        self._app.set_database(db.config_dict())
 
     def connect_database(self):
         """Connect the configured database pool eagerly, so `app.db` is usable
