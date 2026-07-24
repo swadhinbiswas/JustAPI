@@ -17,7 +17,7 @@ use std::sync::Arc;
 use crate::db::AnyPool;
 use crate::middleware::HandlerFn;
 use crate::validate::CompiledValidator;
-use crate::{error_response, json_response, validation_response};
+use crate::{db_error_response, error_response, json_response, validation_response};
 use http_body_util::BodyExt;
 use hyper::body::Incoming;
 use hyper::Request;
@@ -163,7 +163,7 @@ pub async fn crud_dispatch_bytes(
                     let payload = single.unwrap_or(rows);
                     Ok(json_response(StatusCode::OK, &payload.to_string()))
                 }
-                Err(_) => Ok(error_response(StatusCode::INTERNAL_SERVER_ERROR, "database error")),
+                Err(e) => Ok(db_error_response(&e)),
             }
         }
         CrudOp::Select => {
@@ -187,7 +187,7 @@ pub async fn crud_dispatch_bytes(
             }
             match pool.query_with_params(&sql, &params).await {
                 Ok(rows) => Ok(json_response(StatusCode::OK, &rows.to_string())),
-                Err(_) => Ok(error_response(StatusCode::INTERNAL_SERVER_ERROR, "database error")),
+                Err(e) => Ok(db_error_response(&e)),
             }
         }
         CrudOp::Update => {
@@ -236,7 +236,7 @@ pub async fn crud_dispatch_bytes(
                         None => Ok(error_response(StatusCode::NOT_FOUND, "row not found")),
                     }
                 }
-                Err(_) => Ok(error_response(StatusCode::INTERNAL_SERVER_ERROR, "database error")),
+                Err(e) => Ok(db_error_response(&e)),
             }
         }
         CrudOp::Delete => {
@@ -264,7 +264,7 @@ pub async fn crud_dispatch_bytes(
                         None => Ok(error_response(StatusCode::NOT_FOUND, "row not found")),
                     }
                 }
-                Err(_) => Ok(error_response(StatusCode::INTERNAL_SERVER_ERROR, "database error")),
+                Err(e) => Ok(db_error_response(&e)),
             }
         }
     }

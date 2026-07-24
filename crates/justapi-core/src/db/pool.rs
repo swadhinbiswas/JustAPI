@@ -91,14 +91,45 @@ impl IsolationLevel {
 /// so existing `sqlite://...` configs (used by the Python `app.set_database`)
 /// keep working.
 fn normalize_db_url(url: &str) -> String {
-    if url.starts_with("sqlite://") {
-        // `sqlx::Any` wants `sqlite:<path>` (single colon). Replace the `//`:
-        // `sqlite://:memory:` => `sqlite::memory:`, `sqlite://./x` => `sqlite:./x`,
-        // `sqlite:///abs/x` => `sqlite:/abs/x`. Already-single-colon URLs
-        // (`sqlite:./x`) don't match and pass through unchanged.
-        url.replacen("sqlite://", "sqlite:", 1)
+    let Some(rest) = url.strip_prefix("sqlite://") else {
+        return url.to_string();
+    };
+    if let Some(abs) = rest.strip_prefix("//") {
+        // `sqlite:////abs/path.db` -> `sqlite:/abs/path.db` (absolute)
+        format!("sqlite:/{abs}")
+    } else if rest.starts_with('/') {
+        // 3-slash form `sqlite:///path`. The remainder `rest` begins with `/`.
+        // We cannot reliably tell "relative `shop.db`" from "absolute `/abs`"
+        // from the slash count alone (both yield a `/`-prefixed remainder), so we
+        // use the filesystem notion of absolute: if `rest` is an absolute path,
+        // keep it absolute; otherwise it is a relative path — but `sqlite:rel`
+        // (bare relative) is not reliably resolved by sqlx's Any driver, so we
+        // join against cwd and emit an absolute `sqlite:/abs/rel.db` path.
+        if std::path::Path::new(rest).is_absolute() {
+            format!("sqlite:{rest}")
+        } else {
+            let rel = rest.strip_prefix('/').unwrap_or(rest);
+            let joined = std::env::current_dir()
+                .ok()
+                .map(|c| c.join(rel))
+                .unwrap_or_else(|| std::path::PathBuf::from(rel));
+            format!("sqlite:{}", joined.display())
+        }
     } else {
-        url.to_string()
+        // `sqlite://:memory:`, `sqlite://./explicit-relative.db`, or a bare
+        // relative name (`sqlite://foo.db`). For relative paths (not absolute,
+        // not `:memory:`, not already-relative `./x`) join against cwd so sqlx's
+        // Any driver can open them.
+        if rest == ":memory:" || rest.starts_with("./") || std::path::Path::new(rest).is_absolute()
+        {
+            format!("sqlite:{rest}")
+        } else {
+            let joined = std::env::current_dir()
+                .ok()
+                .map(|c| c.join(rest))
+                .unwrap_or_else(|| std::path::PathBuf::from(rest));
+            format!("sqlite:{}", joined.display())
+        }
     }
 }
 
@@ -119,6 +150,14 @@ pub struct DatabaseConfig {
     /// Maximum time to wait for a connection from the pool (acquire timeout).
     /// `None` uses sqlx's default (no timeout).
     pub acquire_timeout: Option<Duration>,
+    /// Fast-fail window for **per-request** connection acquires. When the pool
+    /// is saturated (all connections busy), a request that cannot obtain a
+    /// connection within this window fails immediately with `503 Service
+    /// Unavailable` (backpressure) instead of hanging until `acquire_timeout`
+    /// elapses and then erroring. Defaults to 3s. If unset, falls back to
+    /// `acquire_timeout`, then sqlx's default. This is the primary saturation
+    /// knob for request-facing pools (see ADR-075).
+    pub request_acquire_timeout: Option<Duration>,
     /// Maximum idle time before a connection is closed and recycled.
     pub idle_timeout: Option<Duration>,
     /// Maximum lifetime of a connection before it is forcibly closed.
@@ -140,6 +179,7 @@ impl Default for DatabaseConfig {
             init_sql: None,
             pragmas: None,
             acquire_timeout: Some(Duration::from_secs(30)),
+            request_acquire_timeout: Some(Duration::from_secs(3)),
             idle_timeout: None,
             max_lifetime: Some(Duration::from_secs(1800)),
             health_check_interval: None,
@@ -205,6 +245,31 @@ impl Param {
     }
 }
 
+/// Result of acquiring a connection for a **request**, distinguishing a
+/// saturated pool (fast-fail to `503 Service Unavailable`) from a genuine
+/// backend failure (map to `500`).
+#[derive(Debug)]
+pub enum DbAcquireError {
+    /// No connection became free within the request acquire window — the pool
+    /// is saturated and the request should be rejected with backpressure
+    /// (`503`) rather than hanging.
+    TimedOut,
+    /// The pool is closed and no longer accepts connections.
+    PoolClosed,
+    /// Any other SQLx error (auth failure, broken connection, bad SQL, ...).
+    Other(sqlx::Error),
+}
+
+impl From<sqlx::Error> for DbAcquireError {
+    fn from(e: sqlx::Error) -> Self {
+        match e {
+            sqlx::Error::PoolTimedOut => DbAcquireError::TimedOut,
+            sqlx::Error::PoolClosed => DbAcquireError::PoolClosed,
+            other => DbAcquireError::Other(other),
+        }
+    }
+}
+
 /// A ready-to-use database pool (any engine).
 ///
 /// Wraps a type-erased `sqlx::AnyPool` plus the engine [`DbKind`] (needed to pick
@@ -217,6 +282,7 @@ pub struct AnyPool {
     inner: sqlx::AnyPool,
     kind: DbKind,
     default_isolation: Option<IsolationLevel>,
+    request_acquire_timeout: Option<Duration>,
 }
 
 impl AnyPool {
@@ -239,25 +305,54 @@ impl AnyPool {
         let kind = config.kind.unwrap_or_else(|| DbKind::from_url(&config.url));
         sqlx::any::install_default_drivers();
         let connect_url = normalize_db_url(&config.url);
-        let mut opts = AnyPoolOptions::new().max_connections(config.max_connections);
-        if let Some(t) = config.acquire_timeout {
-            opts = opts.acquire_timeout(t);
+        // sqlx's SQLite (Any) driver will not auto-create the database file for
+        // this URL form — opening a non-existent path fails with
+        // `SQLITE_CANTOPEN` (code 14). For file-backed SQLite, ensure the parent
+        // directory exists and the file exists before opening (`:memory:` and
+        // other engines are left untouched).
+        if kind == DbKind::Sqlite && !connect_url.contains(":memory:") {
+            if let Some(path) = connect_url.strip_prefix("sqlite:") {
+                let db_path = std::path::Path::new(path);
+                if let Some(parent) = db_path.parent() {
+                    if !parent.as_os_str().is_empty() && !parent.exists() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                }
+                if !db_path.exists() {
+                    if let Ok(f) = std::fs::File::create(db_path) {
+                        let _ = f.sync_all();
+                    }
+                }
+            }
         }
+        let mut opts = AnyPoolOptions::new().max_connections(config.max_connections);
+        // Saturation backpressure: the per-request acquire window drives how long
+        // a request waits for a free connection before failing fast with a 503.
+        let acquire = config
+            .request_acquire_timeout
+            .or(config.acquire_timeout)
+            .unwrap_or_else(|| Duration::from_secs(3));
+        opts = opts.acquire_timeout(acquire);
         if let Some(t) = config.idle_timeout {
             opts = opts.idle_timeout(t);
         }
         if let Some(t) = config.max_lifetime {
             opts = opts.max_lifetime(t);
         }
-        if let (DbKind::Sqlite, Some(pragmas)) = (kind, config.pragmas) {
-            // Always set a `busy_timeout` first so that lock contention (e.g. while
-            // `journal_mode=WAL` takes an exclusive lock during pool warmup)
-            // waits and retries instead of hanging the connection-open forever.
-            // Without this, `PRAGMA journal_mode=WAL` can deadlock when several
-            // pool connections are opened concurrently (see DECISIONS.md ADR-068,
-            // fixes D2).
+        if kind == DbKind::Sqlite {
+            // SQLite gets zero concurrency protection from stock defaults: a
+            // rollback journal (one writer blocks every reader/writer) and
+            // `busy_timeout=0` (an immediate `SQLITE_BUSY` on any lock
+            // contention, no wait). Under a multi-connection pool that produces
+            // constant `SQLITE_BUSY` errors and ~1000x throughput collapse
+            // (see PRODUCTION_PLAN.md P0.2 / stress-test D3). So busy_timeout +
+            // WAL + synchronous=NORMAL are applied *unconditionally* for SQLite;
+            // caller-supplied `pragmas` are appended after and may override
+            // (e.g. `wal=True` from the Python bridge, or a custom journal mode).
             let mut all = vec!["PRAGMA busy_timeout=5000".to_string()];
-            all.extend(pragmas.iter().cloned());
+            all.extend(config.pragmas.clone().unwrap_or_else(|| {
+                vec!["journal_mode=WAL".to_string(), "synchronous=NORMAL".to_string()]
+            }));
             opts = opts.after_connect(move |conn, _meta| {
                 let pragmas = all.clone();
                 Box::pin(async move {
@@ -273,7 +368,12 @@ impl AnyPool {
             });
         }
         let inner = opts.connect(&connect_url).await?;
-        Ok(Self { inner, kind, default_isolation: config.default_isolation })
+        Ok(Self {
+            inner,
+            kind,
+            default_isolation: config.default_isolation,
+            request_acquire_timeout: config.request_acquire_timeout,
+        })
     }
 
     pub fn kind(&self) -> DbKind {
@@ -305,6 +405,12 @@ impl AnyPool {
         self.default_isolation
     }
 
+    /// The per-request acquire window (fast-fail threshold under saturation).
+    /// `None` means sqlx's default is in effect.
+    pub fn request_acquire_timeout(&self) -> Option<Duration> {
+        self.request_acquire_timeout
+    }
+
     /// Access the underlying type-erased pool.
     pub fn as_any(&self) -> &sqlx::AnyPool {
         &self.inner
@@ -333,6 +439,18 @@ impl AnyPool {
     /// Begin a transaction with the pool's default isolation level (if set).
     pub async fn begin(&self) -> Result<sqlx::Transaction<'static, sqlx::Any>, sqlx::Error> {
         self.begin_with(self.default_isolation).await
+    }
+
+    /// Begin a transaction for a **request**, failing fast when the pool is
+    /// saturated. Returns [`DbAcquireError::TimedOut`]/`PoolClosed` so callers
+    /// can respond `503` with backpressure instead of hanging until the pool's
+    /// acquire timeout elapses. The actual wait window is the pool's configured
+    /// `acquire_timeout` (driven by `request_acquire_timeout`).
+    pub async fn begin_request(
+        &self,
+    ) -> Result<sqlx::Transaction<'static, sqlx::Any>, DbAcquireError> {
+        let tx = self.inner.begin().await?;
+        Ok(tx)
     }
 
     /// Begin a transaction with an explicit isolation level. If the engine does
@@ -680,6 +798,7 @@ fn config(
         init_sql: None,
         pragmas,
         acquire_timeout: Some(std::time::Duration::from_secs(30)),
+        request_acquire_timeout: Some(std::time::Duration::from_secs(3)),
         idle_timeout: None,
         max_lifetime: Some(std::time::Duration::from_secs(1800)),
         health_check_interval: None,
@@ -769,6 +888,64 @@ mod tests {
         assert_eq!(DbKind::from_url("sqlite::memory:"), DbKind::Sqlite);
         assert_eq!(DbKind::from_url("mysql://localhost/db"), DbKind::MySql);
         assert_eq!(DbKind::from_url("mariadb://localhost/db"), DbKind::MySql);
+    }
+
+    #[test]
+    fn test_normalize_db_url_sqlite_paths() {
+        // Relative path with no leading slash (2-slash form) is joined against
+        // cwd and emitted absolute.
+        let rel = normalize_db_url("sqlite://foo.db");
+        assert!(rel.starts_with("sqlite:/"), "relative path must be absolute-joined, got {rel}");
+        assert!(rel.ends_with("/foo.db"), "got {rel}");
+        // An absolute path passed as `sqlite:///abs/...` (3 slashes, as the
+        // Python bridge does with `sqlite://{abs_path}`) must stay absolute and
+        // NOT get cwd-prefixed.
+        let abs_as_three = normalize_db_url("sqlite:///home/u/app.db");
+        assert_eq!(abs_as_three, "sqlite:/home/u/app.db");
+        // Absolute paths (4 slashes) are preserved absolute.
+        assert_eq!(normalize_db_url("sqlite:////tmp/foo.db"), "sqlite:/tmp/foo.db");
+        // In-memory and explicit-relative forms are preserved.
+        assert_eq!(normalize_db_url("sqlite://:memory:"), "sqlite::memory:");
+        assert_eq!(normalize_db_url("sqlite://./x.db"), "sqlite:./x.db");
+        // Non-SQLite URLs are untouched.
+        assert_eq!(normalize_db_url("postgres://localhost/db"), "postgres://localhost/db");
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_connect_relative_and_absolute_file() {
+        // Previously both of these failed with SQLITE_CANTOPEN (code 14) because
+        // normalize_db_url redirected them to the filesystem root. See
+        // PRODUCTION_PLAN.md P0.1 (BUG-2a).
+        let dir = std::env::temp_dir();
+        let rel_name = format!("ja_norm_rel_{}.db", std::process::id());
+        let abs_name = format!("ja_norm_abs_{}.db", std::process::id());
+        let rel_path = dir.join(&rel_name);
+        let abs_path = dir.join(&abs_name);
+        let _ = std::fs::remove_file(&rel_path);
+        let _ = std::fs::remove_file(&abs_path);
+
+        let rel_url = format!("sqlite://{}", rel_name);
+        // Absolute convention is `sqlite:////abs/path` (4 slashes); `abs_path`
+        // already begins with `/`, so strip it to avoid a 5th slash.
+        let abs_url =
+            format!("sqlite:////{}", abs_path.display().to_string().trim_start_matches('/'));
+        eprintln!("REL normalized = {}", normalize_db_url(&rel_url));
+        eprintln!("ABS normalized = {}", normalize_db_url(&abs_url));
+
+        let rel_pool = AnyPool::connect(config(&rel_url, 2, DbKind::Sqlite, None))
+            .await
+            .expect("relative sqlite file should connect");
+        rel_pool.execute("CREATE TABLE IF NOT EXISTS t (id INTEGER PRIMARY KEY)").await.unwrap();
+        assert_eq!(rel_pool.query_single_i64("SELECT 1").await.unwrap(), 1);
+
+        let abs_pool = AnyPool::connect(config(&abs_url, 2, DbKind::Sqlite, None))
+            .await
+            .expect("absolute sqlite file should connect");
+        abs_pool.execute("CREATE TABLE IF NOT EXISTS t (id INTEGER PRIMARY KEY)").await.unwrap();
+        assert_eq!(abs_pool.query_single_i64("SELECT 1").await.unwrap(), 1);
+
+        let _ = std::fs::remove_file(&rel_path);
+        let _ = std::fs::remove_file(&abs_path);
     }
 
     #[test]
