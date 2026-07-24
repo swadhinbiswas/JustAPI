@@ -14,7 +14,9 @@ use tokio::net::TcpListener;
 #[cfg(feature = "compression")]
 use crate::compress::CompressionMiddleware;
 use crate::health::HealthRegistry;
-use crate::memory::{BufferPool, SharedArena};
+use crate::memory::BufferPool;
+#[cfg(test)]
+use crate::memory::SharedArena;
 use crate::metrics::{self, Metrics};
 use crate::middleware::{
     ApiKeyAuth, Cors, JwtAuth, MiddlewareChain, OAuth2Password, RateLimiter, SecurityHeaders,
@@ -1297,15 +1299,12 @@ async fn serve_connection(
     // (connection-flood / slowloris resource exhaustion).
     let _permit = conn_semaphore.acquire_owned().await.expect("connection semaphore closed");
     let io = TokioIo::new(stream);
-    let arena = Arc::new(SharedArena::new());
     let token_clone = shutdown.clone();
     let spawn_metrics = metrics.clone();
     let conn_metrics = metrics.clone();
     conn_metrics.connection_opened();
     let svc = service_fn(move |mut req| {
-        arena.reset();
         let chain = chain.clone();
-        let arena = arena.clone();
         let static_dir = static_dir.clone();
         let static_mounts = static_mounts.clone();
         let metrics = spawn_metrics.clone();
@@ -1315,7 +1314,6 @@ async fn serve_connection(
         async move {
             let path = req.uri().path().to_string();
             let method = req.method().clone();
-            let _arena_path = arena.alloc_str(&path);
             let start = std::time::Instant::now();
             req.extensions_mut().insert(peer_addr);
 
@@ -1996,11 +1994,8 @@ async fn serve_with_tls(
             match acceptor.accept(stream).await {
                 Ok(tls_stream) => {
                     let io = TokioIo::new(tls_stream);
-                    let arena = Arc::new(SharedArena::new());
                     let svc = service_fn(move |mut req| {
-                        arena.reset();
                         let chain = chain.clone();
-                        let arena = arena.clone();
                         let static_dir = static_dir.clone();
                         let static_mounts = static_mounts.clone();
                         let metrics = spawn_metrics.clone();
@@ -2009,7 +2004,6 @@ async fn serve_with_tls(
                         let ws_handler = ws_handler.clone();
                         async move {
                             let path = req.uri().path().to_string();
-                            let _arena_path = arena.alloc_str(&path);
                             let start = std::time::Instant::now();
                             req.extensions_mut().insert(peer_addr);
 
