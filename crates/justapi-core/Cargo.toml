@@ -14,6 +14,7 @@ zstd-compression = ["compression", "zstd"]
 opentelemetry = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-stdout", "dep:opentelemetry-otlp", "dep:tracing-opentelemetry"]
 db = ["sqlx", "chrono"]
 inference = ["justapi-inference"]
+mail = ["dep:lettre", "dep:minijinja"]
 
 [dependencies]
 tokio.workspace = true
@@ -69,6 +70,8 @@ arc-swap = "1.9.2"
 async-graphql = "7.2.1"
 justapi-inference = { path = "../justapi-inference", optional = true }
 tempfile = "3.27.0"
+lettre = { workspace = true, optional = true }
+minijinja = { workspace = true, optional = true }
 
 [dev-dependencies]
 proptest = "1"
