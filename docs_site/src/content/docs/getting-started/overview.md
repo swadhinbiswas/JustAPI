@@ -27,7 +27,7 @@ It is engineered as a **drop-in replacement for FastAPI** — preserving your fa
 
 ## Architecture Overview
 
-![JustAPI Architecture](../../../assets/architectureoverview.png)
+![JustAPI Architecture](https://cdn.jsdelivr.net/gh/swadhinbiswas/JustAPI@refs/heads/initial-setup/docs_site/src/assets/architectureoverview.png)
 
 ## Performance Comparison
 
