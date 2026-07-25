@@ -1,68 +1,70 @@
 ---
-title: Session API (Agent System)
-description: "API reference for session management in JustAPI, the FastAPI alternative — Rust-backed agent session state management."
-keywords: [session, fastapi alternative, justapi, session management, agent system, state management]
+title: Session
+description: Manage per-user session state in JustAPI — create, read, update, delete sessions.
+keywords: [JustAPI, session, state, agent, user session]
 ---
 
-## `Session` Object
+## Enable Sessions
 
-Sessions provide durable per-client state storage backed by the Rust runtime. Sessions are identified by the `justapi_session` cookie or `?session=` query parameter.
+```python
+from justapi import JustAPIApp
+
+app = JustAPIApp()
+app.enable_sessions(cookie_name="session_id")
+```
+
+## Session Methods
+
+| Method | Description |
+|--------|-------------|
+| `app.create_session(data, id=None)` | Create a new session |
+| `app.get_session(id)` | Get session data by ID |
+| `app.set_session(id, data)` | Replace session data |
+| `app.update_session(id, **fields)` | Shallow merge fields |
+| `app.delete_session(id)` | Delete a session |
+
+## Example
+
+```python
+@app.post("/sessions")
+def create_session():
+    session_id = app.create_session({"user_id": 1, "role": "admin"})
+    return {"session_id": session_id}
+
+@app.get("/sessions/{session_id}")
+def get_session(session_id: str):
+    data = app.get_session(session_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return data
+
+@app.patch("/sessions/{session_id}")
+def update_session(session_id: str, fields: dict):
+    app.update_session(session_id, **fields)
+    return {"status": "updated"}
+
+@app.delete("/sessions/{session_id}")
+def delete_session(session_id: str):
+    app.delete_session(session_id)
+    return {"status": "deleted"}
+```
+
+## Agent Sessions
+
+Sessions are the foundation for the agent system. The `Session` class wraps session state with a typed interface:
 
 ```python
 from justapi import Session
+
+@app.get("/agent")
+def agent_endpoint(request):
+    session = Session(request)
+    session.set("context", {"topic": "weather"})
+    context = session.get("context")
+    return {"context": context}
 ```
-
-### Properties & Methods
-
-| Method | Returns | Description |
-|---|---|---|
-| `session.id` | `str` | Unique session identifier |
-| `session.get()` | `dict` | Get all session data |
-| `session.update(**kwargs)` | `None` | Update session data with key-value pairs |
-
-### Usage
-
-```python
-from justapi import JustAPIApp, Session
-
-app = JustAPIApp()
-app.enable_sessions()
-
-
-@app.get("/agent/state")
-def agent_state(request, session: Session):
-    prior = session.get().get("visits", 0)
-    session.update(visits=prior + 1)
-    return {
-        "session_id": session.id,
-        "visits": prior + 1,
-        "data": session.get(),
-    }
-```
-
-## Enabling Sessions
-
-```python
-app.enable_sessions()
-```
-
-This activates the Rust-backed session store. Sessions are:
-- Created on first use (new session ID generated)
-- Persisted across requests via cookie or query param
-- Available in any handler by declaring `session: Session`
-
-## System Routes
-
-```python
-app.enable_system_routes()
-```
-
-Enables:
-- `GET /_system/tools` — List registered MCP tools
-- `POST /_system/tools/call` — Call an MCP tool
 
 ## See Also
 
-- [Agent System Guide](/advanced/agent-system/) — Deep dive into agent-native features
-- [Dependency Injection API](/api-reference/dependency-injection/) — Session in DI
-- [JustAPIApp](/api-reference/justapiapp/) — enable_sessions() and enable_system_routes()
+- [Agent System](/advanced/agent-system/) — MCP tools and agent sessions
+- [Tool Registration](/advanced/agent-system/) — registering tools
