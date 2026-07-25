@@ -1,25 +1,234 @@
+/* ═══════════════════════════════════════════════════════════════════
+   JustAPI Documentation — Design System
+   Premium, FastAPI-level documentation styling
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* ─── Custom Properties ─── */
 :root {
+  /* Accent palette */
   --sl-color-accent-low: #2a1147;
   --sl-color-accent: #8b5cf6;
   --sl-color-accent-high: #c4b5fd;
+
+  /* Neutrals */
   --sl-color-white: #ffffff;
-  --sl-color-gray-1: #f3f4f6;
-  --sl-color-gray-2: #e5e7eb;
-  --sl-color-gray-3: #9ca3af;
-  --sl-color-gray-4: #4b5563;
-  --sl-color-gray-5: #1f2937;
-  --sl-color-gray-6: #111827;
-  --sl-color-black: #0b0f19;
+  --sl-color-gray-1: #f8fafc;
+  --sl-color-gray-2: #f1f5f9;
+  --sl-color-gray-3: #94a3b8;
+  --sl-color-gray-4: #64748b;
+  --sl-color-gray-5: #334155;
+  --sl-color-gray-6: #1e293b;
+  --sl-color-black: #020617;
+
+  /* Brand */
   --sl-color-orange: #e6522c;
   --sl-color-blue: #3b82f6;
+  --sl-color-green: #10b981;
+  --sl-color-red: #ef4444;
+  --sl-color-yellow: #f59e0b;
+
+  /* Typography */
+  --sl-font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --sl-font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+
+  /* Spacing */
+  --sl-content-width: 72rem;
+  --sl-sidebar-width: 18rem;
+  --sl-toc-width: 14rem;
 }
 
+/* ─── Dark Mode ─── */
 [data-theme='dark'] {
-  --sl-color-bg: #0b0f19;
-  --sl-color-bg-nav: #111827;
+  --sl-color-bg: #020617;
+  --sl-color-bg-nav: #0f172a;
   --sl-color-bg-sidebar: #0f172a;
+  --sl-color-bg-hover: #1e293b;
+  --sl-color-text: #e2e8f0;
+  --sl-color-text-muted: #94a3b8;
+  --sl-color-border: #1e293b;
 }
 
+/* ─── Light Mode ─── */
+[data-theme='light'] {
+  --sl-color-bg: #ffffff;
+  --sl-color-bg-nav: #f8fafc;
+  --sl-color-bg-sidebar: #f8fafc;
+  --sl-color-bg-hover: #f1f5f9;
+  --sl-color-text: #1e293b;
+  --sl-color-text-muted: #64748b;
+  --sl-color-border: #e2e8f0;
+}
+
+/* ─── Global Typography ─── */
+html {
+  font-family: var(--sl-font);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  scroll-behavior: smooth;
+}
+
+body {
+  line-height: 1.7;
+  letter-spacing: -0.011em;
+}
+
+/* ─── Headings ─── */
+.content h1 {
+  font-size: 2.25rem;
+  font-weight: 800;
+  letter-spacing: -0.025em;
+  line-height: 1.2;
+  margin-bottom: 1rem;
+}
+
+.content h2 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin-top: 3rem;
+  margin-bottom: 1rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--sl-color-border, #e2e8f0);
+}
+
+.content h3 {
+  font-size: 1.2rem;
+  font-weight: 600;
+  margin-top: 2rem;
+  margin-bottom: 0.75rem;
+  letter-spacing: -0.01em;
+}
+
+.content h4 {
+  font-size: 1rem;
+  font-weight: 600;
+  margin-top: 1.5rem;
+}
+
+/* ─── Links ─── */
+.content a {
+  color: var(--sl-color-accent);
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+
+.content a:hover {
+  color: var(--sl-color-accent-high);
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+}
+
+/* ─── Code Blocks ─── */
+code {
+  font-family: var(--sl-font-mono);
+  font-size: 0.85em;
+  border-radius: 6px;
+  padding: 0.15em 0.4em;
+  background: var(--sl-color-gray-2, #f1f5f9);
+}
+
+[data-theme='dark'] code {
+  background: rgba(139, 92, 246, 0.15);
+  color: #c4b5fd;
+}
+
+pre {
+  font-family: var(--sl-font-mono);
+  font-size: 0.875rem;
+  line-height: 1.6;
+  border-radius: 12px;
+  border: 1px solid var(--sl-color-border, #e2e8f0);
+  padding: 1.25rem;
+  overflow-x: auto;
+  background: #0f172a !important;
+}
+
+[data-theme='dark'] pre {
+  background: #0b0f19 !important;
+  border-color: #1e293b;
+}
+
+pre code {
+  background: none;
+  padding: 0;
+  border-radius: 0;
+}
+
+/* ─── Tables ─── */
+.content table {
+  width: 100%;
+  font-size: 0.875rem;
+  border-collapse: separate;
+  border-spacing: 0;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid var(--sl-color-border, #e2e8f0);
+  margin: 1.5rem 0;
+}
+
+.content thead {
+  background: var(--sl-color-gray-6, #1e293b);
+}
+
+[data-theme='dark'] .content thead {
+  background: #1e293b;
+}
+
+[data-theme='light'] .content thead {
+  background: #f1f5f9;
+}
+
+.content th {
+  font-weight: 600;
+  text-align: left;
+  padding: 0.75rem 1rem;
+  border-bottom: 2px solid var(--sl-color-border, #e2e8f0);
+}
+
+.content td {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--sl-color-border, #e2e8f0);
+}
+
+.content tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.content tbody tr:hover {
+  background: var(--sl-color-bg-hover, #f8fafc);
+}
+
+/* ─── Callouts / Asides ─── */
+.starlight-aside {
+  border-radius: 12px;
+  border-left-width: 4px;
+  padding: 1rem 1.25rem;
+  margin: 1.5rem 0;
+}
+
+.starlight-aside--note {
+  border-left-color: var(--sl-color-blue);
+  background: rgba(59, 130, 246, 0.05);
+}
+
+.starlight-aside--tip {
+  border-left-color: var(--sl-color-green);
+  background: rgba(16, 185, 129, 0.05);
+}
+
+.starlight-aside--caution {
+  border-left-color: var(--sl-color-yellow);
+  background: rgba(245, 158, 11, 0.05);
+}
+
+.starlight-aside--danger {
+  border-left-color: var(--sl-color-red);
+  background: rgba(239, 68, 68, 0.05);
+}
+
+/* ─── Hero Gradient ─── */
 .hero-gradient {
   background: linear-gradient(135deg, #e6522c 0%, #8b5cf6 50%, #3b82f6 100%);
   -webkit-background-clip: text;
@@ -27,43 +236,7 @@
   background-clip: text;
 }
 
-.benchmark-card {
-  border: 1px solid rgba(139, 92, 246, 0.3);
-  border-radius: 12px;
-  padding: 1.5rem;
-  background: rgba(17, 24, 39, 0.7);
-  backdrop-filter: blur(12px);
-  margin-bottom: 1.5rem;
-}
-
-.site-title {
-  font-weight: 700;
-}
-
-.content h2 {
-  margin-top: 2.5rem;
-  border-bottom: 1px solid var(--sl-color-gray-5);
-  padding-bottom: 0.5rem;
-}
-
-.content h3 {
-  margin-top: 2rem;
-}
-
-.content table {
-  font-size: 0.875rem;
-}
-
-.content th {
-  background: var(--sl-color-gray-6);
-  font-weight: 600;
-}
-
-.content td,
-.content th {
-  border-color: var(--sl-color-gray-5);
-}
-
+/* ─── Feature Grid ─── */
 .feature-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
@@ -72,35 +245,84 @@
 }
 
 .feature-card {
-  border: 1px solid var(--sl-color-gray-5);
-  border-radius: 12px;
-  padding: 1.5rem;
-  background: var(--sl-color-gray-6);
-  transition: border-color 0.2s, transform 0.2s;
+  border: 1px solid var(--sl-color-border, #e2e8f0);
+  border-radius: 16px;
+  padding: 1.75rem;
+  background: var(--sl-color-bg, #ffffff);
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+  overflow: hidden;
+}
+
+.feature-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, var(--sl-color-accent), var(--sl-color-blue));
+  opacity: 0;
+  transition: opacity 0.25s ease;
 }
 
 .feature-card:hover {
   border-color: var(--sl-color-accent);
-  transform: translateY(-2px);
+  transform: translateY(-4px);
+  box-shadow: 0 20px 40px -12px rgba(139, 92, 246, 0.15);
+}
+
+.feature-card:hover::before {
+  opacity: 1;
 }
 
 .feature-card h3 {
   margin-top: 0;
   font-size: 1.1rem;
+  font-weight: 600;
 }
 
+/* ─── Benchmark Card ─── */
+.benchmark-card {
+  border: 1px solid rgba(139, 92, 246, 0.3);
+  border-radius: 16px;
+  padding: 1.75rem;
+  background: rgba(17, 24, 39, 0.7);
+  backdrop-filter: blur(16px);
+  margin-bottom: 1.5rem;
+  position: relative;
+  overflow: hidden;
+}
+
+.benchmark-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--sl-color-orange), var(--sl-color-accent), var(--sl-color-blue));
+}
+
+/* ─── Performance Table ─── */
 .performance-table {
   width: 100%;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid var(--sl-color-border, #e2e8f0);
 }
 
 .performance-table th {
   text-align: left;
-  padding: 0.75rem 1rem;
+  padding: 1rem 1.25rem;
+  font-weight: 600;
+  background: var(--sl-color-gray-6, #1e293b);
 }
 
 .performance-table td {
-  padding: 0.75rem 1rem;
+  padding: 1rem 1.25rem;
   text-align: right;
 }
 
@@ -112,30 +334,193 @@
 .performance-table .winner {
   color: var(--sl-color-accent-high);
   font-weight: 700;
+  font-size: 1.1em;
 }
 
-code {
-  font-size: 0.85em;
+.performance-table tbody tr:hover {
+  background: var(--sl-color-bg-hover, #f8fafc);
+}
+
+/* ─── Sidebar ─── */
+.sidebar-title {
+  font-weight: 700;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--sl-color-text-muted, #64748b);
+}
+
+/* ─── Badge Styling ─── */
+.badge--success {
+  background: rgba(16, 185, 129, 0.15);
+  color: var(--sl-color-green);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  border-radius: 9999px;
+  padding: 0.15em 0.6em;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+/* ─── Card Grid Overrides ─── */
+.sl-card-grid {
+  gap: 1.25rem;
+}
+
+.sl-card {
+  border-radius: 12px;
+  border: 1px solid var(--sl-color-border, #e2e8f0);
+  transition: all 0.2s ease;
+}
+
+.sl-card:hover {
+  border-color: var(--sl-color-accent);
+  box-shadow: 0 8px 24px -8px rgba(139, 92, 246, 0.12);
+}
+
+/* ─── TOC (Table of Contents) ─── */
+.toc-panel {
+  font-size: 0.85rem;
+}
+
+.toc-panel a {
+  transition: color 0.15s ease;
+}
+
+/* ─── Breadcrumbs ─── */
+.breadcrumbs a {
+  font-size: 0.85rem;
+  color: var(--sl-color-text-muted, #64748b);
+  transition: color 0.15s ease;
+}
+
+.breadcrumbs a:hover {
+  color: var(--sl-color-accent);
+}
+
+/* ─── Navigation (Prev/Next) ─── */
+.prev-next-nav a {
+  border-radius: 12px;
+  transition: all 0.2s ease;
+  border: 1px solid var(--sl-color-border, #e2e8f0);
+}
+
+.prev-next-nav a:hover {
+  border-color: var(--sl-color-accent);
+  box-shadow: 0 4px 12px -4px rgba(139, 92, 246, 0.15);
+}
+
+/* ─── Search ─── */
+.search-input {
+  border-radius: 10px !important;
+  font-size: 0.9rem !important;
+}
+
+/* ─── Mobile Responsive ─── */
+@media (max-width: 768px) {
+  .content h1 {
+    font-size: 1.75rem;
+  }
+
+  .content h2 {
+    font-size: 1.3rem;
+  }
+
+  .feature-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .performance-table {
+    font-size: 0.8rem;
+  }
+
+  .performance-table th,
+  .performance-table td {
+    padding: 0.5rem 0.75rem;
+  }
+}
+
+/* ─── Print Styles ─── */
+@media print {
+  .sidebar,
+  .toc-panel,
+  .edit-link,
+  .prev-next-nav {
+    display: none !important;
+  }
+
+  .content {
+    max-width: 100%;
+  }
+}
+
+/* ─── Focus Styles (Accessibility) ─── */
+:focus-visible {
+  outline: 2px solid var(--sl-color-accent);
+  outline-offset: 2px;
   border-radius: 4px;
 }
 
-pre {
-  border-radius: 8px;
-  border: 1px solid var(--sl-color-gray-5);
+/* ─── Selection ─── */
+::selection {
+  background: rgba(139, 92, 246, 0.3);
+  color: var(--sl-color-white);
 }
 
-.starlight-aside {
-  border-radius: 8px;
+[data-theme='light'] ::selection {
+  background: rgba(139, 92, 246, 0.2);
+  color: var(--sl-color-black);
 }
 
-.starlight-aside--note {
-  border-left-color: var(--sl-color-blue);
+/* ─── Scrollbar ─── */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
 }
 
-.starlight-aside--tip {
-  border-left-color: var(--sl-color-accent);
+::-webkit-scrollbar-track {
+  background: transparent;
 }
 
-.starlight-aside--caution {
-  border-left-color: var(--sl-color-orange);
+::-webkit-scrollbar-thumb {
+  background: var(--sl-color-gray-4, #64748b);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--sl-color-gray-3, #94a3b8);
+}
+
+/* ─── Animations ─── */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.content > * {
+  animation: fadeInUp 0.3s ease-out;
+}
+
+/* ─── Starlight Overrides ─── */
+.starlight-sidebar > div {
+  border-right: 1px solid var(--sl-color-border, #e2e8f0);
+}
+
+/* ─── Code Group Tabs ─── */
+.tab-label {
+  font-family: var(--sl-font-mono);
+  font-size: 0.8rem;
+}
+
+/* ─── Gradient Text Utility ─── */
+.gradient-text {
+  background: linear-gradient(135deg, #e6522c, #8b5cf6, #3b82f6);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
