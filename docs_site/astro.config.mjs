@@ -17,6 +17,7 @@ export default defineConfig({
       },
       social: [
         { icon: 'github', label: 'GitHub', href: 'https://github.com/swadhinbiswas/JustAPI' },
+        { icon: 'x.com', label: 'X (Twitter)', href: 'https://x.com/justapidev' },
       ],
       customCss: ['./src/styles/custom.css'],
       editLink: {
@@ -76,7 +77,7 @@ export default defineConfig({
                 url: site,
                 downloadUrl: 'https://pypi.org/project/justapi/',
                 installUrl: 'https://pypi.org/project/justapi/',
-                softwareVersion: '2.0.0',
+                softwareVersion: '2.0.8',
                 offers: {
                   '@type': 'Offer',
                   price: '0',

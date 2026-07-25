@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://justapi.dev/sitemap-index.xml
+
+# Disallow admin/private paths
+Disallow: /_astro/
