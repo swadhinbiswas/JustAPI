@@ -8,6 +8,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use futures::future::BoxFuture;
 use governor::clock::Clock;
+use http::HeaderValue;
 use http_body_util::combinators::UnsyncBoxBody;
 use http_body_util::BodyExt;
 use hyper::body::{Bytes, Incoming};
@@ -270,9 +271,12 @@ impl<B: Send + 'static> Middleware<B> for Cors {
         let add_vary = !allow_all;
 
         if req.method() == Method::OPTIONS {
+            let origin_val: HeaderValue = matched_origin
+                .parse()
+                .map_err(|e| anyhow::anyhow!("invalid CORS origin header value: {e}"))?;
             let mut builder = Response::builder()
                 .status(StatusCode::NO_CONTENT)
-                .header("access-control-allow-origin", matched_origin)
+                .header("access-control-allow-origin", origin_val)
                 .header("access-control-allow-methods", &self.allow_methods)
                 .header("access-control-allow-headers", &self.allow_headers)
                 .header("access-control-max-age", &self.max_age);
@@ -298,18 +302,24 @@ impl<B: Send + 'static> Middleware<B> for Cors {
         }
 
         let mut resp = next.run(req).await?;
-        resp.headers_mut().insert("access-control-allow-origin", matched_origin.parse().unwrap());
+        let origin_val: HeaderValue = matched_origin
+            .parse()
+            .map_err(|e| anyhow::anyhow!("invalid CORS origin header value: {e}"))?;
+        resp.headers_mut().insert("access-control-allow-origin", origin_val);
         if self.allow_credentials {
-            resp.headers_mut().insert("access-control-allow-credentials", "true".parse().unwrap());
+            resp.headers_mut()
+                .insert("access-control-allow-credentials", HeaderValue::from_static("true"));
         }
         if !self.expose_headers.is_empty() {
-            resp.headers_mut().insert(
-                "access-control-expose-headers",
-                self.expose_headers.join(", ").parse().unwrap(),
-            );
+            let val: HeaderValue = self
+                .expose_headers
+                .join(", ")
+                .parse()
+                .map_err(|e| anyhow::anyhow!("invalid CORS expose-headers value: {e}"))?;
+            resp.headers_mut().insert("access-control-expose-headers", val);
         }
         if add_vary {
-            resp.headers_mut().insert("vary", "Origin".parse().unwrap());
+            resp.headers_mut().insert("vary", HeaderValue::from_static("Origin"));
         }
         Ok(resp)
     }
