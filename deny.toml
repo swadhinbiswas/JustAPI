@@ -1,20 +1,19 @@
-# cargo-deny configuration
-# See https://embarkstudios.github.io/cargo-deny/ for details
+[graph]
+targets = []
+all-features = false
+no-default-features = false
+
+[output]
+feature-depth = 1
 
 [advisories]
-vulnerability = "deny"
-unmaintained = "warn"
-notice = "warn"
-# Ignore advisories that have been reviewed and accepted
-ignore = []
-# CRATES.io advisory database
-db-path = "~/.cargo/advisory-db"
-db-urls = ["https://github.com/rustsec/advisory-db"]
+ignore = [
+    "RUSTSEC-2024-0436",  # paste: unmaintained, transitive via candle-core/gemm — no replacement available
+    "RUSTSEC-2023-0071",  # rsa: Marvin Attack timing side-channel, transitive via sqlx-mysql — no fix yet
+    # spin 0.9.8: yanked, transitive via flume → sqlx-sqlite — no impact on our usage
+]
 
 [licenses]
-unlicensed = "deny"
-allow-osi-fsf-free = "neither"
-# Only allow these licenses
 allow = [
     "MIT",
     "Apache-2.0",
@@ -26,25 +25,27 @@ allow = [
     "Unicode-3.0",
     "CC0-1.0",
     "OpenSSL",
+    "MPL-2.0",
+    "MIT-0",
+    "0BSD",
+    "CDLA-Permissive-2.0",
+    "BSL-1.0",
 ]
-deny = [
-    "GPL-2.0",
-    "GPL-3.0",
-    "AGPL-3.0",
-    "LGPL-3.0",
-]
-# Skip these crates for license checking (internal crates)
-skip = [
-    { name = "justapi-core" },
-    { name = "justapi-py" },
-    { name = "justapi-cli" },
-    { name = "justapi-bench" },
-]
+confidence-threshold = 0.8
+exceptions = []
+
+[licenses.private]
+ignore = false
+registries = []
 
 [bans]
 multiple-versions = "warn"
 wildcards = "allow"
 highlight = "all"
+workspace-default-features = "allow"
+external-default-features = "allow"
+allow = []
+allow-workspace = false
 deny = []
 skip = []
 skip-tree = []
@@ -52,4 +53,10 @@ skip-tree = []
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 allow-git = []
+
+[sources.allow-org]
+github = []
+gitlab = []
+bitbucket = []
