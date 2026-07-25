@@ -33,6 +33,8 @@ pub mod tracing_setup;
 pub mod validate;
 pub mod wasm;
 pub mod xml;
+#[cfg(feature = "mail")]
+pub mod mail;
 
 pub use server::{serve, Server};
 
