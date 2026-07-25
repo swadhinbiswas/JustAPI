@@ -85,6 +85,7 @@ pub(crate) fn call_python_handler(
     app: Option<Py<PyAny>>,
     needs_request: bool,
     http_version: String,
+    auth_claims: Option<String>,
 ) -> NativeResponse {
     let helper = get_helper(py);
 
@@ -167,6 +168,7 @@ pub(crate) fn call_python_handler(
             client,
             app,
             http_version,
+            auth_claims,
         );
         if let Some(pb) = parsed_body {
             req.set_parsed_body(py, pb.into_bound(py));
@@ -305,13 +307,28 @@ fn trace_enabled() -> bool {
 /// Cached `orjson.dumps(obj, default=str)` (or `json.dumps` fallback) callable,
 /// resolved once on first use. Mirrors `_native_helper._dumps` but lets Rust
 /// invoke orjson directly, skipping the Python `wrap_result` bytecode.
+///
+/// When the `orjson` Cargo feature is enabled, `orjson` is required — the
+/// function will panic at first call if the Python `orjson` module is not
+/// available. Without the feature, it silently falls back to `json.dumps`.
 pub(crate) fn fast_dumps(py: Python<'_>) -> PyResult<&Bound<'_, PyAny>> {
     static DUMPS: std::sync::OnceLock<Py<PyAny>> = std::sync::OnceLock::new();
+
+    #[cfg(not(feature = "orjson"))]
     let expr = if py.import("orjson").is_ok() {
         "lambda o: __import__('orjson').dumps(o, default=str)"
     } else {
         "lambda o: __import__('json').dumps(o, default=str).encode('utf-8')"
     };
+
+    #[cfg(feature = "orjson")]
+    let expr = {
+        let _ = py.import("orjson").unwrap_or_else(|e| {
+            panic!("orjson feature enabled but Python 'orjson' module not available: {e}")
+        });
+        "lambda o: __import__('orjson').dumps(o, default=str)"
+    };
+
     // SAFETY: globals/locals are left as None, which Python fills with the
     // builtins dict, so `__import__` and `str` are available. The cached
     // lambda borrows no local state and is leaked for the process lifetime.
@@ -725,6 +742,13 @@ where
                 .map(|s| s.to_string());
             let is_multipart =
                 content_type.as_deref().unwrap_or("").starts_with("multipart/form-data");
+
+            // Extract JWT claims from the Rust middleware before consuming the
+            // request body (which moves `req`). The claims are stored as a
+            // `serde_json::Value` in `req.extensions()` by `JwtAuth` middleware.
+            let auth_claims: Option<String> =
+                req.extensions().get::<serde_json::Value>().map(|v| v.to_string());
+
             let req_body = req.into_body();
             let (body_bytes, multipart_form_res) = if is_multipart {
                 let ct = content_type.unwrap();
@@ -913,12 +937,12 @@ where
                 if let Some(Ok(form)) = multipart_form_res {
                     let d = pyo3::types::PyDict::new(py);
                     for (k, v) in form.fields.iter() {
-                        d.set_item(k, v).unwrap();
+                        d.set_item(k, v).ok();
                     }
                     for f in form.files.iter() {
                         let headers_dict = pyo3::types::PyDict::new(py);
                         for (k, v) in f.headers.iter() {
-                            headers_dict.set_item(k, v).unwrap();
+                            headers_dict.set_item(k, v).ok();
                         }
                         let upload_file = crate::multipart::UploadFile::new(
                             f.filename.clone().unwrap_or_default(),
@@ -927,8 +951,10 @@ where
                             headers_dict.into(),
                             f.temp_path.clone(),
                         );
-                        let p = pyo3::Bound::new(py, upload_file).unwrap();
-                        d.set_item(&f.field_name, p).unwrap();
+                        let Ok(p) = pyo3::Bound::new(py, upload_file) else {
+                            continue;
+                        };
+                        d.set_item(&f.field_name, p).ok();
                     }
                     form_dict_py = Some(d.into());
                 }
@@ -951,6 +977,7 @@ where
                     app.as_ref().as_ref().map(|a| a.clone_ref(py)),
                     needs_request_clone[handler_id],
                     http_version.clone(),
+                    auth_claims,
                 )
             })
             .await
@@ -1176,12 +1203,12 @@ where
                 if let Some(Ok(form)) = &multipart_form_res {
                     let d = pyo3::types::PyDict::new(py);
                     for (k, v) in form.fields.iter() {
-                        d.set_item(k, v).unwrap();
+                        d.set_item(k, v).ok();
                     }
                     for f in form.files.iter() {
                         let headers_dict = pyo3::types::PyDict::new(py);
                         for (k, v) in f.headers.iter() {
-                            headers_dict.set_item(k, v).unwrap();
+                            headers_dict.set_item(k, v).ok();
                         }
                         let upload_file = crate::multipart::UploadFile::new(
                             f.filename.clone().unwrap_or_default(),
@@ -1190,8 +1217,10 @@ where
                             headers_dict.into(),
                             f.temp_path.clone(),
                         );
-                        let p = pyo3::Bound::new(py, upload_file).unwrap();
-                        d.set_item(&f.field_name, p).unwrap();
+                        let Ok(p) = pyo3::Bound::new(py, upload_file) else {
+                            continue;
+                        };
+                        d.set_item(&f.field_name, p).ok();
                     }
                     form_dict_py = Some(d.into());
                 }
@@ -1214,6 +1243,7 @@ where
                     app.as_ref().as_ref().map(|a| a.clone_ref(py)),
                     needs_request_clone[handler_id],
                     http_version.clone(),
+                    None, // auth_claims: test client has no middleware
                 )
             })
             .await
