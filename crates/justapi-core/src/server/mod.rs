@@ -1297,7 +1297,10 @@ async fn serve_connection(
     // Bound concurrent connections: a permit is held for the life of
     // the connection so a flood of accepts can't exhaust FDs/memory
     // (connection-flood / slowloris resource exhaustion).
-    let _permit = conn_semaphore.acquire_owned().await.expect("connection semaphore closed");
+    let Ok(_permit) = conn_semaphore.acquire_owned().await else {
+        tracing::warn!("connection semaphore closed, dropping connection");
+        return;
+    };
     let io = TokioIo::new(stream);
     let token_clone = shutdown.clone();
     let spawn_metrics = metrics.clone();
@@ -1987,10 +1990,10 @@ async fn serve_with_tls(
         let conn_semaphore = conn_semaphore.clone();
         connections.spawn(async move {
             // Bound concurrent connections (see serve_http for rationale).
-            let _permit = conn_semaphore
-                .acquire_owned()
-                .await
-                .expect("connection semaphore closed");
+            let Ok(_permit) = conn_semaphore.acquire_owned().await else {
+                tracing::warn!("TLS connection semaphore closed, dropping connection");
+                return;
+            };
             match acceptor.accept(stream).await {
                 Ok(tls_stream) => {
                     let io = TokioIo::new(tls_stream);
