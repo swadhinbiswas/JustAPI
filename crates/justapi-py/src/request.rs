@@ -39,12 +39,12 @@ fn split_host_port(host: &str) -> (String, Option<u16>) {
     (host.to_string(), None)
 }
 
-pub(crate) fn build_headers(py: Python<'_>, conn: &Conn) -> Py<PyAny> {
+pub(crate) fn build_headers(py: Python<'_>, conn: &Conn) -> PyResult<Py<PyAny>> {
     let raw: Vec<(Vec<u8>, Vec<u8>)> = conn.headers_raw.clone();
-    Bound::new(py, Headers { raw }).unwrap().into_any().unbind()
+    Ok(Bound::new(py, Headers { raw })?.into_any().unbind())
 }
 
-pub(crate) fn build_query_params(py: Python<'_>, conn: &Conn) -> Py<PyAny> {
+pub(crate) fn build_query_params(py: Python<'_>, conn: &Conn) -> PyResult<Py<PyAny>> {
     let qs = String::from_utf8_lossy(&conn.query_string_raw).to_string();
     let mut items: Vec<(String, String)> = Vec::new();
     for pair in qs.split('&') {
@@ -57,7 +57,7 @@ pub(crate) fn build_query_params(py: Python<'_>, conn: &Conn) -> Py<PyAny> {
         };
         items.push((percent_decode(k), percent_decode(v)));
     }
-    Bound::new(py, QueryParams { items }).unwrap().into_any().unbind()
+    Ok(Bound::new(py, QueryParams { items })?.into_any().unbind())
 }
 
 pub(crate) fn build_cookies(py: Python<'_>, conn: &Conn) -> Py<PyAny> {
@@ -83,7 +83,7 @@ pub(crate) fn build_url(
     path: &str,
     query: &[u8],
     fragment: &str,
-) -> Py<PyAny> {
+) -> PyResult<Py<PyAny>> {
     let (hostname, port) = split_host_port(host);
     let url = URL {
         scheme: scheme.to_string(),
@@ -93,7 +93,7 @@ pub(crate) fn build_url(
         query: String::from_utf8_lossy(query).to_string(),
         fragment: fragment.to_string(),
     };
-    Bound::new(py, url).unwrap().into_any().unbind()
+    Ok(Bound::new(py, url)?.into_any().unbind())
 }
 
 fn build_scope(py: Python<'_>, conn: &Conn) -> Py<PyAny> {
@@ -195,8 +195,26 @@ impl Request {
         client: Option<(String, u16)>,
         app: Option<Py<PyAny>>,
         http_version: String,
+        auth_claims: Option<String>,
     ) -> Self {
-        let state = PyDict::new(py).into();
+        let state = PyDict::new(py);
+        // Bridge JWT claims from the Rust middleware into request.state["auth"].
+        // The `auth_claims` is a JSON string of the decoded JWT payload, set by
+        // the middleware and forwarded through `call_python_handler`.
+        if let Some(claims_json) = &auth_claims {
+            if let Ok(serde_json::Value::Object(map)) =
+                serde_json::from_str::<serde_json::Value>(claims_json)
+            {
+                let d = PyDict::new(py);
+                for (k, v) in &map {
+                    if let Ok(val) = json_value_to_request(py, v) {
+                        d.set_item(k.as_str(), val).ok();
+                    }
+                }
+                state.set_item("auth", d).ok();
+            }
+        }
+        let state = state.into();
         let conn = Conn {
             method,
             path,
@@ -229,6 +247,34 @@ impl Request {
     /// Borrow the cached parsed body if present, else `None`.
     pub fn parsed_body(&self, py: Python<'_>) -> Option<Py<PyAny>> {
         self.parsed_body.as_ref().map(|v| v.clone_ref(py))
+    }
+}
+
+fn json_value_to_request<'py>(
+    py: Python<'py>,
+    v: &serde_json::Value,
+) -> PyResult<Bound<'py, PyAny>> {
+    match v {
+        serde_json::Value::Null => Ok(py.None().into_bound(py)),
+        serde_json::Value::Bool(b) => Ok((*b).into_pyobject(py)?.as_any().clone()),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Ok(i.into_pyobject(py)?.as_any().clone())
+            } else if let Some(f) = n.as_f64() {
+                Ok(f.into_pyobject(py)?.as_any().clone())
+            } else {
+                Ok(py.None().into_bound(py))
+            }
+        }
+        serde_json::Value::String(s) => Ok(s.into_pyobject(py)?.as_any().clone()),
+        serde_json::Value::Array(arr) => {
+            let list = PyList::empty(py);
+            for item in arr {
+                list.append(json_value_to_request(py, item)?).ok();
+            }
+            Ok(list.as_any().clone())
+        }
+        serde_json::Value::Object(_) => Ok(py.None().into_bound(py)),
     }
 }
 
@@ -270,7 +316,7 @@ impl Request {
 
     #[getter]
     fn headers(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        Ok(build_headers(py, &self.conn))
+        build_headers(py, &self.conn)
     }
 
     #[getter]
@@ -280,7 +326,7 @@ impl Request {
 
     #[getter]
     fn query_params(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        Ok(build_query_params(py, &self.conn))
+        build_query_params(py, &self.conn)
     }
 
     #[getter]
@@ -305,20 +351,13 @@ impl Request {
     #[getter]
     fn url(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let host = host_of(&self.conn).unwrap_or_else(|| "localhost".to_string());
-        Ok(build_url(
-            py,
-            &self.conn.scheme,
-            &host,
-            &self.conn.path,
-            &self.conn.query_string_raw,
-            "",
-        ))
+        build_url(py, &self.conn.scheme, &host, &self.conn.path, &self.conn.query_string_raw, "")
     }
 
     #[getter]
     fn base_url(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let host = host_of(&self.conn).unwrap_or_else(|| "localhost".to_string());
-        Ok(build_url(py, &self.conn.scheme, &host, "", b"", ""))
+        build_url(py, &self.conn.scheme, &host, "", b"", "")
     }
 
     #[getter]
@@ -328,10 +367,7 @@ impl Request {
 
     #[getter]
     fn state(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        Ok(Bound::new(py, State { dict: self.conn.state.clone_ref(py) })
-            .unwrap()
-            .into_any()
-            .unbind())
+        Ok(Bound::new(py, State { dict: self.conn.state.clone_ref(py) })?.into_any().unbind())
     }
 
     #[getter]
@@ -636,7 +672,7 @@ impl HTTPConnection {
 
     #[getter]
     fn headers(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        Ok(build_headers(py, &self.conn))
+        build_headers(py, &self.conn)
     }
 
     #[getter]
@@ -646,7 +682,7 @@ impl HTTPConnection {
 
     #[getter]
     fn query_params(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        Ok(build_query_params(py, &self.conn))
+        build_query_params(py, &self.conn)
     }
 
     #[getter]
@@ -666,20 +702,13 @@ impl HTTPConnection {
     #[getter]
     fn url(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let host = host_of(&self.conn).unwrap_or_else(|| "localhost".to_string());
-        Ok(build_url(
-            py,
-            &self.conn.scheme,
-            &host,
-            &self.conn.path,
-            &self.conn.query_string_raw,
-            "",
-        ))
+        build_url(py, &self.conn.scheme, &host, &self.conn.path, &self.conn.query_string_raw, "")
     }
 
     #[getter]
     fn base_url(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let host = host_of(&self.conn).unwrap_or_else(|| "localhost".to_string());
-        Ok(build_url(py, &self.conn.scheme, &host, "", b"", ""))
+        build_url(py, &self.conn.scheme, &host, "", b"", "")
     }
 
     #[getter]
@@ -689,10 +718,7 @@ impl HTTPConnection {
 
     #[getter]
     fn state(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        Ok(Bound::new(py, State { dict: self.conn.state.clone_ref(py) })
-            .unwrap()
-            .into_any()
-            .unbind())
+        Ok(Bound::new(py, State { dict: self.conn.state.clone_ref(py) })?.into_any().unbind())
     }
 
     #[getter]
