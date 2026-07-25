@@ -1,149 +1,156 @@
 ---
-title: Error Handling
-description: Handle errors gracefully in JustAPI with HTTPException, custom exception handlers, and validation error responses — a FastAPI alternative.
-keywords: error handling, HTTPException, exception handlers, JustAPI, FastAPI alternative, validation errors
+title: Handling Errors
+description: Handle HTTP errors, validation errors, and custom exception handlers in JustAPI.
+keywords: [JustAPI, error handling, HTTPException, RequestValidationError, exception handlers]
 ---
 
-JustAPI provides a structured error-handling system that lets you return consistent error responses across your API.
+## HTTPException
 
-## Raising HTTP Errors
-
-Use `HTTPException` to return error responses from any handler or dependency:
+Raise an `HTTPException` to return an error response:
 
 ```python
 from justapi import JustAPIApp, HTTPException
 
 app = JustAPIApp()
 
-
 @app.get("/items/{item_id}")
-def read_item(request, item_id: int):
+def get_item(item_id: int):
     if item_id == 0:
-        raise HTTPException(status_code=400, detail="Item ID must be positive")
-    if item_id == 42:
+        raise HTTPException(status_code=404, detail="Item not found")
+    return {"item_id": item_id}
+```
+
+### Adding Headers
+
+```python
+@app.get("/items/{item_id}")
+def get_item(item_id: int):
+    if item_id == 0:
         raise HTTPException(
-            status_code=418,
-            detail="I'm a teapot",
-            headers={"X-Error": "teapot"},
+            status_code=404,
+            detail="Item not found",
+            headers={"X-Error": "item-not-found"},
         )
     return {"item_id": item_id}
 ```
 
-```bash
-curl http://127.0.0.1:8000/items/0
-# Output: {"detail":"Item ID must be positive"}
+## RequestValidationError
 
-curl http://127.0.0.1:8000/items/42
-# Output: {"detail":"I'm a teapot"}
-```
-
-### `HTTPException` Parameters
-
-| Parameter | Type | Default | Description |
-|---|---|---|---|
-| `status_code` | int | required | HTTP status code |
-| `detail` | str | required | Error message |
-| `headers` | dict | `None` | Additional response headers |
-
-## Custom Exception Handlers
-
-Override the default error format for specific exception types:
-
-```python
-from justapi import RequestValidationError
-
-
-@app.exception_handler(HTTPException)
-def http_exception_handler(request, exc: HTTPException):
-    return {
-        "status": exc.status_code,
-        "body": {
-            "error": "Request Failed",
-            "code": exc.status_code,
-            "message": exc.detail,
-        },
-    }
-
-
-@app.exception_handler(RequestValidationError)
-def validation_handler(request, exc: RequestValidationError):
-    return {
-        "status": 422,
-        "body": {
-            "error": "Validation Failed",
-            "issues": exc.errors(),
-        },
-    }
-```
-
-## Validation Errors
-
-When a request fails type validation (e.g., invalid path parameter type), JustAPI returns a structured 422 response:
-
-```bash
-curl http://127.0.0.1:8000/items/abc
-# Output: {"detail":"validation error"}
-```
-
-With a custom handler, you can expand this to include field-level details.
-
-## Error Response Format
-
-By default, all error responses follow the format:
+When request data doesn't match the schema, JustAPI returns a `422` error automatically:
 
 ```json
 {
-  "detail": "<error message>"
+  "detail": [
+    {
+      "type": "int_parsing",
+      "loc": ["path", "item_id"],
+      "msg": "Input should be a valid integer",
+      "input": "foo"
+    }
+  ]
 }
 ```
 
-This applies to:
-- **400** — Bad request
-- **401** — Unauthorized
-- **403** — Forbidden
-- **404** — Not found (unmatched route)
-- **413** — Payload too large
-- **422** — Validation error
-- **429** — Rate limit exceeded
-- **500** — Internal server error
-- **503** — Service unavailable (pool saturation)
-- **504** — Gateway timeout
+The `detail` array contains every validation error with:
+- `type` — error category
+- `loc` — where the error occurred (`["path", "body", "query", "header"]`)
+- `msg` — human-readable message
+- `input` — the value that was rejected
 
-## Handling Errors in Dependencies
+## Override Validation Error Handler
 
-Dependencies can raise `HTTPException` to reject requests:
+Customize the validation error response:
 
 ```python
-from justapi import Depends, HTTPException, Header
+from justapi import JustAPIApp
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
+app = JustAPIApp()
 
-def require_admin(authorization: str = Header(...)):
-    if authorization != "Bearer admin-token":
-        raise HTTPException(status_code=403, detail="Admin access required")
-
-
-@app.get("/admin")
-def admin_panel(request, admin: None = Depends(require_admin)):
-    return {"secret": "classified"}
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(request: Request, exc):
+    return JSONResponse(
+        status_code=422,
+        content={
+            "error": "validation_error",
+            "message": "Invalid request data",
+            "details": exc.errors(),
+        },
+    )
 ```
 
-## Global Error Catchers
+## Override HTTPException Handler
 
-You can register a catch-all exception handler:
+Change the default HTTP error format:
 
 ```python
-@app.exception_handler(Exception)
-def global_handler(request, exc: Exception):
-    return {
-        "status": 500,
-        "body": {"detail": "An unexpected error occurred"},
-    }
+from fastapi.exception_handlers import http_exception_handler
+
+@app.exception_handler(HTTPException)
+async def custom_http_exception(request, exc):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": "http_error",
+            "message": exc.detail,
+            "status_code": exc.status_code,
+        },
+    )
 ```
 
-In production, JustAPI's `panic = "abort"` mode ensures that unexpected Rust panics abort the process cleanly, and the supervisor restarts it. See [Production Checklist](/deployment/production-checklist/).
+## Custom Exception
 
-## Next Steps
+Create your own exception and handler:
 
-- [Middleware](/tutorials/middleware/) — Request/response interception
-- [File Uploads](/tutorials/file-uploads/) — Handle multipart form data
-- [Production Checklist](/deployment/production-checklist/) — Error handling in production
+```python
+class InsufficientFundsError(Exception):
+    def __init__(self, balance: float, amount: float):
+        self.balance = balance
+        self.amount = amount
+
+@app.exception_handler(InsufficientFundsError)
+async def insufficient_funds_handler(request, exc):
+    return JSONResponse(
+        status_code=402,
+        content={
+            "error": "insufficient_funds",
+            "message": f"Need {exc.amount}, have {exc.balance}",
+        },
+    )
+
+@app.post("/purchase")
+def purchase(amount: float):
+    balance = 100.0
+    if amount > balance:
+        raise InsufficientFundsError(balance, amount)
+    return {"status": "ok"}
+```
+
+## Debug Mode
+
+```python
+app = JustAPIApp(debug=True)
+```
+
+Debug mode returns detailed tracebacks in responses.
+
+:::warning
+Never use `debug=True` in production. It exposes internal details.
+:::
+
+## Common Errors
+
+| Status Code | Meaning | Cause |
+|-------------|---------|-------|
+| 404 | Not Found | Route doesn't exist |
+| 405 | Method Not Allowed | Wrong HTTP method |
+| 422 | Validation Error | Request data doesn't match schema |
+| 401 | Unauthorized | Missing or invalid auth |
+| 403 | Forbidden | Authenticated but not authorized |
+
+## See Also
+
+- [Status Codes](/tutorials/response-status-code/) — custom status codes
+- [Error Codes Reference](/reference/error-codes/) — complete error code list
+- [Advanced Security](/advanced/advanced-security/) — auth errors
