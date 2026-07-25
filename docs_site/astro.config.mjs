@@ -165,6 +165,7 @@ export default defineConfig({
             { label: 'Background Tasks', link: 'tutorials/background-tasks/' },
             { label: 'Metadata & Docs URLs', link: 'tutorials/metadata/' },
             { label: 'Static Files', link: 'tutorials/static-files/' },
+            { label: 'Scalar API Reference', link: 'tutorials/scalar-ui/' },
             { label: 'Testing', link: 'tutorials/testing/' },
             { label: 'Debugging', link: 'tutorials/debugging/' },
           ],
