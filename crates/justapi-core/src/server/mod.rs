@@ -958,7 +958,7 @@ impl Server {
             return res;
         }
 
-        tracing::info!("🚀 JustAPI serving on http://{}", local_addr);
+        tracing::info!("JustAPI serving on http://{}", local_addr);
         tracing::info!("   ready — endpoints live at http://{}/", local_addr);
         #[cfg(feature = "ws")]
         let res = serve_http(

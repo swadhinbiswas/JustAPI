@@ -384,27 +384,35 @@ impl<B: Send + 'static> Middleware<B> for SecurityHeaders {
         let mut resp = next.run(req).await?;
         let headers = resp.headers_mut();
 
-        headers.insert("x-content-type-options", "nosniff".parse().unwrap());
+        headers.insert("x-content-type-options", HeaderValue::from_static("nosniff"));
 
         if self.include_xfo {
-            headers.insert("x-frame-options", "DENY".parse().unwrap());
+            headers.insert("x-frame-options", HeaderValue::from_static("DENY"));
         }
 
-        let hsts_val = if self.include_hsts_preload {
-            format!("{}; preload", self.hsts.trim_end_matches("; preload"))
-        } else {
-            self.hsts.clone()
-        };
         if self.include_hsts {
-            headers.insert("strict-transport-security", hsts_val.parse().unwrap());
+            let hsts_val = if self.include_hsts_preload {
+                format!("{}; preload", self.hsts.trim_end_matches("; preload"))
+            } else {
+                self.hsts.clone()
+            };
+            headers.insert(
+                "strict-transport-security",
+                HeaderValue::from_str(&hsts_val)
+                    .map_err(|e| anyhow::anyhow!("invalid HSTS value: {e}"))?,
+            );
         }
 
         if self.include_csp {
             let csp = self.csp_directives.join("; ");
-            headers.insert("content-security-policy", csp.parse().unwrap());
+            headers.insert(
+                "content-security-policy",
+                HeaderValue::from_str(&csp)
+                    .map_err(|e| anyhow::anyhow!("invalid CSP value: {e}"))?,
+            );
         }
 
-        headers.insert("x-xss-protection", "0".parse().unwrap());
+        headers.insert("x-xss-protection", HeaderValue::from_static("0"));
         Ok(resp)
     }
 }
@@ -662,9 +670,10 @@ pub struct RateLimiter {
 
 impl RateLimiter {
     pub fn new(duration: std::time::Duration, max_burst: u32) -> Self {
+        let burst = NonZeroU32::new(max_burst).unwrap_or(NonZeroU32::MIN);
         let quota = governor::Quota::with_period(duration)
-            .unwrap()
-            .allow_burst(NonZeroU32::new(max_burst).unwrap());
+            .expect("valid rate-limit duration")
+            .allow_burst(burst);
         Self { limiter: governor::RateLimiter::direct(quota) }
     }
 
@@ -747,10 +756,10 @@ impl<B: Send + 'static> Middleware<B> for IpRateLimiter {
                 let wait = negative.wait_time_from(now);
                 let retry_after_secs = wait.as_secs().max(1);
                 let mut resp = json_error(StatusCode::TOO_MANY_REQUESTS, "rate limit exceeded");
-                resp.headers_mut()
-                    .insert("retry-after", retry_after_secs.to_string().parse().unwrap());
-                resp.headers_mut()
-                    .insert("x-ratelimit-reset", retry_after_secs.to_string().parse().unwrap());
+                let retry_val = HeaderValue::from_str(&retry_after_secs.to_string())
+                    .map_err(|e| anyhow::anyhow!("invalid retry-after: {e}"))?;
+                resp.headers_mut().insert("retry-after", retry_val.clone());
+                resp.headers_mut().insert("x-ratelimit-reset", retry_val);
                 Ok(resp)
             }
         }
