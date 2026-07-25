@@ -62,8 +62,14 @@ any non-trivial change — they catch different classes of mistakes:
 
 ## 4. Conventions
 
-- **Commits:** `<phase>: <what changed>` e.g. `p3: add per-request arena
-  allocator`. One logical change per commit.
+- **Commits:** `<emoji> <phase>: <what changed>` e.g. `📦 p3: add per-request
+  arena allocator`. One logical change per commit.
+- **Commit size:** Keep each commit under **100 lines of diff** (`git diff
+  --cached --stat`). If a file is over 100 lines, split it into smaller
+  files (`types.rs`, `message.rs`, `state.rs` instead of a single
+  `mod.rs`). Use `git add -p` to stage partial hunks if needed.
+  Exceptions: Cargo.lock (auto-generated) and single cohesive files at
+  ~140 lines max.
 - **Branches:** `phase-N/<short-description>`.
 - **`unsafe` code:** every block needs a `// SAFETY:` comment explaining the
   invariant that makes it sound, and a test that would fail if the invariant

@@ -84,27 +84,27 @@ impl WebSocket {
 
     /// The full URL of the connection (mirrors `starlette.WebSocket.url`).
     #[getter]
-    fn url(&self, py: Python<'_>) -> Py<PyAny> {
+    fn url(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let host = crate::request::host_of(&self.conn).unwrap_or_else(|| "localhost".to_string());
         build_url(py, &self.conn.scheme, &host, &self.conn.path, &self.conn.query_string_raw, "")
     }
 
     /// The base URL (scheme + host + port, no path) of the connection.
     #[getter]
-    fn base_url(&self, py: Python<'_>) -> Py<PyAny> {
+    fn base_url(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let host = crate::request::host_of(&self.conn).unwrap_or_else(|| "localhost".to_string());
         build_url(py, &self.conn.scheme, &host, "", b"", "")
     }
 
     /// The request headers (mirrors `starlette.WebSocket.headers`).
     #[getter]
-    fn headers(&self, py: Python<'_>) -> Py<PyAny> {
+    fn headers(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         build_headers(py, &self.conn)
     }
 
     /// The parsed query parameters (mirrors `starlette.WebSocket.query_params`).
     #[getter]
-    fn query_params(&self, py: Python<'_>) -> Py<PyAny> {
+    fn query_params(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         build_query_params(py, &self.conn)
     }
 
