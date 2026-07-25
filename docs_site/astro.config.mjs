@@ -9,8 +9,8 @@ export default defineConfig({
   trailingSlash: 'always',
   integrations: [
     starlight({
-      title: 'JustAPI — Built to Handle Pressure',
-      description: 'Python web framework powered by Rust. Handles 700k+ requests per second without breaking a sweat.',
+      title: 'JustAPI',
+      description: 'Python web framework. Rust engine underneath.',
       logo: {
         src: './src/assets/logo.svg',
         replacesTitle: false,
