@@ -159,11 +159,16 @@ pub fn xml_to_json(bytes: &[u8]) -> Result<serde_json::Value> {
                 insert_child(&mut stack, &name, val);
             }
             Ok(Event::Text(e)) => {
-                let t = e.unescape().unwrap_or_default();
+                let raw = std::str::from_utf8(e.as_ref()).unwrap_or_default();
+                let t = quick_xml::escape::unescape(raw).unwrap_or_default();
                 text_buf.push_str(&t);
             }
             Ok(Event::CData(e)) => {
                 text_buf.push_str(&String::from_utf8_lossy(e.as_ref()));
+            }
+            Ok(Event::GeneralRef(e)) => {
+                let raw = std::str::from_utf8(e.as_ref()).unwrap_or_default();
+                text_buf.push_str(raw);
             }
             Ok(Event::End(_)) => {
                 // If this is the only frame on the stack, closing it means the

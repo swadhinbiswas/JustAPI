@@ -46,7 +46,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_urlencoded = "0.7"
 simd-json = { version = "0.14", features = ["serde_impl"] }
-quick-xml = { version = "0.36", features = ["serialize"] }
+quick-xml = { version = "0.41", features = ["serialize"] }
 # Validation: Rust-native JSON Schema. `default-features = false` drops the
 # `$ref` resolver's network/file backends (resolve-http/resolve-file/tls)
 # we don't need — drafts + the `format` keyword are compiled in by
