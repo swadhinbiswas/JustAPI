@@ -27,31 +27,7 @@ It is engineered as a **drop-in replacement for FastAPI** — preserving your fa
 
 ## Architecture Overview
 
-```
-[ Client Connection ]
-        │
-        ▼
-┌───────────────────────────────────────────────┐
-│  RUST RUNTIME (justapi-core)                   │
-│  • Socket I/O (tokio) & TLS (rustls)           │ 🟢 GIL RELEASED
-│  • HTTP/1.1 & HTTP/2 Parsing (hyper)           │
-│  • Radix Trie Routing (matchit)               │
-│  • Middleware Chain (auth, CORS, rate-limit)   │
-│  • JSON Schema Validation (jsonschema-rs)     │
-│  • Database Queries (sqlx)                     │
-│  • Response Serialization (serde_json)        │
-└──────────────────────┬────────────────────────┘
-                       │
-        Invoked only for Python application logic:
-                       ▼
-┌───────────────────────────────────────────────┐
-│  PYTHON LAYER (justapi-py)                     │
-│  • Business logic / route handlers             │ 🟡 PyO3 GIL Thread
-│  • Decorator-based API (JustAPIApp)            │
-│  • Dependency injection (Depends)             │
-│  • Pydantic / Schema validation bridge        │
-└───────────────────────────────────────────────┘
-```
+![JustAPI Architecture](../../../assets/architectureoverview.png)
 
 ## Performance Comparison
 
