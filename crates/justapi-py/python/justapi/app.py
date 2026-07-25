@@ -517,11 +517,15 @@ class JustAPIApp:
             allow_methods = options.get("allow_methods", ["*"])
             allow_headers = options.get("allow_headers", ["*"])
             allow_credentials = options.get("allow_credentials", False)
+            expose_headers = options.get("expose_headers")
+            max_age = options.get("max_age")
             self.add_cors(
                 allow_origins=allow_origins,
                 allow_methods=allow_methods,
                 allow_headers=allow_headers,
                 allow_credentials=allow_credentials,
+                expose_headers=expose_headers,
+                max_age=max_age,
             )
         else:
             try:
@@ -536,27 +540,33 @@ class JustAPIApp:
         allow_methods=None,
         allow_headers=None,
         allow_credentials=False,
+        expose_headers=None,
+        max_age=None,
     ):
-        """Configure CORS origins, methods, and headers for the application."""
-        origins = allow_origins or ["*"]
-        methods = allow_methods or ["*"]
-        headers = allow_headers or ["*"]
+        """Configure CORS via the Rust middleware chain.
 
-        def cors_middleware(request, call_next):
-            response = call_next(request)
-            if isinstance(response, dict):
-                response = JSONResponse(response)
-            if hasattr(response, "headers"):
-                response.headers["Access-Control-Allow-Origin"] = (
-                    origins[0] if len(origins) == 1 else "*"
-                )
-                response.headers["Access-Control-Allow-Methods"] = ", ".join(methods)
-                response.headers["Access-Control-Allow-Headers"] = ", ".join(headers)
-                if allow_credentials:
-                    response.headers["Access-Control-Allow-Credentials"] = "true"
-            return response
+        Handles both OPTIONS preflight (returning 204) and per-response
+        ``Access-Control-*`` header injection. This is a bridge to the
+        Rust ``Cors`` middleware (not a Python-level middleware), so it
+        covers ALL routes including Rust-native fast-path and 404s.
 
-        self.middlewares.append(cors_middleware)
+        Args:
+            allow_origins: List of allowed origins, or ``["*"]`` for all.
+            allow_methods: List of allowed HTTP methods.
+            allow_headers: List of allowed request headers.
+            allow_credentials: When True, ``Access-Control-Allow-Credentials``
+                is set and a concrete origin is echoed instead of ``*``.
+            expose_headers: List of headers the browser is allowed to access.
+            max_age: ``Access-Control-Max-Age`` in seconds (int).
+        """
+        self._app._set_cors(
+            allow_origins or ["*"],
+            allow_methods,
+            allow_headers,
+            allow_credentials,
+            expose_headers,
+            max_age,
+        )
 
 
     def add_exception_handler(self, exc_class, handler):
@@ -572,6 +582,8 @@ class JustAPIApp:
     async def _resolve_dependencies_list(self, deps: typing.List[Depends], request: dict):
         if "_dep_cache" not in request:
             request["_dep_cache"] = {}
+        if "_dep_cleanup" not in request:
+            request["_dep_cleanup"] = []
             
         for dep in deps:
             dep_sig = inspect.signature(dep.dependency)
@@ -580,7 +592,18 @@ class JustAPIApp:
             if dep.use_cache and dep.dependency in request["_dep_cache"]:
                 continue
                 
-            if inspect.iscoroutinefunction(dep.dependency):
+            is_gen = inspect.isasyncgenfunction(dep.dependency)
+            is_sync_gen = inspect.isgeneratorfunction(dep.dependency)
+            
+            if is_gen:
+                gen = dep.dependency(**dep_kwargs)
+                res = await gen.__anext__()
+                request["_dep_cleanup"].append(gen.aclose)
+            elif is_sync_gen:
+                gen = dep.dependency(**dep_kwargs)
+                res = next(gen)
+                request["_dep_cleanup"].append(gen.close)
+            elif inspect.iscoroutinefunction(dep.dependency):
                 res = await dep.dependency(**dep_kwargs)
             else:
                 res = dep.dependency(**dep_kwargs)
@@ -598,6 +621,8 @@ class JustAPIApp:
             
         if "_dep_cache" not in request:
             request["_dep_cache"] = {}
+        if "_dep_cleanup" not in request:
+            request["_dep_cleanup"] = []
 
         kwargs = {}
         for name, param in sig.parameters.items():
@@ -608,7 +633,19 @@ class JustAPIApp:
                     
                 dep_sig = inspect.signature(param.default.dependency)
                 dep_kwargs = await self._resolve_kwargs(dep_sig, request)
-                if inspect.iscoroutinefunction(param.default.dependency):
+                
+                is_gen = inspect.isasyncgenfunction(param.default.dependency)
+                is_sync_gen = inspect.isgeneratorfunction(param.default.dependency)
+                
+                if is_gen:
+                    gen = param.default.dependency(**dep_kwargs)
+                    res = await gen.__anext__()
+                    request["_dep_cleanup"].append(gen.aclose)
+                elif is_sync_gen:
+                    gen = param.default.dependency(**dep_kwargs)
+                    res = next(gen)
+                    request["_dep_cleanup"].append(gen.close)
+                elif inspect.iscoroutinefunction(param.default.dependency):
                     res = await param.default.dependency(**dep_kwargs)
                 else:
                     res = param.default.dependency(**dep_kwargs)
@@ -698,6 +735,8 @@ class JustAPIApp:
     def _resolve_dependencies_list_sync(self, deps: typing.List[Depends], request: dict):
         if "_dep_cache" not in request:
             request["_dep_cache"] = {}
+        if "_dep_cleanup" not in request:
+            request["_dep_cleanup"] = []
             
         for dep in deps:
             dep_sig = inspect.signature(dep.dependency)
@@ -706,7 +745,15 @@ class JustAPIApp:
             if dep.use_cache and dep.dependency in request["_dep_cache"]:
                 continue
                 
-            res = dep.dependency(**dep_kwargs)
+            is_sync_gen = inspect.isgeneratorfunction(dep.dependency)
+            
+            if is_sync_gen:
+                gen = dep.dependency(**dep_kwargs)
+                res = next(gen)
+                request["_dep_cleanup"].append(gen.close)
+            else:
+                res = dep.dependency(**dep_kwargs)
+                
             if dep.use_cache:
                 request["_dep_cache"][dep.dependency] = res
 
@@ -719,6 +766,8 @@ class JustAPIApp:
             
         if "_dep_cache" not in request:
             request["_dep_cache"] = {}
+        if "_dep_cleanup" not in request:
+            request["_dep_cleanup"] = []
 
         kwargs = {}
         for name, param in sig.parameters.items():
@@ -729,7 +778,15 @@ class JustAPIApp:
                     
                 dep_sig = inspect.signature(param.default.dependency)
                 dep_kwargs = self._resolve_kwargs_sync(dep_sig, request)
-                res = param.default.dependency(**dep_kwargs)
+                
+                is_sync_gen = inspect.isgeneratorfunction(param.default.dependency)
+                
+                if is_sync_gen:
+                    gen = param.default.dependency(**dep_kwargs)
+                    res = next(gen)
+                    request["_dep_cleanup"].append(gen.close)
+                else:
+                    res = param.default.dependency(**dep_kwargs)
                 
                 if param.default.use_cache:
                     request["_dep_cache"][param.default.dependency] = res
@@ -883,13 +940,13 @@ class JustAPIApp:
 
         if is_async:
             async def async_wrapper(request):
-                try:
-                    bg_tasks = None
-                    if has_bg:
-                        from .background import BackgroundTasks
-                        bg_tasks = BackgroundTasks()
-                        request["background_tasks"] = bg_tasks
+                bg_tasks = None
+                if has_bg:
+                    from .background import BackgroundTasks
+                    bg_tasks = BackgroundTasks()
+                    request["background_tasks"] = bg_tasks
 
+                try:
                     await self._resolve_dependencies_list(all_deps, request)
                     kwargs = await self._resolve_kwargs(sig, request)
                     
@@ -902,16 +959,22 @@ class JustAPIApp:
                     return result
                 except Exception as e:
                     return self._handle_exception(request, e)
+                finally:
+                    for c in reversed(request.get("_dep_cleanup", [])):
+                        try:
+                            await c()
+                        except Exception:
+                            pass
             wrapper = self._apply_middlewares(async_wrapper, route_middlewares)
         else:
             def sync_wrapper(request):
-                try:
-                    bg_tasks = None
-                    if has_bg:
-                        from .background import BackgroundTasks
-                        bg_tasks = BackgroundTasks()
-                        request["background_tasks"] = bg_tasks
+                bg_tasks = None
+                if has_bg:
+                    from .background import BackgroundTasks
+                    bg_tasks = BackgroundTasks()
+                    request["background_tasks"] = bg_tasks
 
+                try:
                     self._resolve_dependencies_list_sync(all_deps, request)
                     kwargs = self._resolve_kwargs_sync(sig, request)
                     result = handler(**kwargs)
@@ -919,6 +982,12 @@ class JustAPIApp:
                     return result
                 except Exception as e:
                     return self._handle_exception(request, e)
+                finally:
+                    for c in reversed(request.get("_dep_cleanup", [])):
+                        try:
+                            c()
+                        except Exception:
+                            pass
             
             if self.middlewares or route_middlewares:
                 import asyncio
@@ -1325,6 +1394,19 @@ class JustAPIApp:
         ``SecurityHeaders`` builder if your frontend needs them.
         """
         self._app.enable_secure_headers(with_hsts)
+
+    def set_jwt_auth(self, secret: str, algorithm: str = "HS256"):
+        """
+        Enable Rust-native JWT authentication middleware.
+
+        Validates every incoming request using the Rust JwtAuth middleware.
+        Decoded claims are automatically injected into ``request["auth"]``.
+
+        Args:
+            secret: The HMAC shared secret.
+            algorithm: Signing algorithm (default ``"HS256"``).
+        """
+        self._app._set_jwt_auth(secret, algorithm)
 
     def register_health_check(self, name: str, check: typing.Callable[[], bool]):
         """
