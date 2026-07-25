@@ -12,7 +12,7 @@ def main():
         print("justapi 2.0.0")
         return
 
-    print("🚀 JustAPI Runtime v2.0.0 (Python package)")
+    print("JustAPI Runtime v2.0.0 (Python package)")
     print("Commands:")
     print("  justapi --version    Display version")
     print("  python -m app.main   Run application directly")

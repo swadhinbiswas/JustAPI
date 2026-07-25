@@ -372,7 +372,7 @@ fn prompt_api_type_selection(name: &str) -> String {
 fn prompt_db_selection(name: &str) -> (String, String) {
     use std::io::{IsTerminal, Write};
     if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
-        println!("🚀 Welcome to JustAPI Project Scaffolder!");
+        println!("Welcome to JustAPI Project Scaffolder!");
         println!("Select a database backend for '{name}':");
         println!("  Relational (Transactional SQL / OLTP):");
         println!("    [1] SQLite     (Zero-config, embedded file database) [default]");
@@ -1088,10 +1088,7 @@ fn scaffold_project(
         ),
     )?;
 
-    println!(
-        "✨ Created new JustAPI project '{}' (API: {}, database: {})",
-        name, api_type, db_kind
-    );
+    println!("Created new JustAPI project '{}' (API: {}, database: {})", name, api_type, db_kind);
     println!("   └─ OpenTelemetry observability compose file: docker-compose.otel.yml");
     println!();
     println!("  cd {}", project_dir.display());
@@ -1762,7 +1759,7 @@ async fn run() -> anyhow::Result<()> {
         }
 
         Commands::Profile { addr, duration, connections, output } => {
-            println!("🔬 JustAPI Profiler");
+            println!("JustAPI Profiler");
             println!("  Target:       {addr}");
             println!("  Duration:     {duration}s");
             println!("  Connections:  {connections}");

@@ -198,9 +198,6 @@ impl Request {
         auth_claims: Option<String>,
     ) -> Self {
         let state = PyDict::new(py);
-        // Bridge JWT claims from the Rust middleware into request.state["auth"].
-        // The `auth_claims` is a JSON string of the decoded JWT payload, set by
-        // the middleware and forwarded through `call_python_handler`.
         if let Some(claims_json) = &auth_claims {
             if let Ok(serde_json::Value::Object(map)) =
                 serde_json::from_str::<serde_json::Value>(claims_json)
