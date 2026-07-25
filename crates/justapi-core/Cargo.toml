@@ -15,6 +15,7 @@ opentelemetry = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetr
 db = ["sqlx", "chrono"]
 inference = ["justapi-inference"]
 mail = ["dep:lettre", "dep:minijinja"]
+orjson = []
 
 [dependencies]
 tokio.workspace = true
