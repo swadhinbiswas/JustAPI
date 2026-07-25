@@ -93,12 +93,8 @@ impl SmtpSender {
 
             if has_both {
                 let alt = MultiPart::alternative()
-                    .singlepart(SinglePart::plain(
-                        msg.text_body.as_ref().unwrap().clone(),
-                    ))
-                    .singlepart(SinglePart::html(
-                        msg.html_body.as_ref().unwrap().clone(),
-                    ));
+                    .singlepart(SinglePart::plain(msg.text_body.as_ref().unwrap().clone()))
+                    .singlepart(SinglePart::html(msg.html_body.as_ref().unwrap().clone()));
                 multipart = multipart.multipart(alt);
             } else if let Some(text) = &msg.text_body {
                 multipart = multipart.singlepart(SinglePart::plain(text.clone()));
@@ -111,9 +107,7 @@ impl SmtpSender {
                     .content_type
                     .parse()
                     .unwrap_or_else(|_| ContentType::parse("application/octet-stream").unwrap());
-                let part = SinglePart::builder()
-                    .header(ct)
-                    .body(att.data.clone());
+                let part = SinglePart::builder().header(ct).body(att.data.clone());
                 multipart = multipart.singlepart(part);
             }
 
