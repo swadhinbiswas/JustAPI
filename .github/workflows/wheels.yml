@@ -12,13 +12,19 @@ permissions:
 
 jobs:
   test-rust:
-    name: Cargo Test & Clippy (Linux x86_64)
+    name: Cargo Test & Lint (Linux x86_64)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - name: Security Advisory & License Check
+        run: cargo deny check
       - name: Run Tests
         run: cargo test --workspace
       - name: Run Clippy
@@ -26,10 +32,24 @@ jobs:
       - name: Check Formatting
         run: cargo fmt --check
 
+  miri-test:
+    name: Miri Test (justapi-core)
+    runs-on: ubuntu-latest
+    needs: test-rust
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+      - name: Run Miri
+        run: cargo miri test -p justapi-core
+        env:
+          MIRIFLAGS: -Zmiri-disable-isolation
+
   build-wheels:
     name: Build Wheels (${{ matrix.os }} - ${{ matrix.target }})
     runs-on: ${{ matrix.os }}
-    needs: test-rust
+    needs: miri-test
     strategy:
       fail-fast: false
       matrix:
@@ -62,6 +82,13 @@ jobs:
           target: ${{ matrix.target }}
           args: --release --out dist ${{ matrix.args }}
           manifest-path: crates/justapi-py/Cargo.toml
+
+      - name: Install wheel & test
+        shell: bash
+        run: |
+          pip install dist/*.whl --force-reinstall
+          pip install pytest
+          python -m pytest crates/justapi-py/tests/ -v --tb=short
 
       - name: Upload Wheels
         uses: actions/upload-artifact@v4
