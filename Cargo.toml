@@ -95,3 +95,7 @@ governor = "0.8"
 
 # Database
 sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "sqlite", "mysql", "migrate", "any", "tls-rustls"] }
+
+# Mail (optional)
+lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls", "rustls-tls"] }
+minijinja = "2.7"

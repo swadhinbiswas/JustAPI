@@ -7,6 +7,10 @@ license.workspace = true
 [lib]
 crate-type = ["cdylib", "lib"]
 
+[features]
+default = ["mail"]
+mail = ["justapi-core/mail"]
+
 [dependencies]
 pyo3.workspace = true
 justapi-core = { workspace = true, features = ["db", "ws"] }
