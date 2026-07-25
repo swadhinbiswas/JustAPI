@@ -83,23 +83,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Python
-        uses: actions/setup-python@v5
+      - name: Install uv + Python
+        uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install pytest httpx pydantic typing_extensions uv maturin
+          enable-cache: true
 
       - name: Build and install justapi
         run: |
+          uv venv
+          uv pip install pytest httpx pydantic typing_extensions
           maturin develop -m crates/justapi-py/Cargo.toml
 
       - name: Run pytest
         run: |
-          PYTHONPATH=./crates/justapi-py/python pytest
+          uv run -- PYTHONPATH=./crates/justapi-py/python pytest
 
   pytest-freethreaded:
     name: Pytest (free-threaded / no GIL)
