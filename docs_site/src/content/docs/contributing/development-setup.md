@@ -74,7 +74,9 @@ Recommended extensions:
 - **pyright** or **pylance** — Python language support
 - **maturin** — Python↔Rust integration
 
-## Running Tests
+## Pre-Submission Check Suite
+
+Run these before every PR:
 
 ```bash
 # Rust tests
@@ -83,9 +85,18 @@ cargo test --workspace
 # Python tests
 pytest
 
+# Python tests with uv
+uv run pytest
+
 # Linting
 cargo clippy --workspace --tests -- -D warnings
 cargo fmt --check
+
+# Supply chain security audit
+cargo deny check
+
+# Memory safety (requires nightly Rust)
+cargo +nightly miri test -p justapi-core
 ```
 
 ## Next Steps

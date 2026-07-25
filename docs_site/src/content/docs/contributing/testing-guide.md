@@ -139,15 +139,18 @@ tests/
 
 ## CI Testing
 
-Every PR runs:
+Every PR runs via `.github/workflows/wheels.yml`:
 
 1. `cargo test --workspace`
 2. `cargo clippy -- -D warnings`
 3. `cargo fmt --check`
-4. `cargo miri test -p justapi-core`
-5. `pytest` (Python 3.12 + free-threaded 3.14t)
-6. `cargo audit`
-7. Fuzz tests (7 targets, 60s each)
+4. `cargo deny check` (advisories, bans, licenses, sources)
+5. `cargo miri test -p justapi-core` (nightly)
+6. Build wheels for 6 targets (linux x86_64/aarch64, musl, macOS x86_64/aarch64, Windows x64)
+7. `pytest` after wheel build (Python 3.12 + free-threaded 3.14t)
+8. Publish to PyPI via OIDC trusted publishing (on tagged releases)
+
+On release, `.github/workflows/publish.yml` handles the standalone publish matrix.
 
 ## See Also
 

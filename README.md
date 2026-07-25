@@ -8,6 +8,12 @@
 <a href="https://github.com/swadhinbiswas/JustAPI/actions/workflows/ci.yml">
     <img src="https://github.com/swadhinbiswas/JustAPI/actions/workflows/ci.yml/badge.svg?branch=initial-setup" alt="CI">
 </a>
+<a href="https://github.com/swadhinbiswas/JustAPI/actions/workflows/wheels.yml">
+    <img src="https://github.com/swadhinbiswas/JustAPI/actions/workflows/wheels.yml/badge.svg" alt="Wheels">
+</a>
+<a href="https://github.com/swadhinbiswas/JustAPI/actions/workflows/publish.yml">
+    <img src="https://github.com/swadhinbiswas/JustAPI/actions/workflows/publish.yml/badge.svg" alt="Publish">
+</a>
 <a href="https://github.com/swadhinbiswas/JustAPI/blob/initial-setup/LICENSE">
     <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT">
 </a>
@@ -17,14 +23,17 @@
 <a href="https://www.rust-lang.org/">
     <img src="https://img.shields.io/badge/rust-1.85+-E6522C.svg?logo=rust&logoColor=white" alt="Rust version">
 </a>
-<a href="https://github.com/swadhinbiswas/JustAPI">
-    <img src="https://img.shields.io/badge/version-2.0.0-green.svg" alt="Version">
+<a href="https://github.com/swadhinbiswas/JustAPI/blob/initial-setup/deny.toml">
+    <img src="https://img.shields.io/badge/cargo--deny-v0.20-passing-green.svg" alt="cargo-deny">
+</a>
+<a href="https://pypi.org/project/justapi/">
+    <img src="https://img.shields.io/badge/pypi-2.0.8-blue.svg?logo=pypi&logoColor=white" alt="PyPI">
 </a>
 </p>
 
 ---
 
-**Documentation**: <a href="https://github.com/swadhinbiswas/JustAPI/tree/initial-setup/docs" target="_blank">https://github.com/swadhinbiswas/JustAPI/docs</a>
+**Documentation**: <a href="https://github.com/swadhinbiswas/JustAPI/tree/initial-setup/docs_site" target="_blank">https://github.com/swadhinbiswas/JustAPI/docs_site</a>
 
 **Source Code**: <a href="https://github.com/swadhinbiswas/JustAPI" target="_blank">https://github.com/swadhinbiswas/JustAPI</a>
 
@@ -122,19 +131,35 @@ platform, or a new validator (we wrap Pydantic v2 core / JSON Schema). See
 
 ## Installation
 
-<div class="termy">
+### From PyPI (recommended)
 
-```console
-$ pip install justapi
-
----> 100%
-
-Successfully installed justapi-2.0.0
+```bash
+pip install justapi
 ```
 
-</div>
+With optional features (Pydantic v2, Jinja2, XML):
 
-Or build from source with [maturin](https://www.maturin.rs/):
+```bash
+pip install "justapi[full]"
+```
+
+### Via uv (faster)
+
+[uv](https://docs.astral.sh/uv/) is the recommended Python package manager:
+
+```bash
+uv pip install justapi
+uv pip install "justapi[full]"
+```
+
+### Run without installing
+
+```bash
+uvx justapi create my_app
+uvx justapi serve --reload
+```
+
+### Build from source
 
 ```bash
 cd crates/justapi-py
@@ -354,8 +379,9 @@ JustAPI gives you the same developer experience as FastAPI, but with a Rust engi
 <tr><td>Plugin System</td><td>Third-party extension API with lifecycle hooks</td></tr>
 <tr><td>WASM Plugins</td><td>wasmtime-powered WebAssembly middleware</td></tr>
 
-<tr><td rowspan="3"><strong>🛡️ Quality</strong></td>
+<tr><td rowspan="4"><strong>🛡️ Quality</strong></td>
     <td>Memory Safety</td><td>Miri-verified, 6 fuzz targets</td></tr>
+<tr><td>Supply Chain Security</td><td>cargo-deny v0.20 — advisories, bans, licenses, sources</td></tr>
 <tr><td>Type Stubs</td><td>Complete .pyi for all public modules</td></tr>
 <tr><td>Test Utilities</td><td>Built-in TestClient & snapshot testing</td></tr>
 </table>
@@ -444,7 +470,8 @@ justapi-bench ─→  justapi-core
 
 - **Rust** 1.85+ (edition 2021) — [install via rustup](https://rustup.rs/)
 - **Python** 3.11+ — [download](https://www.python.org/downloads/)
-- **maturin** — `pip install maturin`
+- **maturin** — `pip install maturin` (or `uv pip install maturin`)
+- **uv** (optional, recommended) — [install guide](https://docs.astral.sh/uv/)
 
 ### Building
 
@@ -471,11 +498,17 @@ cargo clippy --workspace --tests -- -D warnings
 # Format check
 cargo fmt --check
 
+# Supply chain security audit
+cargo deny check
+
 # Memory safety verification (requires nightly)
 cargo miri test -p justapi-core
 
 # Python tests
 cd crates/justapi-py && python -m pytest
+
+# Python tests with uv
+uv run pytest
 ```
 
 ### Benchmarking
@@ -492,12 +525,14 @@ See [BENCHMARKS.md](BENCHMARKS.md) for full methodology, hardware specs, and his
 
 ## Deployment
 
-### Docker
+### Docker (uv-based)
 
 ```bash
 docker build -t justapi-app .
 docker run -p 8000:8000 justapi-app
 ```
+
+The multi-stage `Dockerfile` uses `uv` for fast, reproducible pip installs.
 
 ### Docker Compose
 
@@ -536,6 +571,7 @@ Step-by-step deployment guides are available for:
 | [**PLAN.md**](PLAN.md) | Living roadmap and current phase |
 | [**ROADMAP.md**](ROADMAP.md) | Aspirational future work — explicitly *not yet built* |
 | [**DECISIONS.md**](DECISIONS.md) | Architecture decision records |
+| [**PRODUCTION_PLAN.md**](PRODUCTION_PLAN.md) | 2.0.8 pre-release hardening plan |
 | [**AGENTS.md**](AGENTS.md) | Development rules and conventions |
 
 ## Contributing
@@ -554,6 +590,7 @@ git checkout -b feat/my-feature
 cargo test --workspace
 cargo clippy --workspace --tests -- -D warnings
 cargo fmt --check
+cargo deny check
 
 # Submit a PR
 ```

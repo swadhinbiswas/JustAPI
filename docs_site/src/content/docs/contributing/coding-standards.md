@@ -69,6 +69,7 @@ All new public APIs require documentation (rustdoc or Python docstrings) before 
 - [ ] `cargo test --workspace` passes
 - [ ] `cargo clippy --workspace --tests -- -D warnings` clean
 - [ ] `cargo fmt --check` clean
+- [ ] `cargo deny check` clean (advisories, bans, licenses, sources)
 - [ ] `cargo miri test -p justapi-core` clean (if core touched)
 - [ ] Benchmarks appended to BENCHMARKS.md (no p99 regression >5%)
 - [ ] PLAN.md updated

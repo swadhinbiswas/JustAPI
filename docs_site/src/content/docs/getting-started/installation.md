@@ -23,7 +23,7 @@ To install optional features (Pydantic v2, Jinja2, XML support):
 pip install "justapi[full]"
 ```
 
-## Install via uv
+## Install via uv (recommended)
 
 [uv](https://docs.astral.sh/uv/) is a fast Python package manager written in Rust. Install JustAPI with uv:
 
@@ -55,7 +55,7 @@ This is ideal for CI pipelines, quick prototyping, and ephemeral environments.
 
 ```bash
 python -c "import justapi; print(justapi.__version__)"
-# Output: 2.0.0
+# Output: 2.0.8
 ```
 
 ## Install CLI Tooling (`justapi-cli`)
@@ -68,7 +68,7 @@ cargo install justapi-cli
 
 # Verify
 justapi --version
-# Output: justapi 2.0.0
+# Output: justapi 2.0.8
 ```
 
 ## Docker
@@ -79,7 +79,12 @@ Pull the official Docker image:
 docker pull ghcr.io/justapi/justapi:latest
 ```
 
-Or use the multi-stage `Dockerfile` in the repository root for custom builds.
+Or build from the multi-stage `Dockerfile` in the repository root — the Dockerfile uses `uv` for fast, reproducible pip installs:
+
+```bash
+docker build -t justapi-app .
+docker run -p 8000:8000 justapi-app
+```
 
 ## Build from Source
 
