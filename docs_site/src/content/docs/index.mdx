@@ -19,26 +19,23 @@ hero:
 
 import { Card, CardGrid } from '@astrojs/starlight/components';
 
-<div class="hero-comparison">
+## Performance
 
-| | FastAPI | JustAPI |
-|---|---|---|
-| **Requests/sec** | 36,189 | **701,234** |
-| **p99 latency** | 24.63 ms | **0.19 ms** |
-| **Networking** | Python (uvicorn) | **Rust (hyper + tokio)** |
-| **TLS** | OpenSSL | **rustls (Rust)** |
-| **GIL** | Blocks I/O | **Released in Rust** |
-| **Syntax** | `from fastapi import FastAPI` | `from justapi import JustAPIApp` |
+| Framework | Requests/sec | p50 Latency | p99 Latency |
+|---|--:|--:|--:|
+| **JustAPI (native fast path)** | **701,234** | **0.07 ms** | **0.19 ms** |
+| **JustAPI (Python handler)** | **60,297** | **1.03 ms** | **5.21 ms** |
+| Robyn 0.88 | 39,103 | 1.78 ms | 11.47 ms |
+| Granian | 69,195 | 0.72 ms | 3.87 ms |
+| FastAPI + Uvicorn | 36,189 | 1.72 ms | 24.63 ms |
 
-</div>
-
-*Same decorators. Same Pydantic models. Same dependency injection. 20× faster.*
+All measurements on the same hardware (i5-13600K, 20 threads), 100 concurrent connections, 30s duration.
 
 ## What It Does
 
 JustAPI runs your Python application logic on top of a Rust networking stack. Routing, TLS, serialization, compression — all handled in Rust before your code even runs.
 
-```python
+```python title="main.py"
 from justapi import JustAPIApp
 
 app = JustAPIApp()
@@ -48,13 +45,14 @@ def hello():
     return {"message": "Hello from JustAPI!"}
 ```
 
-```bash
-pip install justapi
-python main.py
-# → http://127.0.0.1:8000/docs
+```bash title="Terminal"
+$ pip install justapi
+$ python main.py
+
+INFO:     JustAPI running on http://127.0.0.1:8000
 ```
 
-Open the `/docs` endpoint and you get Swagger UI, ReDoc, and the full OpenAPI schema — generated automatically from your code.
+Open `/docs` for Swagger UI, `/redoc` for ReDoc, and the full OpenAPI schema — generated automatically from your code.
 
 ## Features
 
@@ -81,10 +79,10 @@ Open the `/docs` endpoint and you get Swagger UI, ReDoc, and the full OpenAPI sc
 
 ## Install
 
-```bash
-pip install justapi           # pip
-uv pip install justapi        # uv (recommended)
-uvx justapi create my_app     # scaffold without installing
+```bash title="Terminal"
+$ pip install justapi
+$ uv pip install justapi
+$ uvx justapi create my_app
 ```
 
 ## Learn
