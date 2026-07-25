@@ -112,6 +112,15 @@ pub struct JustAPIApp {
     /// JSON. Exposed to Python via `app.create_session` / `get_session` / etc.
     /// and to handlers via the `Session` dependency.
     pub sessions: Mutex<HashMap<String, serde_json::Value>>,
+    /// Optional JWT authentication configuration. When set, the Rust
+    /// ``JwtAuth`` middleware validates every request (skipping routes
+    /// explicitly opted out). Decoded claims are bridged into
+    /// ``request["auth"]``.
+    pub jwt_auth: Option<justapi_core::middleware::JwtAuth>,
+    /// Optional CORS configuration. When set, the Rust ``Cors`` middleware
+    /// handles OPTIONS preflight requests and injects CORS response headers.
+    /// Configured from Python via ``app.add_cors(...)``.
+    pub cors: Option<justapi_core::middleware::Cors>,
 }
 
 /// A registered MCP tool: metadata plus its Python handler.
@@ -473,7 +482,86 @@ impl JustAPIApp {
 
             tools: Vec::new(),
             sessions: Mutex::new(HashMap::new()),
+            jwt_auth: None,
+            cors: None,
         }
+    }
+
+    fn _set_jwt_auth(
+        &mut self,
+        py: Python<'_>,
+        secret: String,
+        algorithm: Option<String>,
+    ) -> PyResult<()> {
+        let alg = match algorithm.as_deref() {
+            Some("HS384") => jsonwebtoken::Algorithm::HS384,
+            Some("HS512") => jsonwebtoken::Algorithm::HS512,
+            Some("RS256") => jsonwebtoken::Algorithm::RS256,
+            Some("RS384") => jsonwebtoken::Algorithm::RS384,
+            Some("RS512") => jsonwebtoken::Algorithm::RS512,
+            Some("ES256") => jsonwebtoken::Algorithm::ES256,
+            Some("ES384") => jsonwebtoken::Algorithm::ES384,
+            Some("EdDSA") | Some("ED25519") => jsonwebtoken::Algorithm::EdDSA,
+            _ => jsonwebtoken::Algorithm::HS256,
+        };
+        let mut v = jsonwebtoken::Validation::new(alg);
+        v.validate_exp = true;
+        self.jwt_auth = Some(
+            justapi_core::middleware::JwtAuth::from_secret(secret.as_bytes())
+                .with_algorithms(vec![alg]),
+        );
+        let _ = py;
+        Ok(())
+    }
+
+    /// Configure CORS from Python. ``allow_origins`` etc. are the same
+    /// params the Python ``JustAPIApp.add_cors()`` receives; they are
+    /// forwarded here to build a Rust ``Cors`` middleware that handles
+    /// both OPTIONS preflight and per-response header injection.
+    #[allow(clippy::too_many_arguments)]
+    fn _set_cors(
+        &mut self,
+        py: Python<'_>,
+        allow_origins: Option<Vec<String>>,
+        allow_methods: Option<Vec<String>>,
+        allow_headers: Option<Vec<String>>,
+        allow_credentials: Option<bool>,
+        expose_headers: Option<Vec<String>>,
+        max_age: Option<u64>,
+    ) -> PyResult<()> {
+        let mut cors =
+            if allow_origins.as_deref() == Some(&["*".to_string()]) || allow_origins.is_none() {
+                justapi_core::middleware::Cors::permissive()
+            } else {
+                let mut c = justapi_core::middleware::Cors::new();
+                if let Some(origins) = &allow_origins {
+                    for o in origins {
+                        c = c.allow_origin(o);
+                    }
+                }
+                c
+            };
+        if let Some(methods) = allow_methods {
+            cors = cors.allow_methods(&methods.join(", "));
+        }
+        if let Some(headers) = allow_headers {
+            cors = cors.allow_headers(&headers.join(", "));
+        }
+        if let Some(creds) = allow_credentials {
+            if creds {
+                cors = cors.allow_credentials();
+            }
+        }
+        if let Some(expose) = expose_headers {
+            let refs: Vec<&str> = expose.iter().map(|s| s.as_str()).collect();
+            cors = cors.expose_headers(&refs);
+        }
+        if let Some(age) = max_age {
+            cors = cors.max_age(&age.to_string());
+        }
+        self.cors = Some(cors);
+        let _ = py;
+        Ok(())
     }
 
     /// Store OpenAPI metadata for a route (keyed by `method` + `path`).
@@ -1693,6 +1781,8 @@ impl JustAPIApp {
         let secure_headers = app.secure_headers;
         let secure_headers_config = app.secure_headers_config.take();
         let frontend_mounts = std::mem::take(&mut app.frontend_mounts);
+        let jwt_auth = app.jwt_auth.take();
+        let cors = app.cors.take();
 
         // The app object is surfaced on `Request.app`; capture it before
         // releasing the borrow (the server loop runs without the GIL held).
@@ -1762,6 +1852,7 @@ impl JustAPIApp {
                                                 None,
                                                 None,
                                                 "1.1".to_string(),
+                                                None, // auth_claims: batched requests have no middleware
                                             )).unwrap();
                                             py_list.append(r).unwrap();
                                         }
@@ -1940,6 +2031,22 @@ impl JustAPIApp {
                     let sh = secure_headers_config
                         .unwrap_or_else(|| justapi_core::middleware::SecurityHeaders::default().without_hsts());
                     server = server.add_security_headers(sh);
+                }
+
+                // Wire JWT middleware into the Rust middleware chain. The decoded
+                // claims are stored in `hyper::Request` extensions by the middleware
+                // and bridged into `Request.state["auth"]` in the handler dispatch.
+                if let Some(jwt) = jwt_auth {
+                    tracing::info!("JWT authentication middleware enabled");
+                    server = server.add_jwt(jwt);
+                }
+
+                // Wire CORS middleware into the Rust middleware chain. When
+                // configured, this handles OPTIONS preflight (returning 204)
+                // and injects `Access-Control-*` headers on every response.
+                if let Some(cors) = cors {
+                    tracing::info!("CORS middleware enabled");
+                    server = server.add_cors(cors);
                 }
 
                 if let Some(path) = gateway_config_path {
