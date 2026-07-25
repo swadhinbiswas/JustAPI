@@ -5,11 +5,12 @@ import re
 import typing
 import warnings
 from urllib.parse import quote
-from ._justapi import _JustAPIApp, TokenStreamResponse, ValidatedStreamResponse, Database
+from ._justapi import _JustAPIApp, TokenStreamResponse, ValidatedStreamResponse, Database, Mailer as _Mailer
 from .exceptions import WebSocketException
 from .websockets import WebSocket
 from .system import register_system_routes, build_help, build_openapi
 from .responses import PlainTextResponse, HTMLResponse, JSONResponse
+from .templating import Jinja2Templates
 
 _PY_TYPE_TO_JSON = {
     str: "string",
@@ -208,6 +209,125 @@ class Depends:
     def __init__(self, dependency: typing.Callable, use_cache: bool = True):
         self.dependency = dependency
         self.use_cache = use_cache
+
+
+class Mailer:
+    """SMTP email sender with optional template support.
+
+    Usage as a Depends injectable:
+
+        from justapi import Mailer
+
+        mailer = Mailer(host="smtp.example.com", port=587,
+                        username="user", password="pass",
+                        default_from="noreply@example.com")
+
+        def get_mailer():
+            return mailer
+
+        @app.get("/contact")
+        def contact(m: Mailer = Depends(get_mailer)):
+            m.send(to="admin@example.com", subject="Hello", body="World")
+
+    With Jinja2 templates (requires ``jinja2``):
+
+        templates = Jinja2Templates("templates/email")
+        mailer = Mailer(..., templates=templates)
+
+        mailer.send_template("welcome.html", to="user@example.com",
+                             subject="Welcome", name=user.name)
+    """
+
+    def __init__(
+        self,
+        host: str,
+        port: int = 587,
+        username: str | None = None,
+        password: str | None = None,
+        use_tls: bool = True,
+        default_from: str | None = None,
+        default_from_name: str | None = None,
+        templates: "Jinja2Templates | None" = None,
+    ):
+        self._mailer = _Mailer(
+            host=host, port=port,
+            username=username, password=password,
+            use_tls=use_tls,
+            default_from=default_from, default_from_name=default_from_name,
+        )
+        self.templates = templates
+
+    def send(
+        self,
+        to: str,
+        subject: str,
+        body: str | None = None,
+        html: str | None = None,
+        cc: list[str] | None = None,
+        bcc: list[str] | None = None,
+        reply_to: str | None = None,
+        attachments: list[dict] | None = None,
+    ):
+        """Send an email synchronously."""
+        self._mailer.send(
+            to=to, subject=subject,
+            body=body, html=html,
+            cc=cc, bcc=bcc,
+            reply_to=reply_to,
+            attachments=attachments,
+        )
+
+    async def send_async(
+        self,
+        to: str,
+        subject: str,
+        body: str | None = None,
+        html: str | None = None,
+        cc: list[str] | None = None,
+        bcc: list[str] | None = None,
+        reply_to: str | None = None,
+        attachments: list[dict] | None = None,
+    ):
+        """Send an email asynchronously."""
+        await self._mailer.send_async(
+            to=to, subject=subject,
+            body=body, html=html,
+            cc=cc, bcc=bcc,
+            reply_to=reply_to,
+            attachments=attachments,
+        )
+
+    def send_template(
+        self,
+        template_name: str,
+        to: str,
+        subject: str,
+        cc: list[str] | None = None,
+        bcc: list[str] | None = None,
+        reply_to: str | None = None,
+        attachments: list[dict] | None = None,
+        **context,
+    ):
+        """Render a Jinja2 template and send the result as the email body.
+
+        Requires ``jinja2`` and a ``templates`` directory configured on the Mailer.
+        """
+        if self.templates is None:
+            raise RuntimeError(
+                "send_template() requires a Jinja2Templates instance. "
+                "Pass templates=Jinja2Templates('templates/email') to Mailer()."
+            )
+        template = self.templates.get_template(template_name)
+        html = template.render(context)
+        self.send(
+            to=to, subject=subject, html=html,
+            cc=cc, bcc=bcc,
+            reply_to=reply_to,
+            attachments=attachments,
+        )
+
+    def __repr__(self):
+        return f"Mailer(host={self._mailer!r})"
 
 
 class Session:
