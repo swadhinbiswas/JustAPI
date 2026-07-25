@@ -7,9 +7,9 @@ network/protocol stack; Python executes only application logic.
 
 ## Project Status
 
-**Phase 40 — The JustAPI 2.0 "Singularity" Release** (in progress)
+**Phase 40 — The JustAPI 2.0 "Singularity" Release** (ready for publish)
 
-All 39 prior phases complete. See [PLAN.md](PLAN.md) for the full roadmap.
+All 39 prior phases complete. CI/CD pipeline overhauled: uv-based builds, cargo-deny security audit, Miri memory safety, OIDC trusted publishing to PyPI. See [PLAN.md](PLAN.md) for the full roadmap.
 
 ## Architecture
 
@@ -46,7 +46,9 @@ app.run("127.0.0.1:8080")
 Install the package:
 
 ```bash
-pip install justapi
+pip install justapi           # via pip
+uv pip install justapi        # via uv (recommended)
+uvx justapi create my_app     # no install needed
 ```
 
 Or build from source with `maturin`:
@@ -93,6 +95,7 @@ justapi gen-client --lang python
 | **Compression** | ✅ gzip/deflate/brotli/zstd |
 | **Plugin System** | ✅ Third-party plugin API |
 | **Memory Safety** | ✅ Miri-verified unsafe blocks, 6 fuzz targets |
+| **Supply Chain Security** | ✅ cargo-deny v0.20 — advisories, bans, licenses, sources |
 
 ## Development
 
@@ -106,9 +109,10 @@ justapi gen-client --lang python
 ```bash
 cargo build --workspace               # debug build
 cargo build --workspace --release      # release build
-cargo test --workspace                 # run all tests (236+)
+cargo test --workspace                 # run all tests (493+)
 cargo clippy --workspace --tests -- -D warnings # lint
 cargo fmt --check                      # format check
+cargo deny check                       # supply chain security audit
 cargo miri test -p justapi-core        # memory safety (nightly)
 ```
 
