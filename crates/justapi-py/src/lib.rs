@@ -6,6 +6,10 @@ mod dag;
 mod database;
 pub mod gil_pool;
 mod logging;
+#[cfg(feature = "mail")]
+mod mail;
+#[cfg(feature = "mail")]
+mod message_builder;
 mod multipart;
 mod native;
 mod rate_limit;
@@ -17,6 +21,8 @@ mod websocket;
 
 pub use dag::{Dag, DagNode};
 pub use database::{Database, DbParam, DbPool};
+#[cfg(feature = "mail")]
+pub use mail::PyMailer;
 pub use multipart::UploadFile;
 pub use native::{validate_value, TokenStreamResponse, ValidatedStreamResponse};
 pub use rate_limit::PyRateLimitResult;
@@ -76,6 +82,8 @@ fn _justapi(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<DagNode>()?;
     m.add_class::<background::BackgroundTasks>()?;
     m.add_class::<scheduler::PyScheduler>()?;
+    #[cfg(feature = "mail")]
+    m.add_class::<mail::PyMailer>()?;
     status::register(m)?;
     logging::register(m)?;
     Ok(())
