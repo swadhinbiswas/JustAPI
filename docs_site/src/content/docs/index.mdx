@@ -1,9 +1,9 @@
 ---
-title: JustAPI Documentation — The Fastest FastAPI Alternative
+title: JustAPI — FastAPI Alternative | Rust-Powered Python Web Framework
 description: JustAPI — a Rust-powered Python web framework. Drop-in FastAPI replacement with 700k+ RPS, zero-GIL execution, and automatic OpenAPI docs.
 template: splash
 hero:
-  tagline: The speed of Rust. The elegance of Python. A drop-in replacement for FastAPI engineered for extreme throughput.
+  tagline: Python web framework powered by Rust. Drop-in FastAPI replacement with 20× performance.
   image:
     file: ../../assets/logo.svg
   actions:
@@ -11,10 +11,6 @@ hero:
       link: /getting-started/overview/
       icon: right-arrow
       variant: primary
-    - text: Tutorial — User Guide
-      link: /tutorials/python-types/
-      icon: open-book
-      variant: minimal
     - text: View on GitHub
       link: https://github.com/swadhinbiswas/JustAPI
       icon: external
@@ -23,108 +19,93 @@ hero:
 
 import { Card, CardGrid } from '@astrojs/starlight/components';
 
-## Why JustAPI?
+<div class="hero-comparison">
 
-JustAPI moves the entire networking stack out of Python. Same FastAPI syntax. Same Pydantic models. 20× the throughput.
+| | FastAPI | JustAPI |
+|---|---|---|
+| **Requests/sec** | 36,189 | **701,234** |
+| **p99 latency** | 24.63 ms | **0.19 ms** |
+| **Networking** | Python (uvicorn) | **Rust (hyper + tokio)** |
+| **TLS** | OpenSSL | **rustls (Rust)** |
+| **GIL** | Blocks I/O | **Released in Rust** |
+| **Syntax** | `from fastapi import FastAPI` | `from justapi import JustAPIApp` |
 
-<CardGrid stack>
-  <Card title="700,000+ Requests / Sec" icon="rocket">
-    Networking, TLS, routing, schema validation, and JSON serialization run entirely in Rust at native speed. 20× faster than FastAPI + Uvicorn.
+</div>
+
+*Same decorators. Same Pydantic models. Same dependency injection. 20× faster.*
+
+## Features
+
+<CardGrid>
+  <Card title="FastAPI-Compatible" icon="star">
+    Same `@app.get()`, `@app.post()`, Pydantic v2, `Depends()`. Migrate with one import change.
   </Card>
-  <Card title="FastAPI Compatibility" icon="star">
-    Same `@app.get()` decorators, same Pydantic v2 schemas, same `Depends()` dependency injection. Migrate existing FastAPI applications with one import change.
+  <Card title="Rust-Native" icon="rocket">
+    Networking, TLS, routing, serialization — all in Rust. No Python overhead on the hot path.
   </Card>
-  <Card title="Zero-GIL Fast Path" icon="shield">
-    Rust releases the Python GIL during all I/O, routing, and validation. Fully supports Python 3.13t/3.14t free-threading. Native fast path at 724k+ RPS.
+  <Card title="Zero-GIL" icon="shield">
+    GIL released during I/O. Supports free-threaded Python 3.13t/3.14t.
   </Card>
-  <Card title="Multi-Database & Multi-Protocol" icon="setting">
-    SQL (Postgres, MySQL, SQLite), OLAP (DuckDB), NoSQL (Redis, MongoDB), and REST, GraphQL, gRPC, JSON-RPC 2.0 — all in one framework.
+  <Card title="Production-Ready" icon="lock">
+    JWT auth, rate limiting, circuit breakers, OpenTelemetry, health checks — built in.
+  </Card>
+  <Card title="Auto OpenAPI Docs" icon="document">
+    Swagger UI, ReDoc, and Scalar. Automatic from your code.
+  </Card>
+  <Card title="Multi-Protocol" icon="globe">
+    REST, GraphQL, gRPC, JSON-RPC 2.0 — all in one app.
   </Card>
 </CardGrid>
-
-## Performance
-
-| Framework | Requests/sec | p50 Latency | p99 Latency |
-|---|--:|--:|--:|
-| **JustAPI (native fast path)** | **701,234** | **0.07 ms** | **0.19 ms** |
-| **JustAPI (Python handler)** | **60,297** | **1.03 ms** | **5.21 ms** |
-| Robyn 0.88 | 39,103 | 1.78 ms | 11.47 ms |
-| Granian | 69,195 | 0.72 ms | 3.87 ms |
-| FastAPI + Uvicorn | 36,189 | 1.72 ms | 24.63 ms |
-
-All measurements on the same hardware (i5-13600K, 20 threads), 100 concurrent connections, 30s duration. See [Benchmarks](/reference/adr-index/) for methodology.
 
 ## Quick Start
 
 ```python
 from justapi import JustAPIApp
 
-app = JustAPIApp(title="My API")
+app = JustAPIApp()
 
 @app.get("/")
 def hello():
     return {"message": "Hello from JustAPI!"}
-
-@app.get("/items/{item_id}")
-def read_item(item_id: int, q: str | None = None):
-    return {"item_id": item_id, "q": q}
 ```
 
 ```bash
 pip install justapi
 python main.py
+# → http://127.0.0.1:8000/docs
 ```
-
-Open [http://localhost:8000/docs](http://localhost:8000/docs) for interactive Swagger UI documentation.
-
-## Learn
-
-<CardGrid>
-  <Card title="Python Types" icon="pencil">
-    [Type hints, Pydantic models, validation →](/tutorials/python-types/)
-  </Card>
-  <Card title="Async / Await" icon="moon">
-    [Concurrency model, when to use async →](/tutorials/async-await/)
-  </Card>
-  <Card title="Path & Query" icon="list">
-    [Parameters, validation, constraints →](/tutorials/path-params/)
-  </Card>
-  <Card title="Request Body" icon="document">
-    [Pydantic, nested models, fields →](/tutorials/request-body/)
-  </Card>
-  <Card title="Dependencies" icon="puzzle">
-    [DI, sub-dependencies, yield cleanup →](/tutorials/dependencies/classes-as-dependencies/)
-  </Card>
-  <Card title="Security" icon="lock">
-    [OAuth2, JWT, API keys →](/tutorials/security/first-steps/)
-  </Card>
-</CardGrid>
 
 ## Install
 
 ```bash
-# pip
-pip install justapi
-
-# uv (recommended)
-uv pip install justapi
-
-# run without installing
-uvx justapi create my_app
+pip install justapi           # pip
+uv pip install justapi        # uv (recommended)
+uvx justapi create my_app     # scaffold without installing
 ```
 
 ## Migration
 
-Migrating from FastAPI? One import change:
-
 ```python
-# Before (FastAPI)
-from fastapi import FastAPI
-app = FastAPI()
-
-# After (JustAPI)
-from justapi import JustAPIApp
-app = JustAPIApp()
+# FastAPI                          # JustAPI
+from fastapi import FastAPI    →   from justapi import JustAPIApp
+app = FastAPI()                →   app = JustAPIApp()
 ```
 
-Everything else stays the same — decorators, Pydantic models, dependency injection, OpenAPI docs.
+Everything else — decorators, Pydantic, DI, OpenAPI — stays the same.
+
+## Documentation
+
+<CardGrid>
+  <Card title="Tutorial" icon="pencil">
+    [36-step learning path from basics to production →](/tutorials/python-types/)
+  </Card>
+  <Card title="Advanced" icon="rocket">
+    [Rust internals, zero-GIL, native fast path →](/advanced/zero-gil-architecture/)
+  </Card>
+  <Card title="API Reference" icon="document">
+    [Every class, function, and parameter →](/api-reference/)
+  </Card>
+  <Card title="Deployment" icon="setting">
+    [Docker, Kubernetes, cloud providers →](/deployment/docker/)
+  </Card>
+</CardGrid>
