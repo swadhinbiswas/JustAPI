@@ -39,36 +39,29 @@
 
 ---
 
-JustAPI is a modern, **blazing-fast** web framework for building APIs with Python, powered by a **Rust core**. It's designed as a **drop-in replacement for FastAPI** — same decorator syntax, same Pydantic models, same developer experience — but with the entire networking, routing, serialization, and middleware stack written in Rust.
+JustAPI is a Rust-powered Python web framework for building APIs. It is designed as a **drop-in replacement for FastAPI** — same decorator syntax, same Pydantic models, same developer experience — but with networking, routing, serialization, and middleware implemented in Rust rather than Python.
 
 **Python writes the logic. Rust does everything else.**
 
-The key features are:
 
-* **Fast**: **700,000+ req/s** on a single machine — 20× faster than FastAPI+Uvicorn. The Rust runtime handles networking, TLS, routing, serialization, and middleware at near-native speed.
-* **FastAPI-compatible**: Same `@app.get()` decorators, same Pydantic models, same dependency injection. **Migrate existing FastAPI apps with minimal changes.**
-* **Type-safe**: Full `.pyi` type stubs for every module. Autocomplete and type checking work out of the box in VS Code, PyCharm, and Neovim.
-* **Production-ready**: Built-in JWT auth, rate limiting, circuit breakers, distributed tracing (OpenTelemetry), Prometheus metrics, and health checks — all in Rust, not Python middleware.
-* **Standards-based**: Auto-generated **OpenAPI 3.1** docs, **JSON Schema** validation, **gRPC** and **GraphQL** support.
-* **Batteries included**: WebSockets, SSE, background tasks, dependency injection, database ORM, file uploads, static files, template rendering, and a plugin system — all from a single `pip install`.
 
 ## Performance
 
-<p align="center">
-<em>Hello-world benchmark · 100 concurrent connections · 30 seconds · same hardware</em>
-</p>
+*Hello-world benchmark · 100 concurrent connections · 30 seconds · same hardware*
 
 | Framework | Requests/sec | p50 Latency | p99 Latency |
 |---|--:|--:|--:|
-| **JustAPI** 🦀 | **701,234** | **0.07 ms** | **0.19 ms** |
+| **JustAPI (native fast path)** | **701,234** | **0.07 ms** | **0.19 ms** |
+| **JustAPI (Python handler)** | **60,297** | **1.03 ms** | **5.21 ms** |
+| Robyn 0.88 | 39,103 | 1.78 ms | 11.47 ms |
 | Granian | 69,195 | 0.72 ms | 3.87 ms |
 | FastAPI + Uvicorn | 36,189 | 1.72 ms | 24.63 ms |
 
-> **20× faster than FastAPI** and **10× faster than Granian** on the same workload. See [BENCHMARKS.md](BENCHMARKS.md) for full methodology, hardware specs, and JSON/echo benchmarks.
+All measurements on the same hardware (i5-13600K, 20 threads), 100 concurrent connections, 30s duration. See [BENCHMARKS.md](BENCHMARKS.md) for full methodology and workload scripts.
 
-### How is this possible?
+### Request pipeline
 
-JustAPI moves the entire request pipeline out of Python:
+JustAPI runs the entire request path in Rust. Python executes only application logic:
 
 ```
 Kernel (epoll/io_uring)
@@ -77,45 +70,53 @@ Kernel (epoll/io_uring)
   → HTTP parse (hyper)
   → Router (matchit)
   → Middleware chain (Rust: auth, CORS, rate-limit, compression)
-  → Python boundary (zero-copy via PyO3 buffer protocol)
-  → Your application code (async Python)
-  → Rust serializer (serde_json / simd-json)
+  → ┌─────────────────────────────────────────────────────┐
+    │  Python handler path (default):                      │
+    │  → Python boundary (zero-copy via PyO3 buffer)       │
+    │  → Your async Python handler                         │
+    │  → Rust serializer (serde_json / simd-json)         │
+    ├─────────────────────────────────────────────────────┤
+    │  Native fast path (native=True + Schema):             │
+    │  → Rust validator → Rust response (no Python)        │
+    └─────────────────────────────────────────────────────┘
   → Response write → Socket
 ```
 
-Python only executes **your** business logic. Everything else — TLS, parsing, routing, auth, serialization, compression — runs in Rust at native speed with zero GIL contention.
+The Python path is used for general routes. For schema-backed routes with `native=True`, the entire handler executes in Rust — eliminating the GIL acquire, Python dispatch, and per-request JSON schema compilation.
 
 ## What makes JustAPI different
 
-Two things, stated plainly:
+1. **Rust-native request pipeline.** Networking, TLS, routing, serialization, middleware, and auth all execute in Rust — Python runs only your application logic. This yields ~60k rps on the Python handler path and ~724k rps on the native fast path for schema-backed routes, both measured on a single machine.
 
-1. **Throughput.** A Rust networking core (hyper + tokio + rustls) moves TLS,
-   routing, serialization, and middleware out of Python. The number above
-   (701k req/s hello-world) is the payoff — ~20× FastAPI+Uvicorn on that
-   workload.
-2. **Agent-native serving.** Beyond REST, JustAPI has a first-class
-   introspection + tool-serving layer for AI agents: every app can expose its
-   routes as MCP tools (`python -m justapi.mcp_server`), stream *validated*
-   structured output as tokens arrive, and carry multi-turn session state —
-   without bolting a third-party SDK onto generic HTTP routes. This is the part
-   we invest in most; see [`ROADMAP.md`](ROADMAP.md) for how far it goes.
+2. **Agent-native serving.** Beyond REST, JustAPI exposes routes as MCP tools, streams validated structured output per-token, and carries multi-turn session state — without external SDKs. See [`ROADMAP.md`](ROADMAP.md) for the full agent roadmap.
 
 ## Competitors, named honestly
 
-We are not the first Rust-backed Python framework, and we don't claim to be:
+JustAPI is not the first Rust-backed Python web framework. The following table compares the closest alternatives on raw throughput (Python handler path, same hardware):
 
-- **Robyn** — Rust runtime, decorator API, commonly cited ~40–60% faster than
-  FastAPI on simple endpoints. Real project; we benchmark against it.
-- **Granian** — Rust *ASGI server* that drops under existing ASGI apps. Different
-  bet: it replaces the server, not the framework.
-- **Litestar** / **BlackSheep** — Python frameworks with first-class ASGI and
-  rich feature sets; we borrow ergonomics from them.
-- **FastAPI** — the compatibility target. JustAPI mirrors its decorator API and
-  Pydantic models so migration is low-friction.
+| Workload | JustAPI | Robyn 0.88 | Faster |
+|---|---:|---:|---|
+| Hello-world (GET) | 60,297 rps | 39,103 rps | JustAPI ×1.54 |
+| JSON echo (POST) | 47,415 rps | 36,899 rps | JustAPI ×1.29 |
+| Validated JSON (POST) | 40,080 rps | 32,919 rps | JustAPI ×1.22 |
 
-Where we deliberately differ from Robyn: JustAPI keeps an **ASGI shim** (so it
-runs under Uvicorn/Granian and reuses Starlette-ecosystem middleware) and treats
-agent/MCP serving as a built-in primitive rather than an afterthought.
+For routes registered with `native=True` and a schema, JustAPI serves entirely in Rust at **~724k rps** — bypassing the Python handler entirely.
+
+### Where each competitor fits
+
+- **Robyn** — Rust runtime with a decorator API, the closest architectural peer. Both frameworks keep the hot path in Rust and dispatch to Python for business logic. JustAPI's edge is: (a) measured throughput advantage on all three standard workloads, (b) a native fast path (`native=True`) that eliminates the Python dispatch entirely for schema-backed routes, (c) an ASGI shim for compatibility with the Starlette middleware ecosystem, and (d) built-in MCP agent serving as a first-class primitive rather than an add-on.
+
+- **Granian** — Rust ASGI *server*. It drops under existing FastAPI/Starlette apps without changing framework code. If your goal is a faster transport layer without migrating frameworks, Granian is the lower-friction choice. JustAPI wins when you want the full Rust stack — routing, serialization, middleware, auth, and agent serving — all native.
+
+- **Litestar / BlackSheep** — Python-native frameworks with first-class ASGI support and rich feature sets (DI, validation, OpenAPI). JustAPI shares their design philosophy for ergonomics but implements the critical path in Rust. Migration from these is similar to FastAPI.
+
+- **FastAPI** — the compatibility target. JustAPI mirrors its decorator API and Pydantic model integration so existing FastAPI applications can migrate with minimal changes — often just the import statement.
+
+### Honest caveats
+
+- **Native fast path requires a schema.** Routes without a `Schema` registered fall back to the Python handler path (~60k rps). The 724k rps number only applies to routes with `native=True` + `Schema`.
+- **Python handler throughput is GIL-bound.** On CPython, the Python dispatch path is capped at ~100-120k rps on this hardware regardless of framework — that is the GIL, not a framework limitation. Free-threaded Python (3.13t/3.14t) removes this ceiling.
+- **Agent-native workloads are the differentiator.** The benchmarks that matter most for JustAPI are structured-LLM streaming, MCP tool dispatch, and durable agent sessions — not hello-world req/s. These workloads are impossible or awkward in every alternative listed above.
 
 ## Non-goals & not-yet-built
 
@@ -190,16 +191,12 @@ def read_item(item_id: int, q: str | None = None):
 
 ### Run it
 
-<div class="termy">
-
 ```console
 $ python main.py
 
 INFO:     JustAPI running on http://127.0.0.1:8000
 INFO:     Rust runtime started with 4 worker threads
 ```
-
-</div>
 
 ### Check it
 
@@ -337,49 +334,44 @@ justapi create jsonrpc_api --db sqlite --api-type jsonrpc
 
 ## Features
 
-### FastAPI-compatible, Rust-accelerated
-
-
-JustAPI gives you the same developer experience as FastAPI, but with a Rust engine underneath. Here's what you get:
-
 <table>
 <tr><th>Category</th><th>Feature</th><th>Details</th></tr>
 
-<tr><td rowspan="4"><strong>🚀 Performance</strong></td>
-    <td>HTTP/1.1 & HTTP/2</td><td>700k+ req/s hello-world</td></tr>
+<tr><td rowspan="4"><strong>Performance</strong></td>
+    <td>HTTP/1.1 & HTTP/2</td><td>700k+ req/s (native fast path)</td></tr>
 <tr><td>TLS (rustls)</td><td>~10% overhead, no OpenSSL dependency</td></tr>
 <tr><td>Serialization</td><td>serde_json with optional simd-json</td></tr>
 <tr><td>Compression</td><td>gzip / deflate / brotli / zstd</td></tr>
 
-<tr><td rowspan="5"><strong>🔒 Security</strong></td>
+<tr><td rowspan="5"><strong>Security</strong></td>
     <td>JWT Authentication</td><td>RS256/ES256, per-route roles & scopes</td></tr>
 <tr><td>Rate Limiting</td><td>GCRA algorithm, Redis-backed distributed</td></tr>
 <tr><td>CORS</td><td>Configurable, preflight caching</td></tr>
 <tr><td>Request Validation</td><td>JSON Schema, Pydantic v2 bridge</td></tr>
 <tr><td>Security Headers</td><td>HSTS, CSP, X-Frame-Options, etc.</td></tr>
 
-<tr><td rowspan="5"><strong>📡 Protocols</strong></td>
+<tr><td rowspan="5"><strong>Protocols</strong></td>
     <td>REST</td><td>Full HTTP method support with OpenAPI 3.1</td></tr>
 <tr><td>WebSocket</td><td>Full-duplex with streaming support</td></tr>
 <tr><td>Server-Sent Events</td><td>Token-generation optimized streaming</td></tr>
 <tr><td>gRPC</td><td>Native Tonic integration</td></tr>
 <tr><td>GraphQL</td><td>async-graphql with Apollo Federation</td></tr>
 
-<tr><td rowspan="5"><strong>🧩 Application</strong></td>
+<tr><td rowspan="5"><strong>Application</strong></td>
     <td>Dependency Injection</td><td>Litestar-style tiered DI container</td></tr>
 <tr><td>Background Tasks</td><td>Thread-safe task scheduling</td></tr>
 <tr><td>Database ORM</td><td>SQLite / PostgreSQL / MySQL via sqlx</td></tr>
 <tr><td>Template Engine</td><td>Jinja2 integration</td></tr>
 <tr><td>File Uploads</td><td>Streaming multipart/form-data</td></tr>
 
-<tr><td rowspan="5"><strong>🔧 Operations</strong></td>
+<tr><td rowspan="5"><strong>Operations</strong></td>
     <td>Observability</td><td>OpenTelemetry tracing, Prometheus metrics</td></tr>
 <tr><td>Resilience</td><td>Circuit breakers, retry, fallback, bulkhead</td></tr>
 <tr><td>Health Checks</td><td>Liveness & readiness probe endpoints</td></tr>
 <tr><td>Plugin System</td><td>Third-party extension API with lifecycle hooks</td></tr>
 <tr><td>WASM Plugins</td><td>wasmtime-powered WebAssembly middleware</td></tr>
 
-<tr><td rowspan="4"><strong>🛡️ Quality</strong></td>
+<tr><td rowspan="4"><strong>Quality</strong></td>
     <td>Memory Safety</td><td>Miri-verified, 6 fuzz targets</td></tr>
 <tr><td>Supply Chain Security</td><td>cargo-deny v0.20 — advisories, bans, licenses, sources</td></tr>
 <tr><td>Type Stubs</td><td>Complete .pyi for all public modules</td></tr>
@@ -409,13 +401,13 @@ JustAPI is designed to feel familiar. Here's a side-by-side:
 </tr>
 <tr>
 <td><strong>Pydantic</strong></td>
-<td>✅ Native</td>
-<td>✅ Native</td>
+<td>Native</td>
+<td>Native</td>
 </tr>
 <tr>
 <td><strong>Depends()</strong></td>
-<td>✅ Built-in</td>
-<td>✅ Built-in</td>
+<td>Built-in</td>
+<td>Built-in</td>
 </tr>
 <tr>
 <td><strong>OpenAPI docs</strong></td>
@@ -441,19 +433,19 @@ JustAPI is designed to feel familiar. Here's a side-by-side:
 ```
 justapi/
 ├── crates/
-│   ├── justapi-core/       # 🦀 Networking, routing, middleware, serialization
-│   ├── justapi-py/         # 🐍 PyO3 bindings, ASGI shim, native Python API
-│   ├── justapi-cli/        # ⚡ CLI binary (serve, gen-client, profile)
-│   ├── justapi-bench/      # 📊 Internal benchmark harness
-│   └── justapi-inference/  # 🧠 ML inference engine (optional)
-├── examples/               # 📖 10 progressive tutorial examples
-├── tests/                  # 🧪 End-to-end integration tests
-├── fuzz/                   # 🔒 6 cargo-fuzz security targets
-├── docs/                   # 📚 MkDocs documentation site
-├── deploy/                 # ☁️ Multi-cloud deployment guides
-├── helm/                   # ⎈ Kubernetes Helm chart
-├── benchmarks/             # 🏎️ Performance workload scripts
-└── website/                # 🌐 Project landing page
+│   ├── justapi-core/       # Networking, routing, middleware, serialization
+│   ├── justapi-py/         # PyO3 bindings, native Python API
+│   ├── justapi-cli/        # CLI binary (serve, create, migrate)
+│   ├── justapi-bench/      # Internal benchmark harness
+│   └── justapi-inference/  # ML inference engine (optional)
+├── examples/               # Tutorial examples
+├── tests/                  # Integration tests
+├── fuzz/                   # cargo-fuzz security targets (6)
+├── docs/                   # MkDocs documentation
+├── deploy/                 # Cloud deployment guides
+├── helm/                   # Kubernetes Helm chart
+├── benchmarks/             # Performance workload scripts
+└── website/                # Project landing page
 ```
 
 ### Crate dependency graph
