@@ -1,5 +1,6 @@
 use pyo3::prelude::*;
 
+pub mod auth;
 pub mod background;
 pub mod buffer_test;
 mod dag;
@@ -19,6 +20,7 @@ pub mod status;
 mod test_client;
 mod websocket;
 
+pub use auth::PyJwtAuth;
 pub use dag::{Dag, DagNode};
 pub use database::{Database, DbParam, DbPool};
 #[cfg(feature = "mail")]
@@ -57,6 +59,7 @@ fn _justapi(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(serve, m)?)?;
     m.add_function(wrap_pyfunction!(validate_value, m)?)?;
     m.add_class::<buffer_test::ZeroCopyBuffer>()?;
+    auth::register(m)?;
 
     rate_limit::register(m)?;
     m.add_function(wrap_pyfunction!(_test_zero_copy, m)?)?;

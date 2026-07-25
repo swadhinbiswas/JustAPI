@@ -25,6 +25,7 @@ Usage:
 
 """
 
+from . import auth as auth
 from . import testing as testing
 from . import tracing as tracing
 from . import status as status
@@ -297,7 +298,7 @@ def pydantic_schema(model_class) -> str:
 
 __all__ = [
     "serve", "JustAPIApp", "JustAPI", "Depends", "Mailer", "Database", "DbPool", "DbParam", "Schema", "pydantic_schema", 
-    "JustAPITestClient", "testing", "tracing", "Jinja2Templates", "BackgroundTasks", "Scheduler", 
+    "JustAPITestClient", "testing", "tracing", "auth", "Jinja2Templates", "BackgroundTasks", "Scheduler", 
     "TokenStreamResponse", "ValidatedStreamResponse", "WebSocket", "Dag", "DagNode", "RateLimiter", "RateLimitResult",
     "adaptive_batch", "APIRouter", "Controller", "controller", 
     "route_get", "route_post", "route_put", "route_patch", "route_delete", "route_query", 

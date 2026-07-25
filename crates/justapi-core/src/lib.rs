@@ -11,6 +11,8 @@ pub mod extract;
 pub mod gateway;
 pub mod graphql;
 pub mod health;
+#[cfg(feature = "mail")]
+pub mod mail;
 pub mod memory;
 pub mod metrics;
 pub mod middleware;
@@ -33,8 +35,6 @@ pub mod tracing_setup;
 pub mod validate;
 pub mod wasm;
 pub mod xml;
-#[cfg(feature = "mail")]
-pub mod mail;
 
 pub use server::{serve, Server};
 
