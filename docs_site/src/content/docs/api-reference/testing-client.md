@@ -1,55 +1,71 @@
 ---
-title: Testing Client API
-description: "API reference for the test client in JustAPI, the FastAPI alternative — in-process HTTP test client for testing routes without a server."
-keywords: [testing client, fastapi alternative, justapi, test client, justapitestclient, integration testing]
+title: Testing Client
+description: Test JustAPI applications with JustAPITestClient — in-process HTTP testing.
+keywords: [JustAPI, test client, JustAPITestClient, testing, HTTP testing]
 ---
 
-## `JustAPITestClient`
-
-The test client sends HTTP requests to your application without starting a real server, using `tokio` duplex streams.
-
-```python
-from justapi import JustAPITestClient
-
-client = JustAPITestClient(app)
-```
-
-### Methods
-
-```python
-response = client.get("/items/42")
-response = client.post("/items/", body={"name": "Item"})
-response = client.put("/items/42", body={"name": "Updated"})
-response = client.patch("/items/42", body={"name": "Patched"})
-response = client.delete("/items/42")
-```
-
-### Response Object
-
-| Attribute | Type | Description |
-|---|---|---|
-| `status` | `int` | HTTP status code |
-| `body` | `bytes` | Raw response body |
-| `json()` | `dict` | Parsed JSON body |
-
-### Example Test
+## Basic Usage
 
 ```python
 from justapi import JustAPIApp, JustAPITestClient
 
 app = JustAPIApp()
 
-@app.get("/ping")
-def ping(request):
-    return {"status": "ok"}
+@app.get("/hello")
+def hello():
+    return {"message": "Hello!"}
 
 client = JustAPITestClient(app)
-response = client.get("/ping")
-assert response.status == 200
-assert response.json() == {"status": "ok"}
+
+def test_hello():
+    response = client.get("/hello")
+    assert response["status"] == 200
+    assert response["body"] == b'{"message":"Hello!"}'
+```
+
+## Methods
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `get(path)` | `GET path` | Send GET request |
+| `post(path, body)` | `POST path` with JSON body | Send POST request |
+| `post_with(path, body, headers)` | `POST path` with headers | POST with custom headers |
+| `put(path, body)` | `PUT path` with JSON body | Send PUT request |
+| `patch(path, body)` | `PATCH path` with JSON body | Send PATCH request |
+| `delete(path)` | `DELETE path` | Send DELETE request |
+
+## Response Format
+
+All methods return a dict:
+
+```python
+{
+    "status": 200,        # HTTP status code
+    "headers": {...},     # Response headers
+    "body": b"..."        # Raw body bytes
+}
+```
+
+## POST with Headers
+
+```python
+def test_with_auth():
+    response = client.post_with(
+        "/items",
+        {"name": "Widget"},
+        headers={"Authorization": "Bearer my-token"},
+    )
+    assert response["status"] == 201
+```
+
+## With Database
+
+```python
+client = JustAPITestClient(app, database="sqlite:///test.db")
 ```
 
 ## See Also
 
-- [Testing Guide](/contributing/testing-guide/) — Writing tests for JustAPI
-- [JustAPIApp](/api-reference/justapiapp/) — App configuration
+- [Testing](/tutorials/testing/) — basic testing guide
+- [Testing Utilities](/tutorials/testing-utilities/) — AsyncTestClient, Snapshot, assertions
+- [Testing a Database](/how-to/testing-database/) — database test patterns
