@@ -4,12 +4,7 @@ use super::verify::{VerificationEntry, VerificationStore};
 
 impl VerificationStore {
     /// Generate a numeric OTP (6 digits) and store it.
-    pub async fn create_otp(
-        &self,
-        email: &str,
-        purpose: &str,
-        _ttl_secs: u64,
-    ) -> String {
+    pub async fn create_otp(&self, email: &str, purpose: &str, _ttl_secs: u64) -> String {
         use rand::Rng;
         let otp: String = format!("{:06}", rand::thread_rng().gen_range(0..1_000_000));
         let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();

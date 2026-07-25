@@ -1,6 +1,6 @@
 use tokio::sync::mpsc;
 
-use super::{EmailMessage, smtp::SmtpSender};
+use super::{smtp::SmtpSender, EmailMessage};
 
 /// Background email delivery via a tokio mpsc channel.
 pub struct EmailQueue {
@@ -30,9 +30,7 @@ impl EmailQueue {
 
     /// Enqueue an email for background delivery.
     pub fn enqueue(&self, msg: EmailMessage) -> Result<(), anyhow::Error> {
-        self.sender
-            .send(QueuedEmail { msg })
-            .map_err(|_| anyhow::anyhow!("email queue is closed"))
+        self.sender.send(QueuedEmail { msg }).map_err(|_| anyhow::anyhow!("email queue is closed"))
     }
 
     /// Enqueue and return immediately. Errors are logged by the worker.

@@ -2,8 +2,8 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use justapi_core::mail::SmtpConfig;
 use justapi_core::mail::smtp::SmtpSender as CoreSmtpSender;
+use justapi_core::mail::SmtpConfig;
 
 use crate::message_builder;
 
@@ -63,13 +63,23 @@ impl PyMailer {
         py: Python<'_>,
     ) -> PyResult<()> {
         let msg = message_builder::build_message(
-            to, subject, body, html, cc, bcc, reply_to, attachments, py,
+            to,
+            subject,
+            body,
+            html,
+            cc,
+            bcc,
+            reply_to,
+            attachments,
+            py,
         )?;
         let sender = self.sender.clone();
         let rt = tokio::runtime::Runtime::new()
             .map_err(|e| PyValueError::new_err(format!("Failed to create runtime: {e}")))?;
         rt.block_on(async {
-            sender.send(&msg).await
+            sender
+                .send(&msg)
+                .await
                 .map_err(|e| PyValueError::new_err(format!("Failed to send email: {e}")))
         })
     }
@@ -89,12 +99,19 @@ impl PyMailer {
         py: Python<'py>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let msg = message_builder::build_message(
-            to, subject, body, html, cc, bcc, reply_to, attachments, py,
+            to,
+            subject,
+            body,
+            html,
+            cc,
+            bcc,
+            reply_to,
+            attachments,
+            py,
         )?;
         let sender = self.sender.clone();
         let fut = async move {
-            sender.send(&msg).await
-                .map_err(|e| anyhow::anyhow!("Failed to send email: {e}"))
+            sender.send(&msg).await.map_err(|e| anyhow::anyhow!("Failed to send email: {e}"))
         };
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             fut.await.map_err(|e| PyValueError::new_err(e.to_string()))

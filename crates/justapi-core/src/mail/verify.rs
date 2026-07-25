@@ -24,12 +24,7 @@ impl VerificationStore {
     }
 
     /// Generate a new verification token and store it.
-    pub async fn create_token(
-        &self,
-        email: &str,
-        purpose: &str,
-        _ttl_secs: u64,
-    ) -> String {
+    pub async fn create_token(&self, email: &str, purpose: &str, _ttl_secs: u64) -> String {
         use rand::Rng;
         let token: String = rand::thread_rng()
             .sample_iter(&rand::distributions::Alphanumeric)
@@ -55,12 +50,7 @@ impl VerificationStore {
 
     /// Verify a token: returns the email if valid, None otherwise.
     /// Consumes the token (one-time use).
-    pub async fn verify(
-        &self,
-        token: &str,
-        purpose: &str,
-        max_age_secs: u64,
-    ) -> Option<String> {
+    pub async fn verify(&self, token: &str, purpose: &str, max_age_secs: u64) -> Option<String> {
         let mut store = self.tokens.write().await;
         let mut entry = match store.get(token) {
             Some(e) => e.clone(),
