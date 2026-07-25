@@ -14,7 +14,8 @@
   - **PyPI wheel** — built (`manylinux_2_34_x86_64`, 32 MB). Unpublished — blocked on `MATURIN_PYPI_TOKEN`.
 - **Demo_shop stress test (2026-07-18) — all D1–D4 defects fixed.** All 23 endpoints pass; 29-assertion e2e test passes. Framework gotchas documented in demo_shop/README.md (both resolved in framework).
 - **Gates (2026-07-25):** `cargo test --workspace` (493+ all pass) ✅, `cargo clippy --workspace --tests -- -D warnings` ✅, `cargo fmt --check` ✅, pytest 159 passed / 1 skipped ✅, demo_shop `test_app.py` 29/29 ✅.
-- **Blocker:** none. Outstanding: PyPI publish (needs `MATURIN_PYPI_TOKEN` env var).
+- **Documentation site (2026-07-25):** docs_site rebuilt to FastAPI-level depth — 141 pages across 13 sections, Astro + Starlight build passes, full-text search with Pagefind. Sections: Getting Started (5), Tutorial (36), Advanced (27), How-To (7), API Reference (17), Deployment (9), Security (4), Observability (4), Inference (4), Reference (6), Resources (3), Contributing (5), Examples (1).
+- **Blocker:** none. Outstanding: PyPI publish (needs OIDC trusted publisher configured at pypi.org).
 
 ## Mission
 
