@@ -2,7 +2,7 @@
   <a href="https://github.com/swadhinbiswas/JustAPI"><img src="https://img.shields.io/badge/JustAPI-Rust%20Powered-E6522C?style=for-the-badge&logo=rust&logoColor=white" alt="JustAPI" width="400"></a>
 </p>
 <p align="center">
-    <em>JustAPI — Rust-powered Python web framework. FastAPI compatibility, 20× the throughput.</em>
+    <em>JustAPI — Built to handle pressure.</em>
 </p>
 <p align="center">
 <a href="https://github.com/swadhinbiswas/JustAPI/actions/workflows/ci.yml">
@@ -39,7 +39,9 @@
 
 ---
 
-JustAPI is a Rust-powered Python web framework for building APIs. It is designed as a **drop-in replacement for FastAPI** — same decorator syntax, same Pydantic models, same developer experience — but with networking, routing, serialization, and middleware implemented in Rust rather than Python.
+JustAPI is a Python web framework powered by a Rust core. Python writes the logic. Rust handles everything else — networking, TLS, routing, serialization, compression.
+
+Built to handle real traffic.
 
 **Python writes the logic. Rust does everything else.**
 
