@@ -2929,3 +2929,23 @@ healthy 117 RPS, confirming the collapse is concurrency-induced).
 
 **Evidence:** `cargo check --bin fuzz_pipeline` builds cleanly in `fuzz/`.
 
+---
+
+## ADR-076 — 2026-07-25 — ORJSON as optional Rust-level JSON serializer
+
+**Context:** Project listed "ORJSON as optional JSON serializer" as a remaining gap. The Python `orjson` library (v3.11) was already imported on a best-effort basis in both `_native_helper.py` (try/except) and the Rust `fast_dumps()` path (`__import__('orjson')` with `json.dumps` fallback). The gap was that this integration was informal — no feature flag, no hard requirement path, no pyproject.toml extra.
+
+**Options considered:**
+1. Add `orjson` as a Rust crate dependency (via crates.io) — rejected: no standalone `orjson` Rust crate exists; `orjson` is a Python package built with PyO3/maturin, not published on crates.io.
+2. Create a Rust-level `orjson` feature that panics if the Python module is missing — selected for `justapi-py`. The feature makes `fast_dumps()` hard-require `orjson` at first call instead of silently falling back to `json.dumps`.
+3. Add `orjson` to `pyproject.toml` extras — selected. `orjson>=3.10` added as `[orjson]` extra and included in `[full]`.
+4. No change (status quo) — rejected: the integration should be documented, testable, and discoverable by users.
+
+**Decision:**
+- Added `orjson = []` feature to `justapi-core` (marker only, no dependencies) and `orjson = ["justapi-core/orjson"]` to `justapi-py`.
+- `fast_dumps()` in `handlers.rs` uses `#[cfg(feature = "orjson")]` to hard-require `py.import("orjson")` with a `panic!` on failure; without the feature it falls back to `json.dumps` as before.
+- Added `orjson>=3.10` to `pyproject.toml` as `[project.optional-dependencies] orjson` extra and included in `full`.
+- Added 7 tests in `test_orjson.py` covering compact-JSON output, `default=str` fallback, and end-to-end response serialization via `AsyncTestClient`.
+
+**Evidence:** `cargo check -p justapi-py --features orjson` passes; `cargo check` (default/no-orjson) passes; pytest 159 passed / 1 skipped; `cargo test --workspace` all pass.
+

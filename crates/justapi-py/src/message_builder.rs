@@ -43,9 +43,8 @@ pub fn build_message(
                 .ok_or_else(|| PyValueError::new_err("attachment missing 'filename'"))?
                 .extract()
                 .map_err(|_| PyValueError::new_err("attachment 'filename' must be a string"))?;
-            let content_type: Option<String> = dict
-                .get_item("content_type")?
-                .and_then(|v| v.extract::<String>().ok());
+            let content_type: Option<String> =
+                dict.get_item("content_type")?.and_then(|v| v.extract::<String>().ok());
             let data: Vec<u8> = dict
                 .get_item("data")?
                 .ok_or_else(|| PyValueError::new_err("attachment missing 'data'"))?
