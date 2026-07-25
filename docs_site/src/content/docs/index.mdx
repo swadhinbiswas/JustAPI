@@ -1,9 +1,9 @@
 ---
-title: JustAPI — FastAPI Alternative | Rust-Powered Python Web Framework
-description: JustAPI — a Rust-powered Python web framework. Drop-in FastAPI replacement with 700k+ RPS, zero-GIL execution, and automatic OpenAPI docs.
+title: JustAPI — Built to Handle Pressure
+description: Python web framework powered by Rust. Handles 700k+ requests per second without breaking a sweat.
 template: splash
 hero:
-  tagline: Python web framework powered by Rust. Drop-in FastAPI replacement with 20× performance.
+  tagline: Python web framework powered by Rust. Built to handle real traffic.
   image:
     file: ../../assets/logo.svg
   actions:
@@ -34,30 +34,9 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
 
 *Same decorators. Same Pydantic models. Same dependency injection. 20× faster.*
 
-## Features
+## What It Does
 
-<CardGrid>
-  <Card title="FastAPI-Compatible" icon="star">
-    Same `@app.get()`, `@app.post()`, Pydantic v2, `Depends()`. Migrate with one import change.
-  </Card>
-  <Card title="Rust-Native" icon="rocket">
-    Networking, TLS, routing, serialization — all in Rust. No Python overhead on the hot path.
-  </Card>
-  <Card title="Zero-GIL" icon="shield">
-    GIL released during I/O. Supports free-threaded Python 3.13t/3.14t.
-  </Card>
-  <Card title="Production-Ready" icon="lock">
-    JWT auth, rate limiting, circuit breakers, OpenTelemetry, health checks — built in.
-  </Card>
-  <Card title="Auto OpenAPI Docs" icon="document">
-    Swagger UI, ReDoc, and Scalar. Automatic from your code.
-  </Card>
-  <Card title="Multi-Protocol" icon="globe">
-    REST, GraphQL, gRPC, JSON-RPC 2.0 — all in one app.
-  </Card>
-</CardGrid>
-
-## Quick Start
+JustAPI runs your Python application logic on top of a Rust networking stack. Routing, TLS, serialization, compression — all handled in Rust before your code even runs.
 
 ```python
 from justapi import JustAPIApp
@@ -75,6 +54,31 @@ python main.py
 # → http://127.0.0.1:8000/docs
 ```
 
+Open the `/docs` endpoint and you get Swagger UI, ReDoc, and the full OpenAPI schema — generated automatically from your code.
+
+## Features
+
+<CardGrid>
+  <Card title="FastAPI-Compatible" icon="star">
+    Same decorators, Pydantic models, dependency injection. Switch with one import.
+  </Card>
+  <Card title="Rust Under the Hood" icon="rocket">
+    Networking, TLS, routing, serialization run in Rust. Python does the rest.
+  </Card>
+  <Card title="Zero GIL" icon="shield">
+    GIL released during I/O. Works with free-threaded Python 3.13t/3.14t.
+  </Card>
+  <Card title="Production-Ready" icon="lock">
+    JWT auth, rate limiting, circuit breakers, OpenTelemetry, health checks.
+  </Card>
+  <Card title="Multi-Protocol" icon="globe">
+    REST, GraphQL, gRPC, JSON-RPC 2.0 — all in one app.
+  </Card>
+  <Card title="Auto Docs" icon="document">
+    Swagger UI, ReDoc, Scalar. Generated from your code.
+  </Card>
+</CardGrid>
+
 ## Install
 
 ```bash
@@ -83,27 +87,17 @@ uv pip install justapi        # uv (recommended)
 uvx justapi create my_app     # scaffold without installing
 ```
 
-## Migration
-
-```python
-# FastAPI                          # JustAPI
-from fastapi import FastAPI    →   from justapi import JustAPIApp
-app = FastAPI()                →   app = JustAPIApp()
-```
-
-Everything else — decorators, Pydantic, DI, OpenAPI — stays the same.
-
-## Documentation
+## Learn
 
 <CardGrid>
   <Card title="Tutorial" icon="pencil">
-    [36-step learning path from basics to production →](/tutorials/python-types/)
+    [36-step learning path →](/tutorials/python-types/)
   </Card>
   <Card title="Advanced" icon="rocket">
     [Rust internals, zero-GIL, native fast path →](/advanced/zero-gil-architecture/)
   </Card>
   <Card title="API Reference" icon="document">
-    [Every class, function, and parameter →](/api-reference/)
+    [Every class and function →](/api-reference/)
   </Card>
   <Card title="Deployment" icon="setting">
     [Docker, Kubernetes, cloud providers →](/deployment/docker/)
