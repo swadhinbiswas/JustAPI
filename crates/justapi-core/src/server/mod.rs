@@ -19,13 +19,14 @@ use crate::memory::BufferPool;
 use crate::memory::SharedArena;
 use crate::metrics::{self, Metrics};
 use crate::middleware::{
-    ApiKeyAuth, Cors, JwtAuth, MiddlewareChain, OAuth2Password, RateLimiter, SecurityHeaders,
+    ApiKeyAuth, Cors, JwtAuth, MiddlewareChain, OAuth2Password, PerRouteRateLimiter, RateLimiter,
+    SecurityHeaders,
 };
 use crate::openapi;
 use crate::plugin::PluginRegistry;
 use crate::router::Router;
 use crate::static_files::{StaticDir, StaticMount};
-use crate::{json_response, streaming_response, ResponseBody};
+use crate::{error_response, json_response, streaming_response, ResponseBody};
 #[cfg(feature = "ws")]
 use futures::StreamExt;
 use serde_json;
@@ -354,6 +355,9 @@ pub struct Server {
     /// Maximum accepted request body size in bytes (DoS guard). Configurable
     /// via `with_max_body_size`; defaults to `DEFAULT_MAX_BODY_SIZE`.
     max_body_size: usize,
+    /// Graceful shutdown drain timeout. Configurable via `with_shutdown_timeout`;
+    /// defaults to 30 seconds.
+    shutdown_timeout: std::time::Duration,
 }
 
 impl Server {
@@ -394,6 +398,7 @@ impl Server {
             default_routes_set: false,
             openapi_spec: None,
             max_body_size: DEFAULT_MAX_BODY_SIZE,
+            shutdown_timeout: std::time::Duration::from_secs(30),
         }
     }
 
@@ -409,6 +414,15 @@ impl Server {
     /// memory-exhaustion DoS. Defaults to `DEFAULT_MAX_BODY_SIZE` (50 MiB).
     pub fn with_max_body_size(mut self, bytes: usize) -> Self {
         self.max_body_size = bytes;
+        self
+    }
+
+    /// Set the graceful shutdown drain timeout. When a shutdown signal is
+    /// received, the server stops accepting new connections and waits up to
+    /// this duration for in-flight requests to complete before dropping them.
+    /// Defaults to 30 seconds.
+    pub fn with_shutdown_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.shutdown_timeout = timeout;
         self
     }
 
@@ -484,10 +498,7 @@ impl Server {
         router.insert(Method::GET, "/events", Handler::Sse).expect("valid");
         router.insert(Method::GET, "/graphql", Handler::GraphQL).expect("valid");
         router.insert(Method::POST, "/graphql", Handler::GraphQL).expect("valid");
-        router.set_fallback(Handler::Static {
-            status: StatusCode::NOT_FOUND,
-            body: r#"{"detail":"not found"}"#,
-        });
+        router.set_fallback(Handler::Static { status: StatusCode::NOT_FOUND, body: "not found" });
         self.router = Some(router);
         self.default_routes_set = true;
         self
@@ -730,6 +741,26 @@ impl Server {
         self
     }
 
+    /// Add a per-route rate limiter with different limits for different paths.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use std::time::Duration;
+    /// use hyper::Method;
+    ///
+    /// let server = Server::new("0.0.0.0:8080")
+    ///     .add_per_route_rate_limit(
+    ///         PerRouteRateLimiter::new()
+    ///             .add_rule("/api/search", None, Duration::from_secs(1), 100)
+    ///             .add_rule("/api/export", Some(Method::POST), Duration::from_secs(1), 10)
+    ///     );
+    /// ```
+    pub fn add_per_route_rate_limit(mut self, rl: PerRouteRateLimiter) -> Self {
+        self.chain.add(rl);
+        self
+    }
+
     /// Add JWT authentication middleware.
     pub fn add_jwt(mut self, jwt: JwtAuth) -> Self {
         self.chain.add(jwt);
@@ -968,6 +999,7 @@ impl Server {
             self.static_mounts.clone(),
             metrics,
             self.shutdown,
+            self.shutdown_timeout,
             wasm_middleware,
             ws_handler,
         )
@@ -980,6 +1012,7 @@ impl Server {
             self.static_mounts.clone(),
             metrics,
             self.shutdown,
+            self.shutdown_timeout,
             wasm_middleware,
         )
         .await;
@@ -1073,6 +1106,7 @@ impl Server {
             self.static_mounts.clone(),
             metrics,
             self.shutdown,
+            self.shutdown_timeout,
             wasm_middleware,
             ws_handler,
         )
@@ -1085,6 +1119,7 @@ impl Server {
             self.static_mounts.clone(),
             metrics,
             self.shutdown,
+            self.shutdown_timeout,
             wasm_middleware,
         )
         .await;
@@ -1099,10 +1134,7 @@ impl Server {
 
 pub async fn serve(listener: TcpListener) -> Result<()> {
     let mut router: Router<Handler> = Router::new();
-    router.set_fallback(Handler::Static {
-        status: StatusCode::NOT_FOUND,
-        body: r#"{"detail":"not found"}"#,
-    });
+    router.set_fallback(Handler::Static { status: StatusCode::NOT_FOUND, body: "not found" });
     router
         .insert(
             hyper::Method::GET,
@@ -1126,11 +1158,30 @@ pub async fn serve(listener: TcpListener) -> Result<()> {
     let chain = Arc::new(MiddlewareChain::new(handler));
 
     #[cfg(feature = "ws")]
-    let res =
-        serve_http(listener, chain, None, Vec::new(), metrics, None, None, Some(default_ws_echo()))
-            .await;
+    let res = serve_http(
+        listener,
+        chain,
+        None,
+        Vec::new(),
+        metrics,
+        None,
+        std::time::Duration::from_secs(30),
+        None,
+        Some(default_ws_echo()),
+    )
+    .await;
     #[cfg(not(feature = "ws"))]
-    let res = serve_http(listener, chain, None, Vec::new(), metrics, None, None).await;
+    let res = serve_http(
+        listener,
+        chain,
+        None,
+        Vec::new(),
+        metrics,
+        None,
+        std::time::Duration::from_secs(30),
+        None,
+    )
+    .await;
     res
 }
 
@@ -1174,10 +1225,9 @@ fn make_handler(
                     )
                     .await
                 }
-                Err(crate::router::RouterError::MethodNotAllowed) => Ok(json_response(
-                    StatusCode::METHOD_NOT_ALLOWED,
-                    r#"{"detail":"method not allowed"}"#,
-                )),
+                Err(crate::router::RouterError::MethodNotAllowed) => {
+                    Ok(error_response(StatusCode::METHOD_NOT_ALLOWED, "method not allowed"))
+                }
                 Err(crate::router::RouterError::NotFound) => match router.fallback() {
                     Some(fb) => {
                         execute_handler(
@@ -1193,7 +1243,7 @@ fn make_handler(
                         )
                         .await
                     }
-                    None => Ok(json_response(StatusCode::NOT_FOUND, r#"{"detail":"not found"}"#)),
+                    None => Ok(error_response(StatusCode::NOT_FOUND, "not found")),
                 },
             }
         })
@@ -1500,7 +1550,7 @@ async fn serve_connection(
                         {
                             return Ok::<_, anyhow::Error>(resp);
                         }
-                        Ok(json_response(StatusCode::NOT_FOUND, r#"{"detail":"not found"}"#))
+                        Ok(error_response(StatusCode::NOT_FOUND, "not found"))
                     }
                 },
                 Err(_) => {
@@ -1514,10 +1564,7 @@ async fn serve_connection(
                         path,
                         request_timeout()
                     );
-                    Ok(json_response(
-                        StatusCode::GATEWAY_TIMEOUT,
-                        r#"{"detail":"request timeout"}"#,
-                    ))
+                    Ok(error_response(StatusCode::GATEWAY_TIMEOUT, "request timeout"))
                 }
             }
         }
@@ -1559,6 +1606,7 @@ async fn serve_http(
     static_mounts: Vec<StaticMount>,
     metrics: Metrics,
     shutdown: Option<CancellationToken>,
+    shutdown_timeout: std::time::Duration,
     wasm_middleware: Option<Arc<crate::wasm::WasmEngine>>,
     #[cfg(feature = "ws")] ws_handler: Option<WsHandler>,
 ) -> Result<()> {
@@ -1614,7 +1662,7 @@ async fn serve_http(
             _ = async { while connections.join_next().await.is_some() {} } => {
                 tracing::debug!("all connections closed gracefully");
             }
-            _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => {
+            _ = tokio::time::sleep(shutdown_timeout) => {
                 tracing::warn!("Graceful shutdown timeout exceeded. Dropping remaining connections.");
             }
         }
@@ -1670,6 +1718,7 @@ async fn serve_unix(
     static_mounts: Vec<StaticMount>,
     metrics: Metrics,
     shutdown: Option<CancellationToken>,
+    shutdown_timeout: std::time::Duration,
     wasm_middleware: Option<Arc<crate::wasm::WasmEngine>>,
     #[cfg(feature = "ws")] ws_handler: Option<WsHandler>,
 ) -> Result<()> {
@@ -1721,7 +1770,7 @@ async fn serve_unix(
             _ = async { while connections.join_next().await.is_some() {} } => {
                 tracing::debug!("all connections closed gracefully");
             }
-            _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => {
+            _ = tokio::time::sleep(shutdown_timeout) => {
                 tracing::warn!("Graceful shutdown timeout exceeded. Dropping remaining connections.");
             }
         }
@@ -1765,7 +1814,13 @@ async fn execute_handler(
     let _handler_span = tracing::debug_span!("handler.execute", name = handler_name);
 
     match handler {
-        Handler::Static { status, body } => Ok(json_response(status, body)),
+        Handler::Static { status, body } => {
+            if status.is_success() {
+                Ok(json_response(status, body))
+            } else {
+                Ok(crate::error_response(status, body))
+            }
+        }
         Handler::Echo => {
             let body_bytes = match http_body_util::Limited::new(req.into_body(), max_body_size)
                 .collect()
@@ -1777,17 +1832,9 @@ async fn execute_handler(
                     bytes
                 }
                 Err(e) if e.to_string().contains("length limit") => {
-                    return Ok(json_response(
-                        StatusCode::PAYLOAD_TOO_LARGE,
-                        r#"{"detail":"payload too large"}"#,
-                    ))
+                    return Ok(error_response(StatusCode::PAYLOAD_TOO_LARGE, "payload too large"))
                 }
-                Err(_) => {
-                    return Ok(json_response(
-                        StatusCode::BAD_REQUEST,
-                        r#"{"detail":"bad request"}"#,
-                    ))
-                }
+                Err(_) => return Ok(error_response(StatusCode::BAD_REQUEST, "bad request")),
             };
             let mut buf = pool.acquire(body_bytes.len());
             buf.extend_from_slice(&body_bytes);
@@ -2147,9 +2194,9 @@ async fn serve_with_tls(
                                     if let Some(resp) = try_serve_static(&path, &static_dir, &static_mounts).await {
                                         return Ok::<_, anyhow::Error>(resp);
                                     }
-                                    Ok(json_response(
+                                    Ok(error_response(
                                         StatusCode::NOT_FOUND,
-                                        r#"{"detail":"not found"}"#,
+                                        "not found",
                                     ))
                                 },
                         },
@@ -2163,9 +2210,9 @@ async fn serve_with_tls(
                                 path,
                                 request_timeout()
                             );
-                            Ok(json_response(
+                            Ok(error_response(
                                 StatusCode::GATEWAY_TIMEOUT,
-                                r#"{"detail":"request timeout"}"#
+                                "request timeout",
                             ))
                         }
                     }
@@ -2210,7 +2257,7 @@ async fn serve_with_tls(
             _ = async { while connections.join_next().await.is_some() {} } => {
                 tracing::debug!("all connections closed after fallback drain");
             }
-            _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => {
+            _ = tokio::time::sleep(shutdown_timeout) => {
                 tracing::warn!("Graceful shutdown timeout exceeded. Dropping remaining TLS connections.");
             }
         }
@@ -2324,10 +2371,30 @@ mod tests {
 
         let server = tokio::spawn(async move {
             #[cfg(feature = "ws")]
-            let _ = serve_unix(listener, chain, None, Vec::new(), Metrics::new(), None, None, None)
-                .await;
+            let _ = serve_unix(
+                listener,
+                chain,
+                None,
+                Vec::new(),
+                Metrics::new(),
+                None,
+                std::time::Duration::from_secs(30),
+                None,
+                None,
+            )
+            .await;
             #[cfg(not(feature = "ws"))]
-            let _ = serve_unix(listener, chain, None, Vec::new(), Metrics::new(), None, None).await;
+            let _ = serve_unix(
+                listener,
+                chain,
+                None,
+                Vec::new(),
+                Metrics::new(),
+                None,
+                std::time::Duration::from_secs(30),
+                None,
+            )
+            .await;
         });
 
         // Give the acceptor a moment to start.

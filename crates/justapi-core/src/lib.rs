@@ -76,29 +76,58 @@ pub fn json_response(status: hyper::StatusCode, body: &str) -> Response<Response
         .expect("Response::builder with valid inputs should never fail")
 }
 
-/// Canonical error envelope. Every non-2xx response in justapi uses this single
-/// shape so clients have one contract to parse (see ADR-052). `detail` carries
-/// the human-readable message; the numeric status lives in the HTTP status
-/// line. Sensitive internals must never be placed in `detail` for 5xx.
+/// Canonical error envelope following RFC 9457 Problem Details. Every non-2xx
+/// response in justapi uses this shape so clients have one contract to parse.
+/// The `type` URI identifies the error class, `title` is a short human-readable
+/// label, `status` is the HTTP status code, and `detail` carries the full message.
 pub fn error_response(status: hyper::StatusCode, detail: &str) -> Response<ResponseBody> {
-    json_response(status, &serde_json::json!({ "detail": detail }).to_string())
+    let status_code: u16 = status.into();
+    let title = match status_code {
+        400 => "Bad Request",
+        401 => "Unauthorized",
+        403 => "Forbidden",
+        404 => "Not Found",
+        405 => "Method Not Allowed",
+        413 => "Payload Too Large",
+        422 => "Unprocessable Entity",
+        429 => "Too Many Requests",
+        500 => "Internal Server Error",
+        502 => "Bad Gateway",
+        503 => "Service Unavailable",
+        504 => "Gateway Timeout",
+        _ => "Error",
+    };
+    let body = serde_json::json!({
+        "type": format!("https://justapi.dev/errors/{}", title.to_lowercase().replace(' ', "-")),
+        "title": title,
+        "status": status_code,
+        "detail": detail,
+    })
+    .to_string();
+    json_response(status, &body)
 }
 
-/// 422 validation error using the canonical `{"detail": ...}` envelope.
+/// 422 validation error using RFC 9457 Problem Details.
 pub fn validation_response(detail: &str) -> Response<ResponseBody> {
     error_response(hyper::StatusCode::UNPROCESSABLE_ENTITY, detail)
 }
 
-/// 503 Service Unavailable with a `Retry-After` hint, using the canonical
-/// `{"detail": ...}` envelope. Used for backpressure signals — e.g. a saturated
-/// DB connection pool that cannot serve a request within its acquire window.
+/// 503 Service Unavailable with a `Retry-After` hint, using RFC 9457 Problem Details.
 pub fn service_unavailable_response(detail: &str) -> Response<ResponseBody> {
+    let body = serde_json::json!({
+        "type": "https://justapi.dev/errors/service-unavailable",
+        "title": "Service Unavailable",
+        "status": 503,
+        "detail": detail,
+    })
+    .to_string();
     Response::builder()
         .status(hyper::StatusCode::SERVICE_UNAVAILABLE)
-        .header("content-type", "application/json")
+        .header("content-type", "application/problem+json")
         .header("retry-after", "1")
+        .header("content-length", body.len().to_string())
         .body(UnsyncBoxBody::new(
-            Full::new(Bytes::from(serde_json::json!({ "detail": detail }).to_string()))
+            Full::new(Bytes::from(body))
                 .map_err(|e: std::convert::Infallible| -> anyhow::Error { match e {} }),
         ))
         .expect("Response::builder with valid inputs should never fail")

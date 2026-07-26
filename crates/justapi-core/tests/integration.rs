@@ -81,7 +81,11 @@ async fn test_loopback_404() {
     let addr = start_server().await;
     let (status, body) = send_request(addr, Method::GET, "/nonexistent", None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
-    assert_eq!(&body[..], br#"{"detail":"not found"}"#);
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["status"], 404);
+    assert_eq!(v["title"], "Not Found");
+    assert_eq!(v["detail"], "not found");
+    assert!(v["type"].as_str().unwrap().contains("not-found"));
 }
 
 #[tokio::test]
