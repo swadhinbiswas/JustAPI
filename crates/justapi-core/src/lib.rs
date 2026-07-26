@@ -10,6 +10,7 @@ pub mod error;
 pub mod error_catalog;
 pub mod extract;
 pub mod gateway;
+#[cfg(feature = "graphql")]
 pub mod graphql;
 pub mod health;
 #[cfg(feature = "mail")]
@@ -34,6 +35,7 @@ pub mod testing;
 pub mod trace_context;
 pub mod tracing_setup;
 pub mod validate;
+#[cfg(feature = "wasm")]
 pub mod wasm;
 pub mod xml;
 
@@ -160,5 +162,7 @@ pub fn streaming_response(
         .expect("Response::builder with valid inputs should never fail")
 }
 pub mod dummy_extract;
+#[cfg(feature = "grpc")]
 pub mod grpc;
+#[cfg(feature = "grpc")]
 pub mod test_codec;
