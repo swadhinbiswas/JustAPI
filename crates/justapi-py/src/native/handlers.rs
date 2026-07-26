@@ -173,7 +173,14 @@ pub(crate) fn call_python_handler(
         if let Some(pb) = parsed_body {
             req.set_parsed_body(py, pb.into_bound(py));
         }
-        Bound::new(py, req).unwrap().into_any()
+        Bound::new(py, req)
+            .unwrap_or_else(|e| {
+                tracing::error!("Failed to create Python Request object: {e}");
+                panic!(
+                    "Fatal: unable to create Python Request object (PyO3 Bound::new failed): {e}"
+                )
+            })
+            .into_any()
     } else {
         // Handlers with no request-dependent parameters (0-param endpoints,
         // no dependencies/query/path/etc.) skip building the Python `Request`
@@ -323,17 +330,27 @@ pub(crate) fn fast_dumps(py: Python<'_>) -> PyResult<&Bound<'_, PyAny>> {
 
     #[cfg(feature = "orjson")]
     let expr = {
-        let _ = py.import("orjson").unwrap_or_else(|e| {
-            panic!("orjson feature enabled but Python 'orjson' module not available: {e}")
-        });
+        py.import("orjson").map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyImportError, _>(format!(
+                "orjson feature enabled but Python 'orjson' module not available: {e}"
+            ))
+        })?;
         "lambda o: __import__('orjson').dumps(o, default=str)"
     };
 
     // SAFETY: globals/locals are left as None, which Python fills with the
     // builtins dict, so `__import__` and `str` are available. The cached
     // lambda borrows no local state and is leaked for the process lifetime.
-    let cexpr = std::ffi::CString::new(expr).unwrap();
-    let dumps = DUMPS.get_or_init(|| py.eval(cexpr.as_c_str(), None, None).unwrap().unbind());
+    let cexpr = std::ffi::CString::new(expr).map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "Invalid expression string (contains NUL byte): {e}"
+        ))
+    })?;
+    let dumps = DUMPS.get_or_init(|| {
+        py.eval(cexpr.as_c_str(), None, None)
+            .expect("Fatal: failed to compile fast_dumps lambda — Python eval error")
+            .unbind()
+    });
     Ok(dumps.bind(py))
 }
 

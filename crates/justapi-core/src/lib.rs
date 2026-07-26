@@ -6,6 +6,7 @@ pub mod compress;
 #[cfg(feature = "db")]
 pub mod db;
 pub mod dx;
+pub mod error;
 pub mod error_catalog;
 pub mod extract;
 pub mod gateway;
@@ -72,7 +73,7 @@ pub fn json_response(status: hyper::StatusCode, body: &str) -> Response<Response
             Full::new(Bytes::from(body.to_string()))
                 .map_err(|e: std::convert::Infallible| -> anyhow::Error { match e {} }),
         ))
-        .unwrap()
+        .expect("Response::builder with valid inputs should never fail")
 }
 
 /// Canonical error envelope. Every non-2xx response in justapi uses this single
@@ -100,7 +101,7 @@ pub fn service_unavailable_response(detail: &str) -> Response<ResponseBody> {
             Full::new(Bytes::from(serde_json::json!({ "detail": detail }).to_string()))
                 .map_err(|e: std::convert::Infallible| -> anyhow::Error { match e {} }),
         ))
-        .unwrap()
+        .expect("Response::builder with valid inputs should never fail")
 }
 
 /// Map a SQLx error from a request-path DB operation to the right status.
@@ -127,7 +128,7 @@ pub fn streaming_response(
         .status(status)
         .header("content-type", content_type)
         .body(UnsyncBoxBody::new(http_body_util::StreamBody::new(frame_stream)))
-        .unwrap()
+        .expect("Response::builder with valid inputs should never fail")
 }
 pub mod dummy_extract;
 pub mod grpc;

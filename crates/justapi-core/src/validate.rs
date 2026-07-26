@@ -27,10 +27,13 @@ fn format_validators() -> &'static [FormatChecker] {
     FMTS.get_or_init(|| {
         vec![
             ("email", |s: &str| {
-                if s.is_empty() || s.contains(char::is_whitespace) || !s.contains('@') {
+                if s.is_empty() || s.contains(char::is_whitespace) {
                     return false;
                 }
-                let (local, domain) = s.split_once('@').unwrap();
+                let (local, domain) = match s.split_once('@') {
+                    Some(pair) => pair,
+                    None => return false,
+                };
                 !local.is_empty()
                     && !domain.is_empty()
                     && domain.contains('.')
@@ -192,7 +195,7 @@ pub fn validation_error_response(err: &ValidationError) -> Response<ResponseBody
             Full::new(Bytes::from(body))
                 .map_err(|e: std::convert::Infallible| -> anyhow::Error { match e {} }),
         ))
-        .unwrap()
+        .expect("Response::builder with valid inputs should never fail")
 }
 
 // ---------------------------------------------------------------------------
@@ -515,5 +518,61 @@ mod tests {
             assert!(compiled.validate(br#"{"name": "Alice"}"#).is_ok());
             assert!(compiled.validate(br#"{"wrong": 1}"#).is_err());
         }
+    }
+
+    // --- Crash-prevention tests (Phase 53.3) ---
+
+    #[test]
+    fn test_email_format_empty_string_no_panic() {
+        let validators = super::format_validators();
+        let email_checker = validators.iter().find(|(name, _)| *name == "email").unwrap();
+        assert!(!email_checker.1(""));
+    }
+
+    #[test]
+    fn test_email_format_no_at_sign_no_panic() {
+        let validators = super::format_validators();
+        let email_checker = validators.iter().find(|(name, _)| *name == "email").unwrap();
+        assert!(!email_checker.1("notanemail"));
+    }
+
+    #[test]
+    fn test_email_format_at_dot_prefix_no_panic() {
+        let validators = super::format_validators();
+        let email_checker = validators.iter().find(|(name, _)| *name == "email").unwrap();
+        assert!(!email_checker.1("@example.com"));
+    }
+
+    #[test]
+    fn test_email_format_whitespace_no_panic() {
+        let validators = super::format_validators();
+        let email_checker = validators.iter().find(|(name, _)| *name == "email").unwrap();
+        assert!(!email_checker.1("user @example.com"));
+    }
+
+    #[test]
+    fn test_email_format_multiple_at_no_panic() {
+        let validators = super::format_validators();
+        let email_checker = validators.iter().find(|(name, _)| *name == "email").unwrap();
+        // "a@b@c" — split_once only splits on first @, local="a", domain="b@c"
+        // domain contains no '.' so it's invalid, but must not panic
+        assert!(!email_checker.1("a@b@c"));
+    }
+
+    #[test]
+    fn test_email_format_valid() {
+        let validators = super::format_validators();
+        let email_checker = validators.iter().find(|(name, _)| *name == "email").unwrap();
+        assert!(email_checker.1("user@example.com"));
+        assert!(email_checker.1("a+b@domain.co.uk"));
+    }
+
+    #[test]
+    fn test_validate_json_schema_with_email_format_no_panic() {
+        let body = br#"{"email": "not-an-email"}"#;
+        let schema = r#"{"type": "object", "properties": {"email": {"type": "string", "format": "email"}}, "required": ["email"]}"#;
+        // Must return a validation error, not panic
+        let result = validate_json_schema(body, schema);
+        assert!(result.is_err());
     }
 }

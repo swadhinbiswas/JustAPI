@@ -108,7 +108,7 @@ impl HealthRegistry {
                 Full::new(Bytes::from(body))
                     .map_err(|e: std::convert::Infallible| -> anyhow::Error { match e {} }),
             ))
-            .unwrap()
+            .expect("Response::builder with valid inputs should never fail")
     }
 }
 

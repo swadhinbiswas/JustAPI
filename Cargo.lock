@@ -2753,6 +2753,7 @@ dependencies = [
  "simd-json",
  "sqlx",
  "tempfile",
+ "thiserror 1.0.69",
  "tokio",
  "tokio-rustls",
  "tokio-stream",

@@ -32,7 +32,7 @@ impl VerificationStore {
             .map(char::from)
             .collect();
 
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
 
         let mut store = self.tokens.write().await;
         store.insert(
@@ -64,7 +64,7 @@ impl VerificationStore {
             return None;
         }
 
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
         if now - entry.created_at > max_age_secs {
             store.remove(token);
             return None;
@@ -79,7 +79,7 @@ impl VerificationStore {
 
     /// Clean up expired tokens from the store.
     pub async fn cleanup(&self, max_age_secs: u64) {
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
         let mut store = self.tokens.write().await;
         store.retain(|_, entry| now - entry.created_at <= max_age_secs);
     }

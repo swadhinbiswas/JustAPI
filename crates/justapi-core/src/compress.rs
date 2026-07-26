@@ -197,10 +197,16 @@ impl<B: Send + 'static> crate::middleware::Middleware<B> for CompressionMiddlewa
         }
 
         let mut parts = parts;
-        parts.headers.insert("content-encoding", encoding.as_header_value().parse().unwrap());
-        parts.headers.insert("content-length", compressed.len().to_string().parse().unwrap());
+        parts.headers.insert(
+            "content-encoding",
+            encoding.as_header_value().parse().expect("valid content-encoding header"),
+        );
+        parts.headers.insert(
+            "content-length",
+            compressed.len().to_string().parse().expect("valid content-length header"),
+        );
         // Add Vary header so caches know the response varies by Accept-Encoding
-        parts.headers.insert("vary", "accept-encoding".parse().unwrap());
+        parts.headers.insert("vary", "accept-encoding".parse().expect("valid vary header"));
 
         let new_body = UnsyncBoxBody::new(
             http_body_util::Full::new(Bytes::from(compressed))

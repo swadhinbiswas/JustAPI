@@ -150,7 +150,13 @@ impl Metrics {
 
     /// Register an extra Prometheus metric provider (e.g. scheduler stats).
     pub fn register_extra_provider(&self, provider: Box<dyn MetricProvider>) {
-        self.inner.extra_providers.lock().unwrap().push(provider);
+        match self.inner.extra_providers.lock() {
+            Ok(mut providers) => providers.push(provider),
+            Err(poisoned) => {
+                tracing::warn!("Metrics provider mutex poisoned (recovered): {poisoned}");
+                poisoned.into_inner().push(provider);
+            }
+        }
     }
 
     pub fn add_bytes_out(&self, n: u64) {
@@ -275,7 +281,15 @@ impl Metrics {
         ));
 
         // Extra metric providers (e.g. scheduler prefix-cache stats).
-        let providers = self.inner.extra_providers.lock().unwrap();
+        let providers = match self.inner.extra_providers.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                tracing::warn!(
+                    "Metrics provider mutex poisoned during render (recovered): {poisoned}"
+                );
+                poisoned.into_inner()
+            }
+        };
         for provider in providers.iter() {
             out.push_str(&provider.render());
         }
@@ -309,7 +323,7 @@ pub fn health_response() -> Response<ResponseBody> {
         .header("content-type", "application/json")
         .header("content-length", body.len().to_string())
         .body(UnsyncBoxBody::new(body_bytes))
-        .unwrap()
+        .expect("Response::builder with valid inputs should never fail")
 }
 
 /// Readiness check endpoint response.
@@ -322,7 +336,7 @@ pub fn ready_response() -> Response<ResponseBody> {
         .header("content-type", "application/json")
         .header("content-length", body.len().to_string())
         .body(UnsyncBoxBody::new(body_bytes))
-        .unwrap()
+        .expect("Response::builder with valid inputs should never fail")
 }
 
 /// Liveness check endpoint response.
@@ -335,7 +349,7 @@ pub fn live_response() -> Response<ResponseBody> {
         .header("content-type", "application/json")
         .header("content-length", body.len().to_string())
         .body(UnsyncBoxBody::new(body_bytes))
-        .unwrap()
+        .expect("Response::builder with valid inputs should never fail")
 }
 
 /// Prometheus metrics endpoint response.
@@ -349,7 +363,7 @@ pub fn metrics_response(metrics: &Metrics) -> Response<ResponseBody> {
         .header("content-type", "text/plain; version=0.0.4")
         .header("content-length", body_len)
         .body(UnsyncBoxBody::new(body_bytes))
-        .unwrap()
+        .expect("Response::builder with valid inputs should never fail")
 }
 
 /// Timer guard that records elapsed time on drop.
@@ -458,5 +472,50 @@ mod tests {
         assert_eq!(snap.status_3xx, 1);
         assert_eq!(snap.status_4xx, 1);
         assert_eq!(snap.status_5xx, 1);
+    }
+
+    // --- Crash-prevention tests (Phase 53.3) ---
+
+    #[test]
+    fn test_metrics_mutex_poisoning_recovery() {
+        use std::thread;
+
+        let m = Metrics::new();
+        let m_clone = m.clone();
+
+        // Poison the mutex by panicking while holding the lock
+        let handle = thread::spawn(move || {
+            let _guard = m_clone.inner.extra_providers.lock().unwrap();
+            panic!("deliberate panic to poison mutex");
+        });
+
+        let _ = handle.join();
+
+        // The mutex is now poisoned, but register_extra_provider must not panic
+        // It should recover and still allow registration
+        m.register_extra_provider(Box::new(|| "recovered metric\n".to_string()));
+
+        // And prometheus() must also work with a poisoned mutex
+        let output = m.prometheus();
+        assert!(output.contains("justapi_requests_total"));
+    }
+
+    #[test]
+    fn test_metrics_prometheus_with_poisoned_mutex() {
+        use std::thread;
+
+        let m = Metrics::new();
+        m.record_request();
+
+        let m_clone = m.clone();
+        let handle = thread::spawn(move || {
+            let _guard = m_clone.inner.extra_providers.lock().unwrap();
+            panic!("deliberate panic to poison mutex");
+        });
+        let _ = handle.join();
+
+        // Must not panic even with poisoned mutex
+        let output = m.prometheus();
+        assert!(output.contains("justapi_requests_total 1"));
     }
 }

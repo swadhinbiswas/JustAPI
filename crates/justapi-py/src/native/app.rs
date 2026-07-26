@@ -238,10 +238,13 @@ fn format_validators() -> &'static HashMap<String, Arc<FormatChecker>> {
         m.insert(
             "email".into(),
             Arc::new(|s: &str| {
-                if s.is_empty() || s.contains(char::is_whitespace) || !s.contains('@') {
+                if s.is_empty() || s.contains(char::is_whitespace) {
                     return false;
                 }
-                let (local, domain) = s.split_once('@').unwrap();
+                let (local, domain) = match s.split_once('@') {
+                    Some(pair) => pair,
+                    None => return false,
+                };
                 !local.is_empty()
                     && !domain.is_empty()
                     && domain.contains('.')
@@ -1853,8 +1856,13 @@ impl JustAPIApp {
                                                 None,
                                                 "1.1".to_string(),
                                                 None, // auth_claims: batched requests have no middleware
-                                            )).unwrap();
-                                            py_list.append(r).unwrap();
+                                            )).unwrap_or_else(|e| {
+                                                tracing::error!("Failed to create batch Request object: {e}");
+                                                panic!("Fatal: unable to create batch Request object: {e}")
+                                            });
+                                            py_list.append(r).unwrap_or_else(|e| {
+                                                tracing::error!("Failed to append batch request to list: {e}");
+                                            });
                                         }
 
                                         let result = helper.call_batch_handler.bind(py).call1((py_handler.bind(py), py_list));
