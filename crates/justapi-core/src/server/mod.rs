@@ -338,8 +338,10 @@ pub struct Server {
     tls: Option<TlsConfig>,
     shutdown: Option<CancellationToken>,
     plugin_registry: PluginRegistry,
+    #[cfg(feature = "wasm")]
     wasm_middleware: Option<Arc<crate::wasm::WasmEngine>>,
     grpc_addr: Option<SocketAddr>,
+    #[cfg(feature = "grpc")]
     grpc_handler: Option<crate::grpc::GrpcHandler>,
     #[cfg(feature = "ws")]
     ws_handler: Option<WsHandler>,
@@ -386,10 +388,12 @@ impl Server {
             health_registry,
             shutdown: None,
             plugin_registry: PluginRegistry::new(),
+            #[cfg(feature = "wasm")]
             wasm_middleware: None,
             #[cfg(feature = "tls")]
             tls: None,
             grpc_addr: None,
+            #[cfg(feature = "grpc")]
             grpc_handler: None,
             #[cfg(feature = "ws")]
             ws_handler: Some(default_ws_echo()),
@@ -842,11 +846,13 @@ impl Server {
         self
     }
 
+    #[cfg(feature = "grpc")]
     pub fn with_grpc(mut self, addr: SocketAddr, handler: crate::grpc::GrpcHandler) -> Self {
         self.grpc_addr = Some(addr);
         self.grpc_handler = Some(handler);
         self
     }
+    #[cfg(feature = "wasm")]
     pub fn with_wasm_middleware(mut self, wasm_bytes: &[u8]) -> Result<Self> {
         let engine = crate::wasm::WasmEngine::new(wasm_bytes)?;
         self.wasm_middleware = Some(Arc::new(engine));
@@ -904,6 +910,7 @@ impl Server {
 
         let local_addr = self.addr.display();
 
+        #[cfg(feature = "grpc")]
         if let (Some(grpc_addr), Some(grpc_handler)) = (self.grpc_addr, self.grpc_handler.take()) {
             tracing::info!("Starting gRPC server on {}", grpc_addr);
             let grpc_service = crate::grpc::DynamicGrpcService::new(grpc_handler);
@@ -954,6 +961,7 @@ impl Server {
         let static_dir = self.static_dir;
         let metrics = self.metrics;
         let plugin_registry = Arc::new(self.plugin_registry);
+        #[cfg(feature = "wasm")]
         let wasm_middleware = self.wasm_middleware.clone();
         #[cfg(feature = "ws")]
         let ws_handler = self.ws_handler.clone();
@@ -969,6 +977,7 @@ impl Server {
                 self.static_mounts.clone(),
                 metrics,
                 self.shutdown,
+                #[cfg(feature = "wasm")]
                 wasm_middleware,
                 ws_handler,
             )
@@ -982,6 +991,7 @@ impl Server {
                 self.static_mounts.clone(),
                 metrics,
                 self.shutdown,
+                #[cfg(feature = "wasm")]
                 wasm_middleware,
             )
             .await;
@@ -1000,6 +1010,7 @@ impl Server {
             metrics,
             self.shutdown,
             self.shutdown_timeout,
+            #[cfg(feature = "wasm")]
             wasm_middleware,
             ws_handler,
         )
@@ -1013,6 +1024,7 @@ impl Server {
             metrics,
             self.shutdown,
             self.shutdown_timeout,
+            #[cfg(feature = "wasm")]
             wasm_middleware,
         )
         .await;
@@ -1038,6 +1050,7 @@ impl Server {
 
         let local_addr = self.addr.display();
 
+        #[cfg(feature = "grpc")]
         if let (Some(grpc_addr), Some(grpc_handler)) = (self.grpc_addr, self.grpc_handler.take()) {
             tracing::info!("Starting gRPC server on {}", grpc_addr);
             let grpc_service = crate::grpc::DynamicGrpcService::new(grpc_handler);
@@ -1088,6 +1101,7 @@ impl Server {
         let static_dir = self.static_dir;
         let metrics = self.metrics;
         let plugin_registry = Arc::new(self.plugin_registry);
+        #[cfg(feature = "wasm")]
         let wasm_middleware = self.wasm_middleware.clone();
         #[cfg(feature = "ws")]
         let ws_handler = self.ws_handler.clone();
@@ -1107,6 +1121,7 @@ impl Server {
             metrics,
             self.shutdown,
             self.shutdown_timeout,
+            #[cfg(feature = "wasm")]
             wasm_middleware,
             ws_handler,
         )
@@ -1120,6 +1135,7 @@ impl Server {
             metrics,
             self.shutdown,
             self.shutdown_timeout,
+            #[cfg(feature = "wasm")]
             wasm_middleware,
         )
         .await;
@@ -1166,6 +1182,7 @@ pub async fn serve(listener: TcpListener) -> Result<()> {
         metrics,
         None,
         std::time::Duration::from_secs(30),
+        #[cfg(feature = "wasm")]
         None,
         Some(default_ws_echo()),
     )
@@ -1179,6 +1196,7 @@ pub async fn serve(listener: TcpListener) -> Result<()> {
         metrics,
         None,
         std::time::Duration::from_secs(30),
+        #[cfg(feature = "wasm")]
         None,
     )
     .await;
@@ -1198,6 +1216,7 @@ fn make_handler(
     max_body_size: usize,
 ) -> crate::middleware::HandlerFn {
     // Build the global GraphQL schema
+    #[cfg(feature = "graphql")]
     let graphql_schema = Arc::new(crate::graphql::create_schema());
 
     Arc::new(move |req: Request<Incoming>| {
@@ -1205,6 +1224,7 @@ fn make_handler(
         let pool = pool.clone();
         let metrics = metrics.clone();
         let health_registry = health_registry.clone();
+        #[cfg(feature = "graphql")]
         let graphql_schema = graphql_schema.clone();
         let openapi_spec = openapi_spec.clone();
         Box::pin(async move {
@@ -1219,6 +1239,7 @@ fn make_handler(
                         &pool,
                         &metrics,
                         Some(&health_registry),
+                        #[cfg(feature = "graphql")]
                         Some(&graphql_schema),
                         openapi_spec.as_deref().map(|s| s.as_str()),
                         max_body_size,
@@ -1237,6 +1258,7 @@ fn make_handler(
                             &pool,
                             &metrics,
                             Some(&health_registry),
+                            #[cfg(feature = "graphql")]
                             Some(&graphql_schema),
                             openapi_spec.as_deref().map(|s| s.as_str()),
                             max_body_size,
@@ -1357,7 +1379,7 @@ async fn serve_connection(
     conn_semaphore: std::sync::Arc<tokio::sync::Semaphore>,
     metrics: Metrics,
     shutdown: Option<CancellationToken>,
-    wasm_middleware: Option<Arc<crate::wasm::WasmEngine>>,
+    #[cfg(feature = "wasm")] wasm_middleware: Option<Arc<crate::wasm::WasmEngine>>,
     #[cfg(feature = "ws")] ws_handler: Option<WsHandler>,
 ) {
     // Bound concurrent connections: a permit is held for the life of
@@ -1377,6 +1399,7 @@ async fn serve_connection(
         let static_dir = static_dir.clone();
         let static_mounts = static_mounts.clone();
         let metrics = spawn_metrics.clone();
+        #[cfg(feature = "wasm")]
         let wasm_middleware = wasm_middleware.clone();
         #[cfg(feature = "ws")]
         let ws_handler = ws_handler.clone();
@@ -1504,6 +1527,7 @@ async fn serve_connection(
             }
 
             // WASM middleware (synchronous setup + one await)
+            #[cfg(feature = "wasm")]
             if let Some(ref wasm) = wasm_middleware {
                 let wasm_span = tracing::debug_span!("wasm.middleware");
                 let mut hdrs = serde_json::Map::new();
@@ -1660,7 +1684,7 @@ async fn serve_http(
     metrics: Metrics,
     shutdown: Option<CancellationToken>,
     shutdown_timeout: std::time::Duration,
-    wasm_middleware: Option<Arc<crate::wasm::WasmEngine>>,
+    #[cfg(feature = "wasm")] wasm_middleware: Option<Arc<crate::wasm::WasmEngine>>,
     #[cfg(feature = "ws")] ws_handler: Option<WsHandler>,
 ) -> Result<()> {
     let mut connections = tokio::task::JoinSet::new();
@@ -1686,6 +1710,7 @@ async fn serve_http(
         let chain = chain.clone();
         let static_dir = static_dir.clone();
         let static_mounts = static_mounts.clone();
+        #[cfg(feature = "wasm")]
         let wasm_middleware = wasm_middleware.clone();
         let peer_addr = peer;
 
@@ -1703,6 +1728,7 @@ async fn serve_http(
             conn_semaphore,
             metrics.clone(),
             token_clone,
+            #[cfg(feature = "wasm")]
             wasm_middleware,
             #[cfg(feature = "ws")]
             ws_handler,
@@ -1772,7 +1798,7 @@ async fn serve_unix(
     metrics: Metrics,
     shutdown: Option<CancellationToken>,
     shutdown_timeout: std::time::Duration,
-    wasm_middleware: Option<Arc<crate::wasm::WasmEngine>>,
+    #[cfg(feature = "wasm")] wasm_middleware: Option<Arc<crate::wasm::WasmEngine>>,
     #[cfg(feature = "ws")] ws_handler: Option<WsHandler>,
 ) -> Result<()> {
     let mut connections = tokio::task::JoinSet::new();
@@ -1796,6 +1822,7 @@ async fn serve_unix(
         let chain = chain.clone();
         let static_dir = static_dir.clone();
         let static_mounts = static_mounts.clone();
+        #[cfg(feature = "wasm")]
         let wasm_middleware = wasm_middleware.clone();
 
         #[cfg(feature = "ws")]
@@ -1811,6 +1838,7 @@ async fn serve_unix(
             conn_semaphore,
             metrics.clone(),
             shutdown.clone(),
+            #[cfg(feature = "wasm")]
             wasm_middleware,
             #[cfg(feature = "ws")]
             ws_handler,
@@ -1845,7 +1873,7 @@ async fn execute_handler(
     pool: &BufferPool,
     metrics: &Metrics,
     health_registry: Option<&HealthRegistry>,
-    graphql_schema: Option<&crate::graphql::AppSchema>,
+    #[cfg(feature = "graphql")] graphql_schema: Option<&crate::graphql::AppSchema>,
     openapi_spec: Option<&str>,
     max_body_size: usize,
 ) -> Result<Response<ResponseBody>> {
@@ -1946,26 +1974,38 @@ async fn execute_handler(
                 .unwrap())
         }
         Handler::GraphQL => {
-            if let Some(schema) = graphql_schema {
-                crate::graphql::handle_graphql(schema, req).await.or_else(|e| {
+            #[cfg(feature = "graphql")]
+            {
+                if let Some(schema) = graphql_schema {
+                    crate::graphql::handle_graphql(schema, req).await.or_else(|e| {
+                        Ok(Response::builder()
+                            .status(StatusCode::INTERNAL_SERVER_ERROR)
+                            .body(crate::UnsyncBoxBody::new(
+                                http_body_util::Full::new(Bytes::from(format!(
+                                    "GraphQL Error: {}",
+                                    e
+                                )))
+                                .map_err(
+                                    |e: std::convert::Infallible| -> anyhow::Error { match e {} },
+                                ),
+                            ))
+                            .unwrap())
+                    })
+                } else {
                     Ok(Response::builder()
                         .status(StatusCode::INTERNAL_SERVER_ERROR)
                         .body(crate::UnsyncBoxBody::new(
-                            http_body_util::Full::new(Bytes::from(format!("GraphQL Error: {}", e)))
-                                .map_err(|e: std::convert::Infallible| -> anyhow::Error {
-                                    match e {}
-                                }),
+                            http_body_util::Full::new(Bytes::from(
+                                "GraphQL schema not initialized",
+                            ))
+                            .map_err(|e: std::convert::Infallible| -> anyhow::Error { match e {} }),
                         ))
                         .unwrap())
-                })
-            } else {
-                Ok(Response::builder()
-                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .body(crate::UnsyncBoxBody::new(
-                        http_body_util::Full::new(Bytes::from("GraphQL schema not initialized"))
-                            .map_err(|e: std::convert::Infallible| -> anyhow::Error { match e {} }),
-                    ))
-                    .unwrap())
+                }
+            }
+            #[cfg(not(feature = "graphql"))]
+            {
+                Ok(error_response(StatusCode::NOT_FOUND, "GraphQL is not enabled"))
             }
         }
         Handler::Custom(f) => {
@@ -2028,7 +2068,7 @@ async fn serve_with_tls(
     static_mounts: Vec<StaticMount>,
     metrics: Metrics,
     shutdown: Option<CancellationToken>,
-    wasm_middleware: Option<Arc<crate::wasm::WasmEngine>>,
+    #[cfg(feature = "wasm")] wasm_middleware: Option<Arc<crate::wasm::WasmEngine>>,
     #[cfg(feature = "ws")] ws_handler: Option<WsHandler>,
 ) -> Result<()> {
     use std::fs::File;
@@ -2079,6 +2119,7 @@ async fn serve_with_tls(
         let static_dir = static_dir.clone();
         let static_mounts = static_mounts.clone();
         let conn_metrics = metrics.clone();
+        #[cfg(feature = "wasm")]
         let wasm_middleware = wasm_middleware.clone();
 
         conn_metrics.connection_opened();
@@ -2102,6 +2143,7 @@ async fn serve_with_tls(
                         let static_dir = static_dir.clone();
                         let static_mounts = static_mounts.clone();
                         let metrics = spawn_metrics.clone();
+                        #[cfg(feature = "wasm")]
                         let wasm_middleware = wasm_middleware.clone();
                         #[cfg(feature = "ws")]
                         let ws_handler = ws_handler.clone();
@@ -2198,6 +2240,7 @@ async fn serve_with_tls(
                                 }
                             }
 
+                            #[cfg(feature = "wasm")]
                             if let Some(ref wasm) = wasm_middleware {
                                 let mut hdrs = serde_json::Map::new();
                                 for (k, v) in req.headers() {
@@ -2464,6 +2507,7 @@ mod tests {
                 Metrics::new(),
                 None,
                 std::time::Duration::from_secs(30),
+                #[cfg(feature = "wasm")]
                 None,
                 None,
             )
@@ -2477,6 +2521,7 @@ mod tests {
                 Metrics::new(),
                 None,
                 std::time::Duration::from_secs(30),
+                #[cfg(feature = "wasm")]
                 None,
             )
             .await;

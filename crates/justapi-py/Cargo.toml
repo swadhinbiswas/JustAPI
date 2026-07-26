@@ -14,7 +14,7 @@ orjson = ["justapi-core/orjson"]
 
 [dependencies]
 pyo3.workspace = true
-justapi-core = { workspace = true, features = ["db", "ws"] }
+justapi-core = { workspace = true, features = ["db", "ws", "wasm", "graphql", "grpc"] }
 tokio.workspace = true
 http-body-util.workspace = true
 http-body = "1"
