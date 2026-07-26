@@ -21,6 +21,12 @@ use justapi_inference::openai::{
 };
 use justapi_inference::{ControlPlane, Engine, RouteRequest, Router, SchedulerEngine};
 
+/// Safely convert a u16 status code to `StatusCode`, falling back to 500 if
+/// the code is invalid (defensive against upstream bugs returning non-HTTP codes).
+fn safe_status(st: u16) -> StatusCode {
+    StatusCode::from_u16(st).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
+}
+
 /// Build a handler for `POST /v1/chat/completions`.
 pub fn chat_completions_handler(engine: Arc<Engine>) -> HandlerFn {
     Arc::new(move |req| {
@@ -34,7 +40,7 @@ pub fn chat_completions_handler(engine: Arc<Engine>) -> HandlerFn {
                         "invalid_request_error",
                         400,
                     );
-                    return Ok(json_response(StatusCode::from_u16(st).unwrap(), &json));
+                    return Ok(json_response(safe_status(st), &json));
                 }
             };
             let req: ChatCompletionRequest = match serde_json::from_slice(&body) {
@@ -45,7 +51,7 @@ pub fn chat_completions_handler(engine: Arc<Engine>) -> HandlerFn {
                         "invalid_request_error",
                         400,
                     );
-                    return Ok(json_response(StatusCode::from_u16(st).unwrap(), &json));
+                    return Ok(json_response(safe_status(st), &json));
                 }
             };
             if req.stream {
@@ -88,7 +94,7 @@ pub fn completions_handler(engine: Arc<Engine>) -> HandlerFn {
                         "invalid_request_error",
                         400,
                     );
-                    return Ok(json_response(StatusCode::from_u16(st).unwrap(), &json));
+                    return Ok(json_response(safe_status(st), &json));
                 }
             };
             let req: CompletionRequest = match serde_json::from_slice(&body) {
@@ -99,7 +105,7 @@ pub fn completions_handler(engine: Arc<Engine>) -> HandlerFn {
                         "invalid_request_error",
                         400,
                     );
-                    return Ok(json_response(StatusCode::from_u16(st).unwrap(), &json));
+                    return Ok(json_response(safe_status(st), &json));
                 }
             };
             if req.stream {
@@ -142,7 +148,7 @@ pub fn embeddings_handler(engine: Arc<Engine>) -> HandlerFn {
                         "invalid_request_error",
                         400,
                     );
-                    return Ok(json_response(StatusCode::from_u16(st).unwrap(), &json));
+                    return Ok(json_response(safe_status(st), &json));
                 }
             };
             let req: EmbeddingRequest = match serde_json::from_slice(&body) {
@@ -153,7 +159,7 @@ pub fn embeddings_handler(engine: Arc<Engine>) -> HandlerFn {
                         "invalid_request_error",
                         400,
                     );
-                    return Ok(json_response(StatusCode::from_u16(st).unwrap(), &json));
+                    return Ok(json_response(safe_status(st), &json));
                 }
             };
             match justapi_inference::openai::embeddings(&engine, req) {
@@ -208,7 +214,7 @@ pub fn scheduled_chat_completions_handler(engine: Arc<SchedulerEngine>) -> Handl
                         "invalid_request_error",
                         400,
                     );
-                    return Ok(json_response(StatusCode::from_u16(st).unwrap(), &json));
+                    return Ok(json_response(safe_status(st), &json));
                 }
             };
             let req: ChatCompletionRequest = match serde_json::from_slice(&body) {
@@ -219,7 +225,7 @@ pub fn scheduled_chat_completions_handler(engine: Arc<SchedulerEngine>) -> Handl
                         "invalid_request_error",
                         400,
                     );
-                    return Ok(json_response(StatusCode::from_u16(st).unwrap(), &json));
+                    return Ok(json_response(safe_status(st), &json));
                 }
             };
             if req.stream {
@@ -263,7 +269,7 @@ pub fn scheduled_completions_handler(engine: Arc<SchedulerEngine>) -> HandlerFn 
                         "invalid_request_error",
                         400,
                     );
-                    return Ok(json_response(StatusCode::from_u16(st).unwrap(), &json));
+                    return Ok(json_response(safe_status(st), &json));
                 }
             };
             let req: CompletionRequest = match serde_json::from_slice(&body) {
@@ -274,7 +280,7 @@ pub fn scheduled_completions_handler(engine: Arc<SchedulerEngine>) -> HandlerFn 
                         "invalid_request_error",
                         400,
                     );
-                    return Ok(json_response(StatusCode::from_u16(st).unwrap(), &json));
+                    return Ok(json_response(safe_status(st), &json));
                 }
             };
             if req.stream {
@@ -339,7 +345,7 @@ fn admit(body: &[u8], cp: &ControlPlane, router: &Router) -> AdmitOutcome {
                 "invalid_request_error",
                 400,
             );
-            return AdmitOutcome::Reject(json_response(StatusCode::from_u16(st).unwrap(), &json));
+            return AdmitOutcome::Reject(json_response(safe_status(st), &json));
         }
     };
     match router.route(cp, &route_req) {
@@ -350,7 +356,7 @@ fn admit(body: &[u8], cp: &ControlPlane, router: &Router) -> AdmitOutcome {
                 "server_error",
                 503,
             );
-            AdmitOutcome::Reject(json_response(StatusCode::from_u16(st).unwrap(), &json))
+            AdmitOutcome::Reject(json_response(safe_status(st), &json))
         }
     }
 }
@@ -373,7 +379,7 @@ pub fn routed_chat_completions_handler(
                         "invalid_request_error",
                         400,
                     );
-                    return Ok(json_response(StatusCode::from_u16(st).unwrap(), &json));
+                    return Ok(json_response(safe_status(st), &json));
                 }
             };
             let decision = match admit(&body, &cp, &router) {
@@ -388,7 +394,7 @@ pub fn routed_chat_completions_handler(
                         "invalid_request_error",
                         400,
                     );
-                    return Ok(json_response(StatusCode::from_u16(st).unwrap(), &json));
+                    return Ok(json_response(safe_status(st), &json));
                 }
             };
             req.model = decision.resolved.model_name.clone();
@@ -436,7 +442,7 @@ pub fn routed_completions_handler(
                         "invalid_request_error",
                         400,
                     );
-                    return Ok(json_response(StatusCode::from_u16(st).unwrap(), &json));
+                    return Ok(json_response(safe_status(st), &json));
                 }
             };
             let decision = match admit(&body, &cp, &router) {
@@ -451,7 +457,7 @@ pub fn routed_completions_handler(
                         "invalid_request_error",
                         400,
                     );
-                    return Ok(json_response(StatusCode::from_u16(st).unwrap(), &json));
+                    return Ok(json_response(safe_status(st), &json));
                 }
             };
             req.model = decision.resolved.model_name.clone();
@@ -499,7 +505,7 @@ pub fn routed_embeddings_handler(
                         "invalid_request_error",
                         400,
                     );
-                    return Ok(json_response(StatusCode::from_u16(st).unwrap(), &json));
+                    return Ok(json_response(safe_status(st), &json));
                 }
             };
             let decision = match admit(&body, &cp, &router) {
@@ -514,7 +520,7 @@ pub fn routed_embeddings_handler(
                         "invalid_request_error",
                         400,
                     );
-                    return Ok(json_response(StatusCode::from_u16(st).unwrap(), &json));
+                    return Ok(json_response(safe_status(st), &json));
                 }
             };
             req.model = decision.resolved.model_name.clone();
@@ -793,5 +799,24 @@ mod tests {
             "scheduler metrics should be exposed via /metrics: {rendered}"
         );
         let _ = server;
+    }
+
+    // --- Crash-prevention tests (Phase 53.3) ---
+
+    #[test]
+    fn test_safe_status_valid_codes() {
+        assert_eq!(safe_status(200), StatusCode::OK);
+        assert_eq!(safe_status(404), StatusCode::NOT_FOUND);
+        assert_eq!(safe_status(500), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(safe_status(422), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(safe_status(429), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[test]
+    fn test_safe_status_invalid_code_falls_back_to_500() {
+        assert_eq!(safe_status(0), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(safe_status(999), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(safe_status(70000), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(safe_status(u16::MAX), StatusCode::INTERNAL_SERVER_ERROR);
     }
 }

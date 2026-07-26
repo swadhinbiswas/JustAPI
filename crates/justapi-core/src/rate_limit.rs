@@ -75,7 +75,9 @@ impl RateLimiter {
                 // Burst capacity in microseconds
                 let tau = t * capacity;
 
-                let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_micros() as u64;
+                let now =
+                    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_micros()
+                        as u64;
 
                 let result: Vec<u64> = script
                     .key(key)

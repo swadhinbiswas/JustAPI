@@ -30,6 +30,7 @@ tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
 tracing-appender.workspace = true
 anyhow.workspace = true
+thiserror.workspace = true
 matchit.workspace = true
 async-trait.workspace = true
 jsonwebtoken.workspace = true

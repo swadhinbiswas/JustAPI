@@ -693,10 +693,10 @@ impl<B: Send + 'static> Middleware<B> for RateLimiter {
                 let wait = negative.wait_time_from(now);
                 let retry_after_secs = wait.as_secs().max(1);
                 let mut resp = json_error(StatusCode::TOO_MANY_REQUESTS, "rate limit exceeded");
-                resp.headers_mut()
-                    .insert("retry-after", retry_after_secs.to_string().parse().unwrap());
-                resp.headers_mut()
-                    .insert("x-ratelimit-reset", retry_after_secs.to_string().parse().unwrap());
+                let retry_val = HeaderValue::from_str(&retry_after_secs.to_string())
+                    .unwrap_or_else(|_| HeaderValue::from_static("1"));
+                resp.headers_mut().insert("retry-after", retry_val.clone());
+                resp.headers_mut().insert("x-ratelimit-reset", retry_val);
                 Ok(resp)
             }
         }
@@ -718,8 +718,10 @@ pub struct IpRateLimiter {
 impl IpRateLimiter {
     pub fn new(duration: std::time::Duration, max_burst: u32) -> Self {
         let quota = governor::Quota::with_period(duration)
-            .unwrap()
-            .allow_burst(NonZeroU32::new(max_burst).unwrap());
+            .expect("valid rate-limit duration for IpRateLimiter")
+            .allow_burst(
+                NonZeroU32::new(max_burst).expect("max_burst must be > 0 for IpRateLimiter"),
+            );
         let limiter = std::sync::Arc::new(governor::RateLimiter::keyed(quota));
 
         let limiter_clone = limiter.clone();
@@ -776,7 +778,7 @@ fn json_error(status: StatusCode, msg: &str) -> Response<ResponseBody> {
             http_body_util::Full::new(Bytes::from(body))
                 .map_err(|e: std::convert::Infallible| -> anyhow::Error { match e {} }),
         ))
-        .unwrap()
+        .expect("Response::builder with valid inputs should never fail")
 }
 
 // ---------------------------------------------------------------------------

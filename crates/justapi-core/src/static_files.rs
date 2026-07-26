@@ -107,10 +107,17 @@ impl StaticDir {
             );
             let mut resp = Response::new(body);
             *resp.status_mut() = StatusCode::OK;
-            resp.headers_mut().insert("content-type", content_type.parse().unwrap());
-            resp.headers_mut().insert("content-length", total_len.to_string().parse().unwrap());
-            resp.headers_mut().insert("etag", etag.parse().unwrap());
-            resp.headers_mut().insert("cache-control", "public, max-age=3600".parse().unwrap());
+            resp.headers_mut()
+                .insert("content-type", content_type.parse().expect("valid content-type"));
+            resp.headers_mut().insert(
+                "content-length",
+                total_len.to_string().parse().expect("valid content-length"),
+            );
+            resp.headers_mut().insert("etag", etag.parse().expect("valid etag"));
+            resp.headers_mut().insert(
+                "cache-control",
+                "public, max-age=3600".parse().expect("valid cache-control"),
+            );
             return Ok(resp);
         }
 
@@ -122,10 +129,13 @@ impl StaticDir {
 
         let mut resp = Response::new(body);
         *resp.status_mut() = StatusCode::OK;
-        resp.headers_mut().insert("content-type", content_type.parse().unwrap());
-        resp.headers_mut().insert("content-length", total_len.to_string().parse().unwrap());
-        resp.headers_mut().insert("etag", etag.parse().unwrap());
-        resp.headers_mut().insert("cache-control", "public, max-age=3600".parse().unwrap());
+        resp.headers_mut()
+            .insert("content-type", content_type.parse().expect("valid content-type"));
+        resp.headers_mut()
+            .insert("content-length", total_len.to_string().parse().expect("valid content-length"));
+        resp.headers_mut().insert("etag", etag.parse().expect("valid etag"));
+        resp.headers_mut()
+            .insert("cache-control", "public, max-age=3600".parse().expect("valid cache-control"));
 
         Ok(resp)
     }

@@ -64,7 +64,12 @@ static FILE_GUARD: OnceLock<Mutex<Option<WorkerGuard>>> = OnceLock::new();
 
 fn set_guard(guard: WorkerGuard) {
     let lock = FILE_GUARD.get_or_init(|| Mutex::new(None));
-    *lock.lock().unwrap() = Some(guard);
+    match lock.lock() {
+        Ok(mut g) => *g = Some(guard),
+        Err(poisoned) => {
+            *poisoned.into_inner() = Some(guard);
+        }
+    }
 }
 
 #[cfg(feature = "opentelemetry")]
@@ -187,7 +192,12 @@ use opentelemetry_otlp::WithExportConfig;
 #[cfg(feature = "opentelemetry")]
 fn set_tracer_guard(provider: opentelemetry_sdk::trace::TracerProvider) {
     let lock = TRACER_GUARD.get_or_init(|| Mutex::new(None));
-    *lock.lock().unwrap() = Some(provider);
+    match lock.lock() {
+        Ok(mut g) => *g = Some(provider),
+        Err(poisoned) => {
+            *poisoned.into_inner() = Some(provider);
+        }
+    }
 }
 
 /// Initialize tracing with text format and env-filter (backward compatible).

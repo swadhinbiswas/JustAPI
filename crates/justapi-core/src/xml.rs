@@ -72,7 +72,7 @@ pub fn xml_response(status: StatusCode, body: &str) -> Response<ResponseBody> {
             Full::new(Bytes::from(body.to_string()))
                 .map_err(|e: std::convert::Infallible| -> anyhow::Error { match e {} }),
         ))
-        .unwrap()
+        .expect("Response::builder with valid inputs should never fail")
 }
 
 /// Serialize a `Serialize` value to an XML string with the given root element.
