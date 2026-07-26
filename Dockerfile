@@ -48,4 +48,8 @@ EXPOSE 8080
 RUN useradd -m -u 1000 -s /bin/bash justapi
 USER justapi
 
+# Health check — verifies the server is responding on /live
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/live')"]
+
 ENTRYPOINT ["python", "demo_app.py"]
