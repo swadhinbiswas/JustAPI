@@ -768,11 +768,149 @@ impl<B: Send + 'static> Middleware<B> for IpRateLimiter {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Per-route rate limiting
+// ---------------------------------------------------------------------------
+
+/// A single rate-limit rule matching a path prefix.
+struct RateLimitRule {
+    /// Path prefix to match (e.g. "/api/search"). Empty string matches all paths.
+    prefix: String,
+    /// Optional method filter. `None` means all methods.
+    method: Option<Method>,
+    limiter: governor::RateLimiter<
+        governor::state::direct::NotKeyed,
+        governor::state::InMemoryState,
+        governor::clock::DefaultClock,
+    >,
+}
+
+/// Per-route rate limiter. Applies different rate limits to different path
+/// prefixes and optionally HTTP methods.
+///
+/// # Example
+///
+/// ```ignore
+/// use std::time::Duration;
+///
+/// let rl = PerRouteRateLimiter::new()
+///     .add_rule("/api/search", None, Duration::from_secs(1), 100)
+///     .add_rule("/api/export", Some(Method::POST), Duration::from_secs(1), 10);
+/// ```
+pub struct PerRouteRateLimiter {
+    rules: Vec<RateLimitRule>,
+    /// Fallback limiter applied when no rule matches. `None` means no limit.
+    fallback: Option<RateLimiter>,
+}
+
+impl PerRouteRateLimiter {
+    pub fn new() -> Self {
+        Self { rules: Vec::new(), fallback: None }
+    }
+
+    /// Add a rate-limit rule for a path prefix.
+    ///
+    /// - `prefix`: Match paths starting with this string. Use `"/"` for all paths.
+    /// - `method`: Optional HTTP method filter. `None` matches all methods.
+    /// - `duration`: Time window for the rate limit (e.g. 1 second).
+    /// - `max_burst`: Maximum burst size within the time window.
+    pub fn add_rule(
+        mut self,
+        prefix: &str,
+        method: Option<Method>,
+        duration: Duration,
+        max_burst: u32,
+    ) -> Self {
+        let burst = NonZeroU32::new(max_burst).unwrap_or(NonZeroU32::MIN);
+        let quota = governor::Quota::with_period(duration)
+            .expect("valid rate-limit duration for PerRouteRateLimiter")
+            .allow_burst(burst);
+        self.rules.push(RateLimitRule {
+            prefix: prefix.to_string(),
+            method,
+            limiter: governor::RateLimiter::direct(quota),
+        });
+        self
+    }
+
+    /// Set a fallback rate limiter for paths that don't match any rule.
+    pub fn with_fallback(mut self, limiter: RateLimiter) -> Self {
+        self.fallback = Some(limiter);
+        self
+    }
+
+    fn find_rule(&self, path: &str, method: &Method) -> Option<&RateLimitRule> {
+        self.rules
+            .iter()
+            .find(|r| path.starts_with(&r.prefix) && r.method.as_ref().is_none_or(|m| m == method))
+    }
+}
+
+impl Default for PerRouteRateLimiter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl<B: Send + 'static> Middleware<B> for PerRouteRateLimiter {
+    async fn handle(&self, req: Request<B>, next: Next<'_, B>) -> Result<Response<ResponseBody>> {
+        let path = req.uri().path().to_string();
+        let method = req.method().clone();
+
+        if let Some(rule) = self.find_rule(&path, &method) {
+            match rule.limiter.check() {
+                Ok(()) => next.run(req).await,
+                Err(negative) => {
+                    let clock = governor::clock::DefaultClock::default();
+                    let now = clock.now();
+                    let wait = negative.wait_time_from(now);
+                    let retry_after_secs = wait.as_secs().max(1);
+                    let mut resp = json_error(StatusCode::TOO_MANY_REQUESTS, "rate limit exceeded");
+                    let retry_val = HeaderValue::from_str(&retry_after_secs.to_string())
+                        .unwrap_or_else(|_| HeaderValue::from_static("1"));
+                    resp.headers_mut().insert("retry-after", retry_val.clone());
+                    resp.headers_mut().insert("x-ratelimit-reset", retry_val);
+                    Ok(resp)
+                }
+            }
+        } else if let Some(ref fallback) = self.fallback {
+            // Delegate to the fallback global limiter
+            fallback.handle(req, next).await
+        } else {
+            // No rule matches and no fallback — allow through
+            next.run(req).await
+        }
+    }
+}
+
 fn json_error(status: StatusCode, msg: &str) -> Response<ResponseBody> {
-    let body = format!(r#"{{"error":"{}"}}"#, msg);
+    let status_code: u16 = status.into();
+    let title = match status_code {
+        400 => "Bad Request",
+        401 => "Unauthorized",
+        403 => "Forbidden",
+        404 => "Not Found",
+        405 => "Method Not Allowed",
+        413 => "Payload Too Large",
+        422 => "Unprocessable Entity",
+        429 => "Too Many Requests",
+        500 => "Internal Server Error",
+        502 => "Bad Gateway",
+        503 => "Service Unavailable",
+        504 => "Gateway Timeout",
+        _ => "Error",
+    };
+    let body = serde_json::json!({
+        "type": format!("https://justapi.dev/errors/{}", title.to_lowercase().replace(' ', "-")),
+        "title": title,
+        "status": status_code,
+        "detail": msg,
+    })
+    .to_string();
     Response::builder()
         .status(status)
-        .header("content-type", "application/json")
+        .header("content-type", "application/problem+json")
         .header("content-length", body.len().to_string())
         .body(UnsyncBoxBody::new(
             http_body_util::Full::new(Bytes::from(body))
@@ -1773,5 +1911,146 @@ mod tests {
         );
         let resp = chain.run(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    // --- Per-route rate limiter tests (Phase 55.1) ---
+
+    #[tokio::test]
+    async fn per_route_rate_limit_allows_matching_prefix() {
+        let rl = PerRouteRateLimiter::new().add_rule(
+            "/api/",
+            None,
+            std::time::Duration::from_secs(1),
+            10,
+        );
+        let handler: HandlerFn<TestBody> =
+            Arc::new(|_| Box::pin(async { Ok(json_response(StatusCode::OK, r#"{"ok":true}"#)) }));
+        let mut chain = MiddlewareChain::new(handler);
+        chain.add(rl);
+
+        let req = test_req(Method::GET, "/api/search");
+        let resp = chain.run(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn per_route_rate_limit_rejects_when_exceeded() {
+        let rl = PerRouteRateLimiter::new().add_rule(
+            "/api/",
+            None,
+            std::time::Duration::from_secs(1),
+            1,
+        );
+        let handler: HandlerFn<TestBody> =
+            Arc::new(|_| Box::pin(async { Ok(json_response(StatusCode::OK, r#"{"ok":true}"#)) }));
+        let mut chain = MiddlewareChain::new(handler);
+        chain.add(rl);
+
+        // First request should pass
+        let req = test_req(Method::GET, "/api/search");
+        let resp = chain.run(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // Second request should be rate limited
+        let req = test_req(Method::GET, "/api/search");
+        let resp = chain.run(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn per_route_rate_limit_different_limits_per_prefix() {
+        let rl = PerRouteRateLimiter::new()
+            .add_rule("/api/fast", None, std::time::Duration::from_secs(1), 100)
+            .add_rule("/api/slow", None, std::time::Duration::from_secs(1), 1);
+        let handler: HandlerFn<TestBody> =
+            Arc::new(|_| Box::pin(async { Ok(json_response(StatusCode::OK, r#"{"ok":true}"#)) }));
+        let mut chain = MiddlewareChain::new(handler);
+        chain.add(rl);
+
+        // /api/fast should allow many requests
+        for _ in 0..5 {
+            let req = test_req(Method::GET, "/api/fast");
+            let resp = chain.run(req).await.unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
+        }
+
+        // /api/slow should limit after 1
+        let req = test_req(Method::GET, "/api/slow");
+        let resp = chain.run(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let req = test_req(Method::GET, "/api/slow");
+        let resp = chain.run(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn per_route_rate_limit_method_filter() {
+        let rl = PerRouteRateLimiter::new().add_rule(
+            "/api/",
+            Some(Method::POST),
+            std::time::Duration::from_secs(1),
+            1,
+        );
+        let handler: HandlerFn<TestBody> =
+            Arc::new(|_| Box::pin(async { Ok(json_response(StatusCode::OK, r#"{"ok":true}"#)) }));
+        let mut chain = MiddlewareChain::new(handler);
+        chain.add(rl);
+
+        // GET should pass (no rule matches)
+        let req = test_req(Method::GET, "/api/data");
+        let resp = chain.run(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // First POST should pass
+        let req = test_req(Method::POST, "/api/data");
+        let resp = chain.run(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // Second POST should be limited
+        let req = test_req(Method::POST, "/api/data");
+        let resp = chain.run(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn per_route_rate_limit_no_fallback_allows_unmatched() {
+        let rl = PerRouteRateLimiter::new().add_rule(
+            "/api/",
+            None,
+            std::time::Duration::from_secs(1),
+            1,
+        );
+        let handler: HandlerFn<TestBody> =
+            Arc::new(|_| Box::pin(async { Ok(json_response(StatusCode::OK, r#"{"ok":true}"#)) }));
+        let mut chain = MiddlewareChain::new(handler);
+        chain.add(rl);
+
+        // Unmatched path should always pass (no fallback, no rule)
+        for _ in 0..10 {
+            let req = test_req(Method::GET, "/other/path");
+            let resp = chain.run(req).await.unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
+        }
+    }
+
+    #[tokio::test]
+    async fn per_route_rate_limit_fallback_applies_to_unmatched() {
+        let rl = PerRouteRateLimiter::new()
+            .add_rule("/api/", None, std::time::Duration::from_secs(1), 1)
+            .with_fallback(RateLimiter::new(std::time::Duration::from_secs(1), 1));
+        let handler: HandlerFn<TestBody> =
+            Arc::new(|_| Box::pin(async { Ok(json_response(StatusCode::OK, r#"{"ok":true}"#)) }));
+        let mut chain = MiddlewareChain::new(handler);
+        chain.add(rl);
+
+        // First request to unmatched path passes (uses fallback)
+        let req = test_req(Method::GET, "/other/path");
+        let resp = chain.run(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // Second request to unmatched path is limited by fallback
+        let req = test_req(Method::GET, "/other/path");
+        let resp = chain.run(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
     }
 }
