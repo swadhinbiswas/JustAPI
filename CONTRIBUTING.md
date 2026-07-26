@@ -78,6 +78,38 @@ Before submitting a Pull Request, verify that all of the following steps pass:
 
 ---
 
+## Versioning & Deprecation Policy
+
+### Semantic Versioning
+
+JustAPI follows [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html):
+
+- **Major (X.0.0):** Breaking changes to public API. Requires migration guide.
+- **Minor (0.X.0):** New features, backward-compatible. May deprecate existing APIs.
+- **Patch (0.0.X):** Bug fixes, backward-compatible. No API changes.
+
+**Current status:** Pre-1.0. Minor versions may contain breaking changes (documented in CHANGELOG.md with migration notes).
+
+### Deprecation Process
+
+When a public API is deprecated:
+
+1. Add `#[deprecated(since = "X.Y.Z", note = "use new_api() instead")]` (Rust) or `warnings.warn(...)` (Python)
+2. Document the deprecation in CHANGELOG.md under `### Deprecated`
+3. Provide a migration example in the deprecation note
+4. Remove the deprecated API in the next **minor** version (not patch)
+
+### Breaking Change Requirements
+
+Before merging a breaking change:
+
+- [ ] CHANGELOG.md updated with `### Changed` or `### Removed` entry
+- [ ] Migration guide written (new section in docs or inline in CHANGELOG)
+- [ ] Deprecation period of at least one minor version (unless critical security fix)
+- [ ] All downstream examples and tests updated
+
+---
+
 ## Resuming Work after Context Reset
 If you are an agent resuming work after a context reset:
 1.  Read [PLAN.md](PLAN.md) to locate the current phase and its status.

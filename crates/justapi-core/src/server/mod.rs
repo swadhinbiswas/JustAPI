@@ -1263,6 +1263,22 @@ const HEADER_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 /// `Server::with_max_body_size`.
 pub(crate) const DEFAULT_MAX_BODY_SIZE: usize = 50 * 1024 * 1024;
 
+/// Maximum allowed URL path length in bytes. Paths longer than this are
+/// rejected with 414 URI Too Long before any routing or processing.
+const MAX_PATH_LENGTH: usize = 8192;
+
+/// Maximum allowed single header value length in bytes. Headers exceeding
+/// this are rejected with 431 Request Header Fields Too Large.
+const MAX_HEADER_VALUE_LENGTH: usize = 8192;
+
+/// Maximum allowed number of request headers. Requests with more headers
+/// are rejected with 431 Request Header Fields Too Large.
+const MAX_HEADER_COUNT: usize = 100;
+
+/// Maximum allowed query string length in bytes. Query strings longer than
+/// this are rejected with 414 URI Too Long.
+const MAX_QUERY_LENGTH: usize = 2048;
+
 /// Max wall-clock time a single request handler may run before we respond 504
 /// and abort it. Guards against stuck/slow handlers and resource exhaustion.
 /// Configurable via `JUSTAPI_REQUEST_TIMEOUT_SECS`.
@@ -1368,6 +1384,43 @@ async fn serve_connection(
             let path = req.uri().path().to_string();
             let method = req.method().clone();
             let start = std::time::Instant::now();
+
+            // --- Input validation (security hardening, Phase 58) ---
+            // Reject oversized paths before routing to prevent DoS via
+            // extremely long URI strings that blow up memory in the router
+            // or middleware chain.
+            if path.len() > MAX_PATH_LENGTH {
+                return Ok(error_response(
+                    StatusCode::URI_TOO_LONG,
+                    "request URI exceeds maximum length",
+                ));
+            }
+            if let Some(query) = req.uri().query() {
+                if query.len() > MAX_QUERY_LENGTH {
+                    return Ok(error_response(
+                        StatusCode::URI_TOO_LONG,
+                        "query string exceeds maximum length",
+                    ));
+                }
+            }
+            // Reject requests with too many headers or oversized header values.
+            // Excessively large headers waste memory and slow down parsing.
+            let header_count = req.headers().len();
+            if header_count > MAX_HEADER_COUNT {
+                return Ok(error_response(
+                    StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE,
+                    "too many request headers",
+                ));
+            }
+            for (name, value) in req.headers().iter() {
+                if value.len() > MAX_HEADER_VALUE_LENGTH {
+                    return Ok(error_response(
+                        StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE,
+                        &format!("header '{}' exceeds maximum value length", name.as_str()),
+                    ));
+                }
+            }
+
             req.extensions_mut().insert(peer_addr);
 
             let span = tracing::info_span!(
@@ -2055,6 +2108,38 @@ async fn serve_with_tls(
                         async move {
                             let path = req.uri().path().to_string();
                             let start = std::time::Instant::now();
+
+                            // --- Input validation (security hardening, Phase 58) ---
+                            if path.len() > MAX_PATH_LENGTH {
+                                return Ok(error_response(
+                                    StatusCode::URI_TOO_LONG,
+                                    "request URI exceeds maximum length",
+                                ));
+                            }
+                            if let Some(query) = req.uri().query() {
+                                if query.len() > MAX_QUERY_LENGTH {
+                                    return Ok(error_response(
+                                        StatusCode::URI_TOO_LONG,
+                                        "query string exceeds maximum length",
+                                    ));
+                                }
+                            }
+                            let header_count = req.headers().len();
+                            if header_count > MAX_HEADER_COUNT {
+                                return Ok(error_response(
+                                    StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE,
+                                    "too many request headers",
+                                ));
+                            }
+                            for (name, value) in req.headers().iter() {
+                                if value.len() > MAX_HEADER_VALUE_LENGTH {
+                                    return Ok(error_response(
+                                        StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE,
+                                        &format!("header '{}' exceeds maximum value length", name.as_str()),
+                                    ));
+                                }
+                            }
+
                             req.extensions_mut().insert(peer_addr);
 
                             metrics.record_request();
