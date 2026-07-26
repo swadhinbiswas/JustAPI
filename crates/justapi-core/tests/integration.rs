@@ -525,3 +525,23 @@ async fn test_crud_all_handler() {
     let rows: Value = serde_json::from_slice(&body).unwrap();
     assert!(rows.as_array().unwrap().is_empty());
 }
+
+// --- Phase 58: Input validation security tests ---
+
+#[tokio::test]
+async fn test_oversized_path_returns_414() {
+    let addr = start_server().await;
+    // Path longer than MAX_PATH_LENGTH (8192)
+    let long_path = format!("/{}", "a".repeat(9000));
+    let (status, body) = send_request(addr, Method::GET, &long_path, None).await;
+    assert_eq!(status, StatusCode::URI_TOO_LONG);
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["status"], 414);
+}
+
+#[tokio::test]
+async fn test_normal_path_still_works() {
+    let addr = start_server().await;
+    let (status, _) = send_request(addr, Method::GET, "/hello", None).await;
+    assert_eq!(status, StatusCode::OK);
+}
