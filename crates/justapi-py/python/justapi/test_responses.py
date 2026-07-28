@@ -82,9 +82,11 @@ def test_status_key_in_body_not_dropped():
     client = JustAPITestClient(app)
     resp = client.get("/with_status")
     assert resp["status"] == 200
-    # orjson produces compact JSON (no spaces); the key point is the "status"
-    # field is preserved in the body, not dropped as a legacy envelope.
-    assert resp["body"] == b'{"status":"ok","products":5}'
+    # The key point is the "status" field is preserved in the body, not dropped
+    # as a legacy envelope. Accept both compact and spaced JSON.
+    import json
+    body = json.loads(resp["body"])
+    assert body == {"status": "ok", "products": 5}
 
 
 def test_explicit_envelope_still_works():
