@@ -31,15 +31,15 @@ anyhow.workspace = true
 tokio-util.workspace = true
 tonic = "0.14.6"
 tokio-stream.workspace = true
-tokio-tungstenite = "0.24"
+tokio-tungstenite = "0.30"
 pyo3-async-runtimes = { version = "0.29.0", features = ["tokio", "tokio-runtime"] }
-jsonschema = { version = "0.46", default-features = false }
+jsonschema = { version = "0.49", default-features = false }
 uuid = { version = "1", features = ["v4"] }
 # Native cron/scheduler (ADR-060): cron expression parsing + next-fire math.
 # Chosen over hand-rolling because cron has nasty edge cases (DST, leap years,
 # L/W/# specifiers) and is untrusted-spec-parsing-adjacent; a maintained crate
 # is the responsible Rust-first choice. See DECISIONS.md ADR-060.
-cron = "0.15"
+cron = "0.17"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 jsonwebtoken.workspace = true
 
