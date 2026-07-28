@@ -28,7 +28,7 @@ jobs:
           components: rustfmt, clippy
 
       - name: Install Python (for PyO3)
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -186,7 +186,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install Python (for PyO3)
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -311,7 +311,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install Python (for PyO3)
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -422,7 +422,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install Python (for PyO3)
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
