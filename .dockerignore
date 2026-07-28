@@ -1,86 +1,73 @@
-# ============================================================
-# JustAPI — .dockerignore
-# Keep the Docker build context minimal and fast.
-# ============================================================
-
-# ── Build artifacts (huge, never needed in the image) ────────
+# Build artifacts
 target/
 **/target/
-fuzz/target/
 
-# ── Virtual environments ─────────────────────────────────────
-.venv/
-venv/
-**/.venv/
-
-# ── Python caches ────────────────────────────────────────────
+# Python
 __pycache__/
-**/__pycache__/
-*.py[cod]
+*.pyc
 *.pyo
 .pytest_cache/
-**/.pytest_cache/
 .mypy_cache/
-**/.mypy_cache/
-.ruff_cache/
+*.egg-info/
+dist/
+build/
 
-# ── Fuzzing corpus / artifacts ───────────────────────────────
-fuzz/corpus/
-fuzz/artifacts/
+# Virtual environments
+.venv/
+.venv*/
+venv/
 
-# ── Git & CI ─────────────────────────────────────────────────
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Git
 .git/
-.github/
+.gitignore
 
-# ── Documentation & project meta ────────────────────────────
+# Documentation (not needed in Docker build)
 docs/
-site/
-skills/
+docs_site/
 *.md
 !README.md
 
-# ── Editor / OS cruft ───────────────────────────────────────
-.idea/
-.vscode/
-*.swp
-*.swo
-*~
-.DS_Store
-Thumbs.db
-
-# ── Environment / secrets (never bake into images) ──────────
-.env
-*.pem
-*.key
-*.crt
-
-# ── Scratch / temp files at root ────────────────────────────
-part1.rs
-part2.rs
-part3.rs
-header.rs
-test_gov.rs
-test_upg.rs
-split.py
-split_native.py
-split_server.py
-restore.py
-generate_commits.sh
-protection.json
-
-# ── Benchmark data ──────────────────────────────────────────
-benchmarks/results/
-benchmarks/*.json
-benchmarks/*.csv
-
-# ── Helm charts (not needed in app image) ───────────────────
-helm/
-
-# ── Deploy manifests (not needed in app image) ──────────────
-deploy/
-
-# ── Website (separate build) ────────────────────────────────
-website/
-
-# ── Test project scaffold ───────────────────────────────────
+# Tests (not needed in production image)
+tests/
+fuzz/
+benchmarks/
+demo_shop/
 test_project/
+
+# Docker
+docker-compose.yml
+docker-compose*.yml
+Dockerfile
+.dockerignore
+
+# CI/CD
+.github/
+
+# Other
+LICENSE
+CHANGELOG.md
+CONTRIBUTING.md
+SECURITY.md
+PRODUCTION.md
+PRODUCTION_PLAN.md
+AGENTS.md
+PLAN.md
+DECISIONS.md
+BENCHMARKS.md
+PROMPT.md
+ROADMAP.md
+REVISION_LOG.md
+skills/
+website/
+home/
+.well-known/
+protection.json
+restore.py
+split*.py
+generate_commits.sh

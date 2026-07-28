@@ -166,6 +166,10 @@ impl<B: Send + Sync + 'static> Middleware<B> for CircuitBreakerMiddleware {
     }
 }
 
+/// Maximum number of per-route circuit breakers to prevent memory exhaustion
+/// via path enumeration attacks.
+const MAX_PER_ROUTE_BREAKERS: usize = 1024;
+
 pub struct PerRouteCircuitBreakerMiddleware {
     config: CircuitBreakerConfig,
     breakers: std::sync::RwLock<std::collections::HashMap<String, CircuitBreaker>>,
@@ -173,20 +177,32 @@ pub struct PerRouteCircuitBreakerMiddleware {
 
 impl PerRouteCircuitBreakerMiddleware {
     pub fn new(config: CircuitBreakerConfig) -> Self {
-        Self { config, breakers: std::sync::RwLock::new(std::collections::HashMap::new()) }
+        Self {
+            config,
+            breakers: std::sync::RwLock::new(std::collections::HashMap::with_capacity(
+                MAX_PER_ROUTE_BREAKERS,
+            )),
+        }
     }
 
     fn get_breaker(&self, path: &str) -> CircuitBreaker {
         {
-            let read = self.breakers.read().unwrap();
+            let read = self.breakers.read().unwrap_or_else(|e| e.into_inner());
             if let Some(cb) = read.get(path) {
                 return cb.clone();
             }
         }
-        let mut write = self.breakers.write().unwrap();
+        let mut write = self.breakers.write().unwrap_or_else(|e| e.into_inner());
         // check again to prevent race conditions
         if let Some(cb) = write.get(path) {
             return cb.clone();
+        }
+        // Enforce capacity limit to prevent memory exhaustion via path enumeration
+        if write.len() >= MAX_PER_ROUTE_BREAKERS {
+            // Evict the oldest entry (first key) to make room
+            if let Some(oldest_key) = write.keys().next().cloned() {
+                write.remove(&oldest_key);
+            }
         }
         let cb = CircuitBreaker::new(self.config.clone());
         write.insert(path.to_string(), cb.clone());
@@ -519,12 +535,15 @@ impl<B: Send + 'static> Middleware<B> for ChaosMiddleware {
             }
         }
 
-        if self.config.latency_p > 0.0 {
+        if self.config.latency_p > 0.0 && self.config.latency_max_ms >= self.config.latency_min_ms {
             let roll: f64 = rand::random();
             if roll < self.config.latency_p {
-                let delay_ms = self.config.latency_min_ms
-                    + (rand::random::<u64>()
-                        % (self.config.latency_max_ms - self.config.latency_min_ms + 1));
+                let range = self.config.latency_max_ms - self.config.latency_min_ms;
+                let delay_ms = if range > 0 {
+                    self.config.latency_min_ms + (rand::random::<u64>() % (range + 1))
+                } else {
+                    self.config.latency_min_ms
+                };
                 tokio::time::sleep(Duration::from_millis(delay_ms)).await;
             }
         }

@@ -11,6 +11,7 @@ crate-type = ["cdylib", "lib"]
 default = ["mail"]
 mail = ["justapi-core/mail"]
 orjson = ["justapi-core/orjson"]
+redis-rate-limit = ["justapi-core/redis-rate-limit"]
 
 [dependencies]
 pyo3.workspace = true

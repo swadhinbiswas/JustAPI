@@ -34,6 +34,10 @@ impl RequestArena {
     }
 
     /// Allocate a string slice from the arena.
+    ///
+    /// **Known limitation (P3-4):** This returns a `&str` borrowed from the arena,
+    /// but `SharedArena::alloc_str` returns an owned `String` because it crosses
+    /// a `Mutex` boundary. This loses the zero-copy benefit at the FFI boundary.
     pub fn alloc_str(&mut self, s: &str) -> Option<&str> {
         self.alloc(s.as_bytes()).map(|b| unsafe {
             // SAFETY: `b` is a byte-slice copy of `s.as_bytes()` which is
@@ -100,13 +104,23 @@ impl Default for SharedArena {
 /// allocating new ones for every response.
 pub struct BufferPool {
     buckets: [Mutex<Vec<Vec<u8>>>; 4],
+    max_per_bucket: usize,
 }
 
 const BUCKET_SIZES: [usize; 4] = [1024, 4096, 16384, 65536];
+const DEFAULT_MAX_PER_BUCKET: usize = 128;
 
 impl BufferPool {
     pub fn new() -> Self {
-        Self { buckets: std::array::from_fn(|_| Mutex::new(Vec::new())) }
+        Self {
+            buckets: std::array::from_fn(|_| Mutex::new(Vec::new())),
+            max_per_bucket: DEFAULT_MAX_PER_BUCKET,
+        }
+    }
+
+    /// Create a buffer pool with a custom max buffers per bucket.
+    pub fn with_max_per_bucket(max_per_bucket: usize) -> Self {
+        Self { buckets: std::array::from_fn(|_| Mutex::new(Vec::new())), max_per_bucket }
     }
 
     fn bucket_index(min_size: usize) -> usize {
@@ -130,7 +144,7 @@ impl BufferPool {
         buf.clear();
         let idx = Self::bucket_index(buf.capacity());
         let mut pool = self.buckets[idx].lock().unwrap_or_else(|e| e.into_inner());
-        if pool.len() < 128 {
+        if pool.len() < self.max_per_bucket {
             pool.push(buf);
         }
     }

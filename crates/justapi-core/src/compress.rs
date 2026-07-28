@@ -16,6 +16,7 @@ use crate::ResponseBody;
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Encoding {
     Gzip,
     Deflate,
@@ -28,34 +29,92 @@ pub enum Encoding {
 
 impl Encoding {
     /// Parse the best encoding from the `Accept-Encoding` header.
-    /// Returns the first supported encoding found, preferring Brotli > Zstd > Gzip > Deflate.
+    /// Respects RFC 7231 quality values (q=) and selects the highest-quality encoding.
+    /// Falls back to preference order (br > zstd > gzip > deflate) when q= is absent (defaults to 1.0).
     pub fn from_accept_encoding(header_value: &str) -> Self {
-        // Simple preference order: br > zstd > gzip > deflate
         let lower = header_value.to_ascii_lowercase();
         let parts: Vec<&str> = lower.split(',').map(|s| s.trim()).collect();
 
+        // Parse (encoding_name, quality) pairs
+        let mut candidates: Vec<(&str, f64)> = Vec::new();
         for part in &parts {
-            let encoding_name = part.split(';').next().unwrap_or("").trim();
-            match encoding_name {
-                #[cfg(feature = "brotli-compression")]
-                "br" => return Encoding::Brotli,
-                #[cfg(feature = "zstd-compression")]
-                "zstd" => return Encoding::Zstd,
-                "gzip" | "x-gzip" => return Encoding::Gzip,
-                "deflate" => return Encoding::Deflate,
-                "*" => {
-                    // Wildcard: return the best we support
-                    #[cfg(feature = "brotli-compression")]
-                    return Encoding::Brotli;
-                    #[cfg(feature = "zstd-compression")]
-                    return Encoding::Zstd;
-                    return Encoding::Gzip;
+            let mut encoding_name = "";
+            let mut quality = 1.0f64;
+
+            for (i, sub) in part.split(';').enumerate() {
+                let sub = sub.trim();
+                if i == 0 {
+                    encoding_name = sub;
+                } else if let Some((key, val)) = sub.split_once('=') {
+                    if key.trim() == "q" {
+                        quality = val.trim().parse::<f64>().unwrap_or(0.0);
+                    }
+                }
+            }
+
+            // q=0 means explicitly not acceptable
+            if quality <= 0.0 {
+                continue;
+            }
+
+            let name = encoding_name.split(';').next().unwrap_or("").trim();
+            match name {
+                "br" | "zstd" | "gzip" | "x-gzip" | "deflate" | "*" => {
+                    candidates.push((name, quality));
                 }
                 _ => continue,
             }
         }
 
-        Encoding::Identity
+        if candidates.is_empty() {
+            return Encoding::Identity;
+        }
+
+        // Sort by quality descending, then by preference order as tiebreaker
+        let preference_order = |name: &str| -> u8 {
+            match name {
+                #[cfg(feature = "brotli-compression")]
+                "br" => 0,
+                #[cfg(feature = "zstd-compression")]
+                "zstd" => 1,
+                "gzip" | "x-gzip" => 2,
+                "deflate" => 3,
+                "*" => 4,
+                _ => 5,
+            }
+        };
+
+        candidates.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| preference_order(a.0).cmp(&preference_order(b.0)))
+        });
+
+        match candidates[0].0 {
+            #[cfg(feature = "brotli-compression")]
+            "br" => Encoding::Brotli,
+            #[cfg(feature = "zstd-compression")]
+            "zstd" => Encoding::Zstd,
+            "gzip" | "x-gzip" => Encoding::Gzip,
+            "deflate" => Encoding::Deflate,
+            "*" => {
+                #[cfg(feature = "brotli-compression")]
+                {
+                    Encoding::Brotli
+                }
+                #[cfg(feature = "zstd-compression")]
+                #[cfg(not(feature = "brotli-compression"))]
+                {
+                    Encoding::Zstd
+                }
+                #[cfg(not(feature = "brotli-compression"))]
+                #[cfg(not(feature = "zstd-compression"))]
+                {
+                    Encoding::Gzip
+                }
+            }
+            _ => Encoding::Identity,
+        }
     }
 
     /// Returns the `Content-Encoding` header value for this encoding.
@@ -263,13 +322,33 @@ mod tests {
 
     #[test]
     fn test_encoding_preference_order() {
-        // Gzip should be preferred over deflate since gzip appears later in the list
-        // but our parser picks the first compressible encoding it finds.
-        // Actually gzip is preferred because we check in order: br > zstd > gzip > deflate
-        // and "deflate, gzip" has deflate first, so deflate would be matched first.
-        // Wait - the parser iterates parts and matches each. For "deflate, gzip":
-        // part 0 = "deflate" -> matches Deflate, returns immediately.
-        assert_eq!(Encoding::from_accept_encoding("deflate, gzip"), Encoding::Deflate);
+        // When quality values are equal (both default to 1.0), preference order applies:
+        // br > zstd > gzip > deflate. So "deflate, gzip" returns Gzip (higher preference).
+        assert_eq!(Encoding::from_accept_encoding("deflate, gzip"), Encoding::Gzip);
+    }
+
+    #[test]
+    fn test_encoding_quality_values_respected() {
+        // RFC 7231: quality values should be respected
+        // deflate;q=1.0, gzip;q=0.5 -> deflate wins (higher quality)
+        assert_eq!(Encoding::from_accept_encoding("deflate;q=1.0, gzip;q=0.5"), Encoding::Deflate);
+        // gzip;q=1.0, deflate;q=0.5 -> gzip wins (higher quality)
+        assert_eq!(Encoding::from_accept_encoding("gzip;q=1.0, deflate;q=0.5"), Encoding::Gzip);
+    }
+
+    #[test]
+    fn test_encoding_quality_zero_rejects() {
+        // q=0 means explicitly not acceptable
+        assert_eq!(Encoding::from_accept_encoding("gzip;q=0, deflate;q=1.0"), Encoding::Deflate);
+        // All q=0 -> Identity
+        assert_eq!(Encoding::from_accept_encoding("gzip;q=0, deflate;q=0"), Encoding::Identity);
+    }
+
+    #[test]
+    fn test_encoding_quality_default_is_one() {
+        // When no q= is specified, default is 1.0
+        // So "gzip, deflate;q=0.5" -> gzip wins (1.0 > 0.5)
+        assert_eq!(Encoding::from_accept_encoding("gzip, deflate;q=0.5"), Encoding::Gzip);
     }
 
     #[test]

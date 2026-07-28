@@ -17,16 +17,15 @@ use crate::health::HealthRegistry;
 use crate::memory::BufferPool;
 #[cfg(test)]
 use crate::memory::SharedArena;
-use crate::metrics::{self, Metrics};
+use crate::metrics::Metrics;
 use crate::middleware::{
     ApiKeyAuth, Cors, JwtAuth, MiddlewareChain, OAuth2Password, PerRouteRateLimiter, RateLimiter,
     SecurityHeaders,
 };
-use crate::openapi;
 use crate::plugin::PluginRegistry;
 use crate::router::Router;
 use crate::static_files::{StaticDir, StaticMount};
-use crate::{error_response, json_response, streaming_response, ResponseBody};
+use crate::{error_response, json_response, ResponseBody};
 #[cfg(feature = "ws")]
 use futures::StreamExt;
 use serde_json;
@@ -40,97 +39,18 @@ pub use crud::{
     CrudOp, CrudSpec,
 };
 
-// ---------------------------------------------------------------------------
-// WebSocket handler (feature-gated on `ws`)
-// ---------------------------------------------------------------------------
+#[cfg(feature = "ws")]
+mod ws;
+#[cfg(feature = "ws")]
+pub use ws::{default_ws_echo, WsConnInfo, WsHandler, WsRead, WsWrite};
 
+mod sse_ws;
 #[cfg(feature = "ws")]
-pub type WsRead = Box<
-    dyn futures::Stream<
-            Item = Result<
-                tokio_tungstenite::tungstenite::Message,
-                tokio_tungstenite::tungstenite::Error,
-            >,
-        > + Unpin
-        + Send,
->;
+pub use sse_ws::dispatch_ws;
+pub use sse_ws::sse_response;
 
-#[cfg(feature = "ws")]
-pub type WsWrite = Box<
-    dyn futures::Sink<
-            tokio_tungstenite::tungstenite::Message,
-            Error = tokio_tungstenite::tungstenite::Error,
-        > + Unpin
-        + Send,
->;
-
-/// A handler invoked when a WebSocket upgrade is accepted on a registered path.
-/// Receives the request path plus the split read/write halves of the accepted
-/// WebSocket stream. The handler owns the connection for its lifetime.
-#[cfg(feature = "ws")]
-/// Connection metadata handed to a WebSocket handler on upgrade. Mirrors the
-/// subset of the HTTP request a WebSocket scope needs (`path`, decoded query
-/// string, raw headers) so handler frameworks can build a Starlette-style
-/// `scope` without re-reading the (already upgraded) socket.
-#[cfg(feature = "ws")]
-#[derive(Debug, Clone)]
-pub struct WsConnInfo {
-    /// Request path the upgrade arrived on.
-    pub path: String,
-    /// Raw query string (percent-encoded, without the leading `?`).
-    pub query_string: Vec<u8>,
-    /// Raw request headers observed on the upgrade request.
-    pub headers: Vec<(Vec<u8>, Vec<u8>)>,
-    /// Remote peer address as `(host, port)`, if known.
-    pub client: Option<(String, u16)>,
-}
-
-#[cfg(feature = "ws")]
-pub type WsHandler = std::sync::Arc<
-    dyn Fn(
-            WsConnInfo,
-            WsRead,
-            WsWrite,
-        )
-            -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>>
-        + Send
-        + Sync,
->;
-
-#[cfg(feature = "ws")]
-use tokio_tungstenite::tungstenite::Message;
-
-/// Default WebSocket handler used when no application handler is registered.
-/// Echoes text/binary frames (mirroring the legacy raw-TCP behavior) so that
-/// standalone servers remain WebSocket-compatible out of the box. `with_ws`
-/// replaces this with an application-provided handler.
-#[cfg(feature = "ws")]
-fn default_ws_echo() -> WsHandler {
-    std::sync::Arc::new(|_info, mut read, mut write| {
-        Box::pin(async move {
-            use futures::{SinkExt, StreamExt};
-            while let Some(msg) = read.next().await {
-                match msg {
-                    Ok(m @ Message::Text(_)) | Ok(m @ Message::Binary(_)) => {
-                        if write.send(m).await.is_err() {
-                            break;
-                        }
-                    }
-                    Ok(Message::Ping(p)) => {
-                        let _ = write.send(Message::Pong(p)).await;
-                    }
-                    Ok(Message::Close(_)) | Err(_) => {
-                        let _ = write.send(Message::Close(None)).await;
-                        break;
-                    }
-                    _ => {}
-                }
-            }
-            let _ = write.close().await;
-            Ok(())
-        })
-    })
-}
+mod handler_exec;
+use handler_exec::execute_handler;
 
 // ---------------------------------------------------------------------------
 // Handler enum
@@ -1305,11 +1225,14 @@ const MAX_QUERY_LENGTH: usize = 2048;
 /// and abort it. Guards against stuck/slow handlers and resource exhaustion.
 /// Configurable via `JUSTAPI_REQUEST_TIMEOUT_SECS`.
 fn request_timeout() -> std::time::Duration {
-    std::env::var("JUSTAPI_REQUEST_TIMEOUT_SECS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .map(std::time::Duration::from_secs)
-        .unwrap_or_else(|| std::time::Duration::from_secs(60))
+    static TIMEOUT: std::sync::LazyLock<std::time::Duration> = std::sync::LazyLock::new(|| {
+        std::env::var("JUSTAPI_REQUEST_TIMEOUT_SECS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .map(std::time::Duration::from_secs)
+            .unwrap_or_else(|| std::time::Duration::from_secs(60))
+    });
+    *TIMEOUT
 }
 
 /// Hard cap on concurrently accepted connections. Beyond this, new connections
@@ -1317,11 +1240,14 @@ fn request_timeout() -> std::time::Duration {
 /// descriptors (connection-flood protection). Configurable via
 /// `JUSTAPI_MAX_CONNECTIONS`.
 fn max_connections() -> usize {
-    std::env::var("JUSTAPI_MAX_CONNECTIONS")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .filter(|n| *n > 0)
-        .unwrap_or(10_000)
+    static MAX_CONN: std::sync::LazyLock<usize> = std::sync::LazyLock::new(|| {
+        std::env::var("JUSTAPI_MAX_CONNECTIONS")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|n| *n > 0)
+            .unwrap_or(10_000)
+    });
+    *MAX_CONN
 }
 
 /// Attempt to serve `path` from any registered frontend mount (prefix +
@@ -1363,6 +1289,210 @@ async fn try_serve_static(
     None
 }
 
+/// Shared request handler logic used by both plain TCP/UDS and TLS connections.
+/// Extracts the common service_fn closure so it lives in exactly one place.
+///
+/// `peer_addr` is `None` for Unix sockets (no client IP); WebSocket `client`
+/// info and request extensions degrade gracefully when it is absent.
+async fn handle_request(
+    mut req: Request<Incoming>,
+    peer_addr: Option<SocketAddr>,
+    chain: Arc<MiddlewareChain>,
+    static_dir: Option<StaticDir>,
+    static_mounts: Vec<StaticMount>,
+    metrics: Metrics,
+    #[cfg(feature = "wasm")] wasm_middleware: Option<Arc<crate::wasm::WasmEngine>>,
+    #[cfg(feature = "ws")] ws_handler: Option<WsHandler>,
+) -> Result<Response<ResponseBody>> {
+    let path = req.uri().path().to_string();
+    let method = req.method().clone();
+    let start = std::time::Instant::now();
+
+    // --- Input validation (security hardening) ---
+    if path.len() > MAX_PATH_LENGTH {
+        return Ok(error_response(StatusCode::URI_TOO_LONG, "request URI exceeds maximum length"));
+    }
+    if let Some(query) = req.uri().query() {
+        if query.len() > MAX_QUERY_LENGTH {
+            return Ok(error_response(
+                StatusCode::URI_TOO_LONG,
+                "query string exceeds maximum length",
+            ));
+        }
+    }
+    let header_count = req.headers().len();
+    if header_count > MAX_HEADER_COUNT {
+        return Ok(error_response(
+            StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE,
+            "too many request headers",
+        ));
+    }
+    for (name, value) in req.headers().iter() {
+        if value.len() > MAX_HEADER_VALUE_LENGTH {
+            return Ok(error_response(
+                StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE,
+                &format!("header '{}' exceeds maximum value length", name.as_str()),
+            ));
+        }
+    }
+
+    req.extensions_mut().insert(peer_addr);
+    metrics.record_request();
+
+    #[cfg(feature = "ws")]
+    if let Some(ref handler) = ws_handler {
+        let is_ws = req
+            .headers()
+            .get(hyper::header::UPGRADE)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.eq_ignore_ascii_case("websocket"))
+            .unwrap_or(false);
+
+        if is_ws {
+            if let Some(key) = req.headers().get("sec-websocket-key") {
+                let key_str = key.to_str().unwrap_or("");
+                let mut sha1 = sha1::Sha1::new();
+                use sha1::Digest;
+                sha1.update(key_str.as_bytes());
+                sha1.update(b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
+                use base64::Engine;
+                let accept_key = base64::engine::general_purpose::STANDARD.encode(sha1.finalize());
+
+                let mut res = crate::json_response(StatusCode::SWITCHING_PROTOCOLS, "");
+                res.headers_mut().insert(
+                    hyper::header::UPGRADE,
+                    hyper::header::HeaderValue::from_static("websocket"),
+                );
+                res.headers_mut().insert(
+                    hyper::header::CONNECTION,
+                    hyper::header::HeaderValue::from_static("upgrade"),
+                );
+                res.headers_mut().insert(
+                    "sec-websocket-accept",
+                    hyper::header::HeaderValue::from_str(&accept_key)
+                        .unwrap_or_else(|_| hyper::header::HeaderValue::from_static("")),
+                );
+
+                let handler = handler.clone();
+                let ws_info = WsConnInfo {
+                    path: path.clone(),
+                    query_string: req.uri().query().unwrap_or("").as_bytes().to_vec(),
+                    headers: req
+                        .headers()
+                        .iter()
+                        .map(|(k, v)| (k.as_str().as_bytes().to_vec(), v.as_bytes().to_vec()))
+                        .collect(),
+                    client: peer_addr.map(|a| (a.ip().to_string(), a.port())),
+                };
+
+                tokio::task::spawn(async move {
+                    match hyper::upgrade::on(&mut req).await {
+                        Ok(upgraded) => {
+                            let upgraded_io = hyper_util::rt::TokioIo::new(upgraded);
+                            let ws_stream = tokio_tungstenite::WebSocketStream::from_raw_socket(
+                                upgraded_io,
+                                tokio_tungstenite::tungstenite::protocol::Role::Server,
+                                None,
+                            )
+                            .await;
+                            let (write, read) = ws_stream.split();
+                            dispatch_ws(Box::new(read), Box::new(write), ws_info, &handler).await;
+                        }
+                        Err(e) => tracing::error!("WebSocket upgrade error: {}", e),
+                    }
+                });
+                return Ok(res);
+            }
+        }
+    }
+
+    #[cfg(feature = "wasm")]
+    if let Some(ref wasm) = wasm_middleware {
+        let mut hdrs = serde_json::Map::new();
+        for (k, v) in req.headers() {
+            if let Ok(v_str) = v.to_str() {
+                hdrs.insert(k.as_str().to_string(), serde_json::Value::String(v_str.to_string()));
+            }
+        }
+        let req_json = serde_json::json!({
+            "path": path,
+            "method": req.method().as_str(),
+            "headers": hdrs,
+        })
+        .to_string();
+
+        match wasm.execute_middleware(&req_json).await {
+            Ok(res_json) => {
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&res_json) {
+                    if let Some(status) = parsed.get("status") {
+                        if let Some(status_code) = status.as_u64() {
+                            if status_code != 200 {
+                                let body = parsed
+                                    .get("body")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string();
+                                metrics.record_status(
+                                    StatusCode::from_u16(status_code as u16)
+                                        .unwrap_or(StatusCode::FORBIDDEN),
+                                );
+                                metrics.record_latency(start.elapsed().as_secs_f64() * 1000.0);
+                                return Ok(json_response(
+                                    StatusCode::from_u16(status_code as u16)
+                                        .unwrap_or(StatusCode::FORBIDDEN),
+                                    &body,
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::error!("WASM execution error: {:?}", e);
+            }
+        }
+    }
+
+    let resp = tokio::time::timeout(request_timeout(), chain.run(req)).await;
+
+    match resp {
+        Ok(r) => match r {
+            Ok(response) => {
+                let status = response.status();
+                metrics.record_status(status);
+                metrics.record_latency(start.elapsed().as_secs_f64() * 1000.0);
+
+                if status == StatusCode::NOT_FOUND {
+                    if let Some(resp) = try_serve_static(&path, &static_dir, &static_mounts).await {
+                        return Ok::<_, anyhow::Error>(resp);
+                    }
+                }
+                Ok(response)
+            }
+            Err(_) => {
+                metrics.record_status(StatusCode::NOT_FOUND);
+                metrics.record_latency(start.elapsed().as_secs_f64() * 1000.0);
+
+                if let Some(resp) = try_serve_static(&path, &static_dir, &static_mounts).await {
+                    return Ok::<_, anyhow::Error>(resp);
+                }
+                Ok(error_response(StatusCode::NOT_FOUND, "not found"))
+            }
+        },
+        Err(_) => {
+            metrics.record_status(StatusCode::GATEWAY_TIMEOUT);
+            metrics.record_latency(start.elapsed().as_secs_f64() * 1000.0);
+            tracing::warn!(
+                "Request to {} {} timed out after {:?}",
+                method,
+                path,
+                request_timeout()
+            );
+            Ok(error_response(StatusCode::GATEWAY_TIMEOUT, "request timeout"))
+        }
+    }
+}
+
 /// Drive a single accepted connection to completion: acquire a connection
 /// permit, run it through hyper, the middleware chain, WASM/WS hooks, and the
 /// graceful-shutdown path. Shared by `serve_http` (TCP) and `serve_unix` (UDS)
@@ -1394,7 +1524,7 @@ async fn serve_connection(
     let spawn_metrics = metrics.clone();
     let conn_metrics = metrics.clone();
     conn_metrics.connection_opened();
-    let svc = service_fn(move |mut req| {
+    let svc = service_fn(move |req| {
         let chain = chain.clone();
         let static_dir = static_dir.clone();
         let static_mounts = static_mounts.clone();
@@ -1404,246 +1534,46 @@ async fn serve_connection(
         #[cfg(feature = "ws")]
         let ws_handler = ws_handler.clone();
         async move {
-            let path = req.uri().path().to_string();
             let method = req.method().clone();
+            let path = req.uri().path().to_string();
             let start = std::time::Instant::now();
 
-            // --- Input validation (security hardening, Phase 58) ---
-            // Reject oversized paths before routing to prevent DoS via
-            // extremely long URI strings that blow up memory in the router
-            // or middleware chain.
-            if path.len() > MAX_PATH_LENGTH {
-                return Ok(error_response(
-                    StatusCode::URI_TOO_LONG,
-                    "request URI exceeds maximum length",
-                ));
-            }
-            if let Some(query) = req.uri().query() {
-                if query.len() > MAX_QUERY_LENGTH {
-                    return Ok(error_response(
-                        StatusCode::URI_TOO_LONG,
-                        "query string exceeds maximum length",
-                    ));
-                }
-            }
-            // Reject requests with too many headers or oversized header values.
-            // Excessively large headers waste memory and slow down parsing.
-            let header_count = req.headers().len();
-            if header_count > MAX_HEADER_COUNT {
-                return Ok(error_response(
-                    StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE,
-                    "too many request headers",
-                ));
-            }
-            for (name, value) in req.headers().iter() {
-                if value.len() > MAX_HEADER_VALUE_LENGTH {
-                    return Ok(error_response(
-                        StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE,
-                        &format!("header '{}' exceeds maximum value length", name.as_str()),
-                    ));
-                }
-            }
+            let result = handle_request(
+                req,
+                peer_addr,
+                chain,
+                static_dir,
+                static_mounts,
+                metrics.clone(),
+                #[cfg(feature = "wasm")]
+                wasm_middleware,
+                #[cfg(feature = "ws")]
+                ws_handler,
+            )
+            .await;
 
-            req.extensions_mut().insert(peer_addr);
-
-            let span = tracing::info_span!(
-                "http.request",
-                http.method = method.as_str(),
-                http.path = %path,
-                http.status_code = tracing::field::Empty,
-            );
-
-            metrics.record_request();
-
-            #[cfg(feature = "ws")]
-            if let Some(ref handler) = ws_handler {
-                let is_ws = req
-                    .headers()
-                    .get(hyper::header::UPGRADE)
-                    .and_then(|v| v.to_str().ok())
-                    .map(|s| s.eq_ignore_ascii_case("websocket"))
-                    .unwrap_or(false);
-
-                if is_ws {
-                    if let Some(key) = req.headers().get("sec-websocket-key") {
-                        let key_str = key.to_str().unwrap_or("");
-                        let mut sha1 = sha1::Sha1::new();
-                        use sha1::Digest;
-                        sha1.update(key_str.as_bytes());
-                        sha1.update(b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
-                        use base64::Engine;
-                        let accept_key =
-                            base64::engine::general_purpose::STANDARD.encode(sha1.finalize());
-
-                        let mut res = crate::json_response(StatusCode::SWITCHING_PROTOCOLS, "");
-                        res.headers_mut().insert(
-                            hyper::header::UPGRADE,
-                            hyper::header::HeaderValue::from_static("websocket"),
-                        );
-                        res.headers_mut().insert(
-                            hyper::header::CONNECTION,
-                            hyper::header::HeaderValue::from_static("upgrade"),
-                        );
-                        res.headers_mut().insert(
-                            "sec-websocket-accept",
-                            hyper::header::HeaderValue::from_str(&accept_key).unwrap(),
-                        );
-
-                        let handler = handler.clone();
-                        let ws_info = WsConnInfo {
-                            path: path.clone(),
-                            query_string: req.uri().query().unwrap_or("").as_bytes().to_vec(),
-                            headers: req
-                                .headers()
-                                .iter()
-                                .map(|(k, v)| {
-                                    (k.as_str().as_bytes().to_vec(), v.as_bytes().to_vec())
-                                })
-                                .collect(),
-                            client: peer_addr.map(|a| (a.ip().to_string(), a.port())),
-                        };
-
-                        tokio::task::spawn(async move {
-                            match hyper::upgrade::on(&mut req).await {
-                                Ok(upgraded) => {
-                                    let upgraded_io = hyper_util::rt::TokioIo::new(upgraded);
-                                    let ws_stream =
-                                        tokio_tungstenite::WebSocketStream::from_raw_socket(
-                                            upgraded_io,
-                                            tokio_tungstenite::tungstenite::protocol::Role::Server,
-                                            None,
-                                        )
-                                        .await;
-                                    let (write, read) = ws_stream.split();
-                                    dispatch_ws(Box::new(read), Box::new(write), ws_info, &handler)
-                                        .await;
-                                }
-                                Err(e) => tracing::error!("WebSocket upgrade error: {}", e),
-                            }
-                        });
-                        return Ok(res);
-                    }
-                }
-            }
-
-            // WASM middleware (synchronous setup + one await)
-            #[cfg(feature = "wasm")]
-            if let Some(ref wasm) = wasm_middleware {
-                let wasm_span = tracing::debug_span!("wasm.middleware");
-                let mut hdrs = serde_json::Map::new();
-                for (k, v) in req.headers() {
-                    if let Ok(v_str) = v.to_str() {
-                        hdrs.insert(
-                            k.as_str().to_string(),
-                            serde_json::Value::String(v_str.to_string()),
-                        );
-                    }
-                }
-                let req_json = serde_json::json!({
-                    "path": path,
-                    "method": req.method().as_str(),
-                    "headers": hdrs,
-                })
-                .to_string();
-
-                let wasm_result = {
-                    let _ws = wasm_span.enter();
-                    wasm.execute_middleware(&req_json).await
-                };
-
-                match wasm_result {
-                    Ok(res_json) => {
-                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&res_json) {
-                            if let Some(status) = parsed.get("status") {
-                                if let Some(status_code) = status.as_u64() {
-                                    if status_code != 200 {
-                                        let body = parsed
-                                            .get("body")
-                                            .and_then(|v| v.as_str())
-                                            .unwrap_or("")
-                                            .to_string();
-                                        span.record("http.status_code", status_code);
-                                        metrics.record_status(
-                                            StatusCode::from_u16(status_code as u16)
-                                                .unwrap_or(StatusCode::FORBIDDEN),
-                                        );
-                                        metrics
-                                            .record_latency(start.elapsed().as_secs_f64() * 1000.0);
-                                        return Ok(json_response(
-                                            StatusCode::from_u16(status_code as u16)
-                                                .unwrap_or(StatusCode::FORBIDDEN),
-                                            &body,
-                                        ));
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!("WASM execution error: {:?}", e);
-                    }
-                }
-            }
-
-            // Run middleware chain (async, no entered span across await)
-            let resp = tokio::time::timeout(request_timeout(), chain.run(req)).await;
-
-            match resp {
-                Ok(r) => match r {
-                    Ok(response) => {
-                        let status = response.status();
-                        span.record("http.status_code", status.as_u16());
-                        metrics.record_status(status);
-                        let latency_ms = start.elapsed().as_secs_f64() * 1000.0;
-                        metrics.record_latency(latency_ms);
-
-                        // Access log: one structured line per completed request.
-                        tracing::info!(
-                            http.method = %method,
-                            http.path = %path,
-                            http.status_code = status.as_u16(),
-                            latency_ms = format!("{latency_ms:.2}"),
-                            "request completed"
-                        );
-
-                        // If the response is 404, try serving static files.
-                        if status == StatusCode::NOT_FOUND {
-                            if let Some(resp) =
-                                try_serve_static(&path, &static_dir, &static_mounts).await
-                            {
-                                return Ok::<_, anyhow::Error>(resp);
-                            }
-                        }
-                        Ok(response)
-                    }
-                    Err(_) => {
-                        span.record("http.status_code", 404u16);
-                        metrics.record_status(StatusCode::NOT_FOUND);
-                        metrics.record_latency(start.elapsed().as_secs_f64() * 1000.0);
-
-                        // Middleware error — try static files
-                        if let Some(resp) =
-                            try_serve_static(&path, &static_dir, &static_mounts).await
-                        {
-                            return Ok::<_, anyhow::Error>(resp);
-                        }
-                        Ok(error_response(StatusCode::NOT_FOUND, "not found"))
-                    }
-                },
-                Err(_) => {
-                    // Handler exceeded the request timeout.
-                    span.record("http.status_code", 504u16);
-                    metrics.record_status(StatusCode::GATEWAY_TIMEOUT);
-                    metrics.record_latency(start.elapsed().as_secs_f64() * 1000.0);
-                    tracing::warn!(
-                        "Request to {} {} timed out after {:?}",
-                        method,
-                        path,
-                        request_timeout()
+            // Access log: one structured line per completed request.
+            match &result {
+                Ok(resp) => {
+                    let status = resp.status();
+                    tracing::info!(
+                        http.method = %method,
+                        http.path = %path,
+                        http.status_code = status.as_u16(),
+                        latency_ms = format!("{:.2}", start.elapsed().as_secs_f64() * 1000.0),
+                        "request completed"
                     );
-                    Ok(error_response(StatusCode::GATEWAY_TIMEOUT, "request timeout"))
+                }
+                Err(e) => {
+                    tracing::error!(
+                        http.method = %method,
+                        http.path = %path,
+                        error = %e,
+                        "request failed"
+                    );
                 }
             }
+            result
         }
     });
     let mut builder =
@@ -1687,6 +1617,9 @@ async fn serve_http(
     #[cfg(feature = "wasm")] wasm_middleware: Option<Arc<crate::wasm::WasmEngine>>,
     #[cfg(feature = "ws")] ws_handler: Option<WsHandler>,
 ) -> Result<()> {
+    // **IMPORTANT:** This duplicates `serve_unix` below. A future refactoring
+    // should extract the common accept loop into a generic function parameterized
+    // over the listener type. See P2-3 in deepanalysis.md.
     let mut connections = tokio::task::JoinSet::new();
     let conn_semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(max_connections()));
 
@@ -1789,6 +1722,10 @@ impl Drop for UnixSocketGuard {
 /// Accept loop for a Unix domain socket. Identical to `serve_http` except it
 /// serves over a `UnixListener` and passes `peer_addr: None` to the shared
 /// per-connection handler (Unix peers have no IP).
+///
+/// **IMPORTANT:** This duplicates `serve_http` above. A future refactoring
+/// should extract the common accept loop into a generic function parameterized
+/// over the listener type. See P2-3 in deepanalysis.md.
 #[cfg(unix)]
 async fn serve_unix(
     listener: tokio::net::UnixListener,
@@ -1860,192 +1797,6 @@ async fn serve_unix(
     }
 
     Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// Route handler
-// ---------------------------------------------------------------------------
-
-async fn execute_handler(
-    handler: Handler,
-    params: Vec<(String, String)>,
-    req: Request<Incoming>,
-    pool: &BufferPool,
-    metrics: &Metrics,
-    health_registry: Option<&HealthRegistry>,
-    #[cfg(feature = "graphql")] graphql_schema: Option<&crate::graphql::AppSchema>,
-    openapi_spec: Option<&str>,
-    max_body_size: usize,
-) -> Result<Response<ResponseBody>> {
-    let handler_name = match handler {
-        Handler::Static { .. } => "static",
-        Handler::Echo => "echo",
-        Handler::ParamsEcho => "params_echo",
-        Handler::Sse => "sse",
-        Handler::Health => "health",
-        Handler::Ready => "ready",
-        Handler::Live => "live",
-        Handler::Prometheus => "prometheus",
-        Handler::OpenApiJson => "openapi_json",
-        Handler::SwaggerUi => "swagger_ui",
-        Handler::Redoc => "redoc",
-        Handler::GraphQL => "graphql",
-        Handler::Custom(_) => "custom",
-    };
-    let _handler_span = tracing::debug_span!("handler.execute", name = handler_name);
-
-    match handler {
-        Handler::Static { status, body } => {
-            if status.is_success() {
-                Ok(json_response(status, body))
-            } else {
-                Ok(crate::error_response(status, body))
-            }
-        }
-        Handler::Echo => {
-            let body_bytes = match http_body_util::Limited::new(req.into_body(), max_body_size)
-                .collect()
-                .await
-            {
-                Ok(collected) => {
-                    let bytes = collected.to_bytes();
-                    metrics.add_bytes_in(bytes.len() as u64);
-                    bytes
-                }
-                Err(e) if e.to_string().contains("length limit") => {
-                    return Ok(error_response(StatusCode::PAYLOAD_TOO_LARGE, "payload too large"))
-                }
-                Err(_) => return Ok(error_response(StatusCode::BAD_REQUEST, "bad request")),
-            };
-            let mut buf = pool.acquire(body_bytes.len());
-            buf.extend_from_slice(&body_bytes);
-            let body_str = String::from_utf8_lossy(&buf).to_string();
-            pool.release(buf);
-            Ok(json_response(StatusCode::OK, &body_str))
-        }
-        Handler::ParamsEcho => {
-            let params_str: Vec<String> =
-                params.iter().map(|(k, v)| format!(r#""{}":"{}""#, k, v)).collect();
-            let body = format!("{{{}}}", params_str.join(","));
-            Ok(json_response(StatusCode::OK, &body))
-        }
-        Handler::Sse => Ok(sse_response()),
-        Handler::Health => Ok(metrics::health_response()),
-        Handler::Ready => {
-            if let Some(reg) = health_registry {
-                if reg.is_empty() {
-                    Ok(metrics::ready_response())
-                } else {
-                    Ok(reg.health_response().await)
-                }
-            } else {
-                Ok(metrics::ready_response())
-            }
-        }
-        Handler::Live => Ok(metrics::live_response()),
-        Handler::Prometheus => Ok(metrics::metrics_response(metrics)),
-        Handler::OpenApiJson => {
-            let body: String =
-                if let Some(spec) = openapi_spec { spec.to_string() } else { BUILTIN_SPEC.clone() };
-            Ok(json_response(StatusCode::OK, &body))
-        }
-        Handler::SwaggerUi => {
-            let html = openapi::swagger_ui_html();
-            Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("content-type", "text/html; charset=utf-8")
-                .header("content-length", html.len().to_string())
-                .body(crate::UnsyncBoxBody::new(
-                    http_body_util::Full::new(Bytes::from(html))
-                        .map_err(|e: std::convert::Infallible| -> anyhow::Error { match e {} }),
-                ))
-                .unwrap())
-        }
-        Handler::Redoc => {
-            let html = openapi::redoc_html();
-            Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("content-type", "text/html; charset=utf-8")
-                .header("content-length", html.len().to_string())
-                .body(crate::UnsyncBoxBody::new(
-                    http_body_util::Full::new(Bytes::from(html))
-                        .map_err(|e: std::convert::Infallible| -> anyhow::Error { match e {} }),
-                ))
-                .unwrap())
-        }
-        Handler::GraphQL => {
-            #[cfg(feature = "graphql")]
-            {
-                if let Some(schema) = graphql_schema {
-                    crate::graphql::handle_graphql(schema, req).await.or_else(|e| {
-                        Ok(Response::builder()
-                            .status(StatusCode::INTERNAL_SERVER_ERROR)
-                            .body(crate::UnsyncBoxBody::new(
-                                http_body_util::Full::new(Bytes::from(format!(
-                                    "GraphQL Error: {}",
-                                    e
-                                )))
-                                .map_err(
-                                    |e: std::convert::Infallible| -> anyhow::Error { match e {} },
-                                ),
-                            ))
-                            .unwrap())
-                    })
-                } else {
-                    Ok(Response::builder()
-                        .status(StatusCode::INTERNAL_SERVER_ERROR)
-                        .body(crate::UnsyncBoxBody::new(
-                            http_body_util::Full::new(Bytes::from(
-                                "GraphQL schema not initialized",
-                            ))
-                            .map_err(|e: std::convert::Infallible| -> anyhow::Error { match e {} }),
-                        ))
-                        .unwrap())
-                }
-            }
-            #[cfg(not(feature = "graphql"))]
-            {
-                Ok(error_response(StatusCode::NOT_FOUND, "GraphQL is not enabled"))
-            }
-        }
-        Handler::Custom(f) => {
-            // Expose matched path params to custom handlers (e.g. the Rust-native
-            // CRUD handlers read `{id}` from here) via request extensions.
-            let path_params: Vec<(String, String)> = params;
-            let mut req = req;
-            req.extensions_mut().insert(path_params);
-            f(req).await
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// SSE
-// ---------------------------------------------------------------------------
-
-fn sse_response() -> Response<ResponseBody> {
-    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes>>(16);
-
-    tokio::spawn(async move {
-        for i in 1..=10 {
-            let msg = format!("data: {{\"count\":{}}}\n\n", i);
-            if tx.send(Ok(Bytes::from(msg))).await.is_err() {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        }
-    });
-
-    let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
-    streaming_response(StatusCode::OK, "text/event-stream", stream)
-}
-
-/// Dispatch an accepted WebSocket connection to a registered handler.
-#[cfg(feature = "ws")]
-async fn dispatch_ws(read: WsRead, write: WsWrite, info: WsConnInfo, handler: &WsHandler) {
-    if let Err(e) = handler(info, read, write).await {
-        tracing::warn!("WebSocket handler error: {}", e);
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2138,7 +1889,7 @@ async fn serve_with_tls(
             match acceptor.accept(stream).await {
                 Ok(tls_stream) => {
                     let io = TokioIo::new(tls_stream);
-                    let svc = service_fn(move |mut req| {
+                    let svc = service_fn(move |req| {
                         let chain = chain.clone();
                         let static_dir = static_dir.clone();
                         let static_mounts = static_mounts.clone();
@@ -2148,207 +1899,29 @@ async fn serve_with_tls(
                         #[cfg(feature = "ws")]
                         let ws_handler = ws_handler.clone();
                         async move {
-                            let path = req.uri().path().to_string();
-                            let start = std::time::Instant::now();
-
-                            // --- Input validation (security hardening, Phase 58) ---
-                            if path.len() > MAX_PATH_LENGTH {
-                                return Ok(error_response(
-                                    StatusCode::URI_TOO_LONG,
-                                    "request URI exceeds maximum length",
-                                ));
-                            }
-                            if let Some(query) = req.uri().query() {
-                                if query.len() > MAX_QUERY_LENGTH {
-                                    return Ok(error_response(
-                                        StatusCode::URI_TOO_LONG,
-                                        "query string exceeds maximum length",
-                                    ));
-                                }
-                            }
-                            let header_count = req.headers().len();
-                            if header_count > MAX_HEADER_COUNT {
-                                return Ok(error_response(
-                                    StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE,
-                                    "too many request headers",
-                                ));
-                            }
-                            for (name, value) in req.headers().iter() {
-                                if value.len() > MAX_HEADER_VALUE_LENGTH {
-                                    return Ok(error_response(
-                                        StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE,
-                                        &format!("header '{}' exceeds maximum value length", name.as_str()),
-                                    ));
-                                }
-                            }
-
-                            req.extensions_mut().insert(peer_addr);
-
-                            metrics.record_request();
-
-                            #[cfg(feature = "ws")]
-                            if let Some(ref handler) = ws_handler {
-                                let is_ws = req.headers().get(hyper::header::UPGRADE)
-                                    .and_then(|v| v.to_str().ok())
-                                    .map(|s| s.eq_ignore_ascii_case("websocket"))
-                                    .unwrap_or(false);
-
-                                if is_ws {
-                                    if let Some(key) = req.headers().get("sec-websocket-key") {
-                                        let key_str = key.to_str().unwrap_or("");
-                                        let mut sha1 = sha1::Sha1::new();
-                                        use sha1::Digest;
-                                        sha1.update(key_str.as_bytes());
-                                        sha1.update(b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
-                                        use base64::Engine;
-                                        let accept_key = base64::engine::general_purpose::STANDARD.encode(sha1.finalize());
-
-                                        let mut res = crate::json_response(StatusCode::SWITCHING_PROTOCOLS, "");
-                                        res.headers_mut().insert(hyper::header::UPGRADE, hyper::header::HeaderValue::from_static("websocket"));
-                                        res.headers_mut().insert(hyper::header::CONNECTION, hyper::header::HeaderValue::from_static("upgrade"));
-                                        res.headers_mut().insert("sec-websocket-accept", hyper::header::HeaderValue::from_str(&accept_key).unwrap());
-
-                                        let handler = handler.clone();
-                                        let ws_info = WsConnInfo {
-                                            path: path.clone(),
-                                            query_string: req.uri().query().unwrap_or("").as_bytes().to_vec(),
-                                            headers: req
-                                                .headers()
-                                                .iter()
-                                                .map(|(k, v)| (k.as_str().as_bytes().to_vec(), v.as_bytes().to_vec()))
-                                                .collect(),
-                                            client: Some((peer_addr.ip().to_string(), peer_addr.port())),
-                                        };
-
-                                        tokio::task::spawn(async move {
-                                            match hyper::upgrade::on(&mut req).await {
-                                                Ok(upgraded) => {
-                                                    let upgraded_io = hyper_util::rt::TokioIo::new(upgraded);
-                                                    let ws_stream = tokio_tungstenite::WebSocketStream::from_raw_socket(
-                                                        upgraded_io,
-                                                        tokio_tungstenite::tungstenite::protocol::Role::Server,
-                                                        None
-                                                    ).await;
-                                                    let (write, read) = ws_stream.split();
-                                                    dispatch_ws(Box::new(read), Box::new(write), ws_info, &handler).await;
-                                                }
-                                                Err(e) => tracing::error!("WebSocket upgrade error: {}", e),
-                                            }
-                                        });
-                                        return Ok(res);
-                                    }
-                                }
-                            }
-
-                            #[cfg(feature = "wasm")]
-                            if let Some(ref wasm) = wasm_middleware {
-                                let mut hdrs = serde_json::Map::new();
-                                for (k, v) in req.headers() {
-                                    if let Ok(v_str) = v.to_str() {
-                                        hdrs.insert(
-                                            k.as_str().to_string(),
-                                            serde_json::Value::String(v_str.to_string()),
-                                        );
-                                    }
-                                }
-                                let req_json = serde_json::json!({
-                                    "path": path,
-                                    "method": req.method().as_str(),
-                                    "headers": hdrs,
-                                })
-                                .to_string();
-
-                                match wasm.execute_middleware(&req_json).await {
-                                    Ok(res_json) => {
-                                        if let Ok(parsed) =
-                                            serde_json::from_str::<serde_json::Value>(&res_json)
-                                        {
-                                            if let Some(status) = parsed.get("status") {
-                                                if let Some(status_code) = status.as_u64() {
-                                                    if status_code != 200 {
-                                                        let body = parsed
-                                                            .get("body")
-                                                            .and_then(|v| v.as_str())
-                                                            .unwrap_or("")
-                                                            .to_string();
-                                                        metrics.record_status(
-                                                            StatusCode::from_u16(
-                                                                status_code as u16,
-                                                            )
-                                                            .unwrap_or(StatusCode::FORBIDDEN),
-                                                        );
-                                                        metrics.record_latency(
-                                                            start.elapsed().as_secs_f64() * 1000.0,
-                                                        );
-                                                        return Ok(json_response(
-                                                            StatusCode::from_u16(
-                                                                status_code as u16,
-                                                            )
-                                                            .unwrap_or(StatusCode::FORBIDDEN),
-                                                            &body,
-                                                        ));
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                    Err(e) => {
-                                        tracing::error!("WASM execution error: {:?}", e);
-                                    }
-                                }
-                            }
-
-                            let method = req.method().clone();
-                            let resp = tokio::time::timeout(request_timeout(), chain.run(req)).await;
-
-                            match resp {
-                                Ok(r) => match r {
-                                    Ok(response) => {
-                                    let status = response.status();
-                                    metrics.record_status(status);
-                                    metrics.record_latency(start.elapsed().as_secs_f64() * 1000.0);
-
-                                    if status == StatusCode::NOT_FOUND {
-                                        if let Some(resp) = try_serve_static(&path, &static_dir, &static_mounts).await {
-                                            return Ok::<_, anyhow::Error>(resp);
-                                        }
-                                    }
-                                    Ok(response)
-                                }
-                                Err(_) => {
-                                    metrics.record_status(StatusCode::NOT_FOUND);
-                                    metrics.record_latency(start.elapsed().as_secs_f64() * 1000.0);
-
-                                    if let Some(resp) = try_serve_static(&path, &static_dir, &static_mounts).await {
-                                        return Ok::<_, anyhow::Error>(resp);
-                                    }
-                                    Ok(error_response(
-                                        StatusCode::NOT_FOUND,
-                                        "not found",
-                                    ))
-                                },
-                        },
-                        Err(_) => {
-                            // Handler exceeded the request timeout.
-                            metrics.record_status(StatusCode::GATEWAY_TIMEOUT);
-                            metrics.record_latency(start.elapsed().as_secs_f64() * 1000.0);
-                            tracing::warn!(
-                                "Request to {} {} timed out after {:?}",
-                                method,
-                                path,
-                                request_timeout()
-                            );
-                            Ok(error_response(
-                                StatusCode::GATEWAY_TIMEOUT,
-                                "request timeout",
-                            ))
+                            handle_request(
+                                req,
+                                Some(peer_addr),
+                                chain,
+                                static_dir,
+                                static_mounts,
+                                metrics,
+                                #[cfg(feature = "wasm")]
+                                wasm_middleware,
+                                #[cfg(feature = "ws")]
+                                ws_handler,
+                            )
+                            .await
                         }
-                    }
-                    }
-                });
+                    });
 
-                    let mut builder = hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new());
-                    builder.http1().timer(hyper_util::rt::TokioTimer::new()).header_read_timeout(HEADER_READ_TIMEOUT);
+                    let mut builder = hyper_util::server::conn::auto::Builder::new(
+                        hyper_util::rt::TokioExecutor::new(),
+                    );
+                    builder
+                        .http1()
+                        .timer(hyper_util::rt::TokioTimer::new())
+                        .header_read_timeout(HEADER_READ_TIMEOUT);
                     let mut conn = std::pin::pin!(builder.serve_connection_with_upgrades(io, svc));
 
                     if let Some(token) = token_clone {

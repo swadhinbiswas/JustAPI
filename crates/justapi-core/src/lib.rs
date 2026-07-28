@@ -24,6 +24,7 @@ pub mod openai;
 pub mod openapi;
 pub mod panic;
 pub mod plugin;
+#[cfg(feature = "redis-rate-limit")]
 pub mod rate_limit;
 pub mod resilience;
 pub mod router;

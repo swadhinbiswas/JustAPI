@@ -341,7 +341,7 @@ fn format_validators() -> &'static HashMap<String, Arc<FormatChecker>> {
 /// `format` checkers so `format: "email"` etc. are actually asserted.
 fn build_validator(schema_json: &str, schema_value: &serde_json::Value) -> PyResult<Validator> {
     {
-        let cache = schema_validator_cache().lock().unwrap();
+        let cache = schema_validator_cache().lock().unwrap_or_else(|e| e.into_inner());
         if let Some(v) = cache.get(schema_json) {
             return Ok(v.clone());
         }
@@ -355,7 +355,10 @@ fn build_validator(schema_json: &str, schema_value: &serde_json::Value) -> PyRes
         .should_validate_formats(true)
         .build(schema_value)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("schema error: {e}")))?;
-    schema_validator_cache().lock().unwrap().insert(schema_json.to_string(), v.clone());
+    schema_validator_cache()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(schema_json.to_string(), v.clone());
     Ok(v)
 }
 
@@ -826,14 +829,14 @@ impl JustAPIApp {
             None => serde_json::Value::Object(serde_json::Map::new()),
         };
         let id = id.unwrap_or_else(|| Uuid::new_v4().simple().to_string());
-        self.sessions.lock().unwrap().insert(id.clone(), value);
+        self.sessions.lock().unwrap_or_else(|e| e.into_inner()).insert(id.clone(), value);
         Ok(id)
     }
 
     /// Return a session's JSON value as a string, or `None` if unknown.
     #[pyo3(name = "get_session")]
     fn get_session_rs(&self, id: String) -> Option<String> {
-        self.sessions.lock().unwrap().get(&id).map(|v| v.to_string())
+        self.sessions.lock().unwrap_or_else(|e| e.into_inner()).get(&id).map(|v| v.to_string())
     }
 
     /// Overwrite a session's value with `json`. Returns `false` if unknown.
@@ -842,7 +845,7 @@ impl JustAPIApp {
         let value: serde_json::Value = serde_json::from_str(&json).map_err(|e| {
             pyo3::exceptions::PyValueError::new_err(format!("invalid session JSON: {e}"))
         })?;
-        let mut store = self.sessions.lock().unwrap();
+        let mut store = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
         match store.entry(id) {
             std::collections::hash_map::Entry::Occupied(mut e) => {
                 e.insert(value);
@@ -859,7 +862,7 @@ impl JustAPIApp {
         let incoming: serde_json::Value = serde_json::from_str(&json).map_err(|e| {
             pyo3::exceptions::PyValueError::new_err(format!("invalid session JSON: {e}"))
         })?;
-        let mut store = self.sessions.lock().unwrap();
+        let mut store = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
         match store.get_mut(&id) {
             None => Ok(false),
             Some(existing) => {
@@ -880,7 +883,7 @@ impl JustAPIApp {
     /// Delete a session. Returns `true` if it existed.
     #[pyo3(name = "delete_session")]
     fn delete_session_rs(&self, id: String) -> bool {
-        self.sessions.lock().unwrap().remove(&id).is_some()
+        self.sessions.lock().unwrap_or_else(|e| e.into_inner()).remove(&id).is_some()
     }
 
     #[allow(clippy::too_many_arguments)]

@@ -106,6 +106,7 @@ export default defineConfig({
             { label: 'First Steps', link: 'getting-started/first-steps/' },
             { label: 'CLI Project Scaffolder', link: 'getting-started/cli-scaffolder/' },
             { label: 'Migrating from FastAPI', link: 'getting-started/migrating-from-fastapi/' },
+            { label: 'Migration from Robyn/Granian', link: 'getting-started/migration-guide/' },
           ],
         },
         {
@@ -206,6 +207,8 @@ export default defineConfig({
           label: 'How-To Recipes',
           items: [
             { label: 'Overview', link: 'how-to/' },
+            { label: 'Troubleshooting', link: 'how-to/troubleshooting/' },
+            { label: 'Performance Tuning', link: 'how-to/performance-tuning/' },
             { label: 'GraphQL Integration', link: 'how-to/graphql/' },
             { label: 'Custom Request & Route Classes', link: 'how-to/custom-request-route/' },
             { label: 'Configure Swagger UI', link: 'how-to/configure-swagger-ui/' },
@@ -282,6 +285,7 @@ export default defineConfig({
           items: [
             { label: 'CLI Reference', link: 'reference/cli/' },
             { label: 'Configuration', link: 'reference/configuration/' },
+            { label: 'API Stability', link: 'reference/api-stability/' },
             { label: 'Release Notes', link: 'reference/release-notes/' },
             { label: 'ADR Index', link: 'reference/adr-index/' },
             { label: 'Error Codes', link: 'reference/error-codes/' },

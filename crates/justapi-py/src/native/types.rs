@@ -31,7 +31,11 @@ impl StreamSender {
         let _ = self.tx.send(Err(anyhow::anyhow!("{}", msg)));
     }
 
-    fn close(&self) {}
+    fn close(&self) {
+        // Channel closes automatically when all senders are dropped.
+        // This method exists for Starlette API compatibility but is a no-op
+        // since the channel lifecycle is managed by Rust's ownership system.
+    }
 }
 
 #[pyclass(name = "TokenStreamResponse", subclass)]

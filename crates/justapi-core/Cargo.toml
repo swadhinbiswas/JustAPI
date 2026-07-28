@@ -19,6 +19,7 @@ orjson = []
 wasm = ["dep:wasmtime"]
 graphql = ["dep:async-graphql"]
 grpc = ["dep:tonic", "dep:prost"]
+redis-rate-limit = ["dep:redis"]
 
 [dependencies]
 tokio.workspace = true
@@ -69,7 +70,7 @@ http-body = "1.0"
 multer = "3.1"
 bytes = "1.12.0"
 wasmtime = { version = "46.0.1", optional = true }
-redis = { version = "1.3.0", features = ["tokio-comp", "connection-manager"] }
+redis = { version = "1.3.0", features = ["tokio-comp", "connection-manager"], optional = true }
 notify = "8.2.0"
 arc-swap = "1.9.2"
 async-graphql = { version = "7.2.1", optional = true }

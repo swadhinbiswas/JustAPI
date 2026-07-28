@@ -38,7 +38,7 @@ impl UploadFile {
     /// Provided for parity with FastAPI; prefer the async `read`/`write`.
     #[getter]
     fn file(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let path = self.inner.lock().unwrap().temp_path.clone();
+        let path = self.inner.lock().unwrap_or_else(|e| e.into_inner()).temp_path.clone();
         let io = py.import("io")?;
         let f = io.call_method1("open", (path, "rb"))?;
         Ok(f.unbind())
@@ -52,7 +52,7 @@ impl UploadFile {
         future_into_py(py, async move {
             let inner = inner.clone();
             let data = tokio::task::spawn_blocking(move || -> PyResult<Vec<u8>> {
-                let mut g = inner.lock().unwrap();
+                let mut g = inner.lock().unwrap_or_else(|e| e.into_inner());
                 if g.closed {
                     return Err(pyo3::exceptions::PyValueError::new_err("file is closed"));
                 }
@@ -80,7 +80,7 @@ impl UploadFile {
         future_into_py(py, async move {
             let inner = inner.clone();
             tokio::task::spawn_blocking(move || -> PyResult<()> {
-                let mut g = inner.lock().unwrap();
+                let mut g = inner.lock().unwrap_or_else(|e| e.into_inner());
                 if g.closed {
                     return Err(pyo3::exceptions::PyValueError::new_err("file is closed"));
                 }
@@ -107,7 +107,7 @@ impl UploadFile {
         future_into_py(py, async move {
             let inner = inner.clone();
             let new_pos = tokio::task::spawn_blocking(move || -> PyResult<u64> {
-                let mut g = inner.lock().unwrap();
+                let mut g = inner.lock().unwrap_or_else(|e| e.into_inner());
                 if g.closed {
                     return Err(pyo3::exceptions::PyValueError::new_err("file is closed"));
                 }
@@ -131,7 +131,7 @@ impl UploadFile {
         future_into_py(py, async move {
             let inner = inner.clone();
             tokio::task::spawn_blocking(move || -> PyResult<()> {
-                let mut g = inner.lock().unwrap();
+                let mut g = inner.lock().unwrap_or_else(|e| e.into_inner());
                 if g.closed {
                     return Ok(());
                 }
@@ -166,7 +166,7 @@ impl UploadFile {
 
 impl Drop for UploadFile {
     fn drop(&mut self) {
-        let g = self.inner.lock().unwrap();
+        let g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         if !g.closed {
             let _ = fs::remove_file(&g.temp_path);
         }

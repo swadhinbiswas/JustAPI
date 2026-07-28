@@ -21,7 +21,7 @@ impl Codec for RawBytesCodec {
         RawBytesEncoder
     }
     fn decoder(&mut self) -> Self::Decoder {
-        RawBytesDecoder
+        RawBytesDecoder::default()
     }
 }
 
@@ -38,8 +38,25 @@ impl Encoder for RawBytesEncoder {
     }
 }
 
-#[derive(Default, Clone)]
-pub struct RawBytesDecoder;
+/// Maximum allowed gRPC message size (4 MiB default).
+const MAX_GRPC_MESSAGE_SIZE: usize = 4 * 1024 * 1024;
+
+#[derive(Clone)]
+pub struct RawBytesDecoder {
+    max_message_size: usize,
+}
+
+impl Default for RawBytesDecoder {
+    fn default() -> Self {
+        Self { max_message_size: MAX_GRPC_MESSAGE_SIZE }
+    }
+}
+
+impl RawBytesDecoder {
+    pub fn new(max_message_size: usize) -> Self {
+        Self { max_message_size }
+    }
+}
 
 impl Decoder for RawBytesDecoder {
     type Item = Vec<u8>;
@@ -47,6 +64,13 @@ impl Decoder for RawBytesDecoder {
 
     fn decode(&mut self, src: &mut DecodeBuf<'_>) -> Result<Option<Self::Item>, Self::Error> {
         if src.has_remaining() {
+            let remaining = src.chunk().len();
+            if remaining > self.max_message_size {
+                return Err(Status::resource_exhausted(format!(
+                    "gRPC message too large: {} bytes (max {})",
+                    remaining, self.max_message_size
+                )));
+            }
             let chunk = src.chunk().to_vec();
             src.advance(chunk.len());
             Ok(Some(chunk))

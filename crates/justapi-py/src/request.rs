@@ -1149,7 +1149,7 @@ impl RequestStream {
 
     fn __anext__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let chunk = {
-            let mut done = self.done.lock().unwrap();
+            let mut done = self.done.lock().unwrap_or_else(|e| e.into_inner());
             if *done {
                 return Err(pyo3::exceptions::PyStopAsyncIteration::new_err(()));
             }

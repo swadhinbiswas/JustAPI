@@ -64,11 +64,25 @@ impl StaticDir {
             return None;
         }
         let path = self.root.join(relative);
-        // Ensure the resolved path is still under root
-        if path.starts_with(&*self.root) {
-            Some(path)
-        } else {
-            None
+        // Try to canonicalize both the resolved path and root to catch symlinks.
+        // If canonicalize fails (path doesn't exist yet), fall back to starts_with check.
+        match (path.canonicalize(), self.root.canonicalize()) {
+            (Ok(canonical), Ok(root_canonical)) => {
+                if canonical.starts_with(&root_canonical) {
+                    Some(path)
+                } else {
+                    None
+                }
+            }
+            // Path doesn't exist yet — fall back to string-prefix check.
+            // This is safe because we already blocked `..` traversal above.
+            _ => {
+                if path.starts_with(&*self.root) {
+                    Some(path)
+                } else {
+                    None
+                }
+            }
         }
     }
 
@@ -118,6 +132,8 @@ impl StaticDir {
                 "cache-control",
                 "public, max-age=3600".parse().expect("valid cache-control"),
             );
+            resp.headers_mut()
+                .insert("x-content-type-options", "nosniff".parse().expect("valid header"));
             return Ok(resp);
         }
 
@@ -136,6 +152,8 @@ impl StaticDir {
         resp.headers_mut().insert("etag", etag.parse().expect("valid etag"));
         resp.headers_mut()
             .insert("cache-control", "public, max-age=3600".parse().expect("valid cache-control"));
+        resp.headers_mut()
+            .insert("x-content-type-options", "nosniff".parse().expect("valid header"));
 
         Ok(resp)
     }
@@ -205,6 +223,7 @@ impl StaticDir {
             resp.headers_mut().insert("etag", etag.parse().unwrap());
             resp.headers_mut().insert("cache-control", "public, max-age=3600".parse().unwrap());
             resp.headers_mut().insert("accept-ranges", "bytes".parse().unwrap());
+            resp.headers_mut().insert("x-content-type-options", "nosniff".parse().unwrap());
             return Ok(resp);
         }
 
@@ -221,6 +240,7 @@ impl StaticDir {
         resp.headers_mut().insert("etag", etag.parse().unwrap());
         resp.headers_mut().insert("cache-control", "public, max-age=3600".parse().unwrap());
         resp.headers_mut().insert("accept-ranges", "bytes".parse().unwrap());
+        resp.headers_mut().insert("x-content-type-options", "nosniff".parse().unwrap());
 
         Ok(resp)
     }
@@ -258,6 +278,7 @@ impl StaticDir {
             .header("etag", etag)
             .header("accept-ranges", "bytes")
             .header("cache-control", "public, max-age=3600")
+            .header("x-content-type-options", "nosniff")
             .body(body)
             .unwrap();
 

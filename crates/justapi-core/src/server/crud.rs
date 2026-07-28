@@ -45,12 +45,97 @@ pub struct CrudSpec {
     pub id_column: String,
 }
 
+impl CrudSpec {
+    /// Validate that table and id_column are safe SQL identifiers.
+    /// Returns an error if either contains characters that could enable SQL injection.
+    pub fn validate(&self) -> Result<(), String> {
+        if !is_valid_sql_identifier(&self.table) {
+            return Err(format!(
+                "Invalid table name '{}': must be a valid SQL identifier (alphanumeric + underscore)",
+                self.table
+            ));
+        }
+        if !is_valid_sql_identifier(&self.id_column) {
+            return Err(format!(
+                "Invalid id_column '{}': must be a valid SQL identifier (alphanumeric + underscore)",
+                self.id_column
+            ));
+        }
+        for col in &self.columns {
+            if !is_valid_sql_identifier(col) {
+                return Err(format!(
+                    "Invalid column name '{}': must be a valid SQL identifier (alphanumeric + underscore)",
+                    col
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
 fn is_allowed(columns: &[String], name: &str) -> bool {
     columns.iter().any(|c| c.eq_ignore_ascii_case(name))
 }
 
+/// Validate that a string is a safe SQL identifier (alphanumeric + underscore only).
+/// Prevents SQL injection via table names and column names that are interpolated
+/// into SQL queries. Returns `false` if the name contains any dangerous characters.
+fn is_valid_sql_identifier(name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    let mut chars = name.chars();
+    // First character must be a letter or underscore
+    let first = chars.next().unwrap();
+    if !first.is_ascii_alphabetic() && first != '_' {
+        return false;
+    }
+    // Remaining characters must be alphanumeric or underscore
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Percent-decode a URL-encoded string (e.g., `hello%20world` → `hello world`).
+/// Handles `+` as space and `%XX` hex sequences.
+fn percent_decode(s: &str) -> String {
+    let mut result = Vec::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => {
+                result.push(b' ');
+                i += 1;
+            }
+            b'%' if i + 2 < bytes.len() => {
+                if let (Some(hi), Some(lo)) = (hex_digit(bytes[i + 1]), hex_digit(bytes[i + 2])) {
+                    result.push(hi * 16 + lo);
+                    i += 3;
+                } else {
+                    result.push(bytes[i]);
+                    i += 1;
+                }
+            }
+            b => {
+                result.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&result).into_owned()
+}
+
+fn hex_digit(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
 /// Parse a form-style query string (`a=1&b=2`) into an ordered list of
 /// `(key, value)` pairs, keeping only keys present in `allowed`.
+/// Values are percent-decoded (e.g., `hello%20world` → `hello world`).
 fn parse_query(filter: &[u8], allowed: &[String]) -> Vec<(String, String)> {
     let s = String::from_utf8_lossy(filter);
     let mut out = Vec::new();
@@ -62,9 +147,9 @@ fn parse_query(filter: &[u8], allowed: &[String]) -> Vec<(String, String)> {
             Some((k, v)) => (k, v),
             None => (pair, ""),
         };
-        let k = k.to_string();
+        let k = percent_decode(k);
         if is_allowed(allowed, &k) {
-            out.push((k, v.to_string()));
+            out.push((k, percent_decode(v)));
         }
     }
     out

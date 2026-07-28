@@ -39,7 +39,12 @@ struct Job {
 impl Job {
     /// Compute the next fire time given "now", advancing past any missed tick.
     fn compute_next(&self, now_ms: i64) -> Option<i64> {
-        compute_next(&self.cron, self.interval, *self.last_fire_ms.lock().unwrap(), now_ms)
+        compute_next(
+            &self.cron,
+            self.interval,
+            *self.last_fire_ms.lock().unwrap_or_else(|e| e.into_inner()),
+            now_ms,
+        )
     }
 }
 
@@ -118,8 +123,8 @@ impl Scheduler {
             .expect("scheduler runtime");
         let inner_clone = Arc::clone(inner);
         let handle = rt.spawn(async move { tick_loop(inner_clone).await });
-        *inner.rt.lock().unwrap() = Some(rt);
-        *inner.handle.lock().unwrap() = Some(handle);
+        *inner.rt.lock().unwrap_or_else(|e| e.into_inner()) = Some(rt);
+        *inner.handle.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
     }
 
     fn stop() {
@@ -127,10 +132,10 @@ impl Scheduler {
         if !inner.running.swap(false, Ordering::SeqCst) {
             return;
         }
-        if let Some(h) = inner.handle.lock().unwrap().take() {
+        if let Some(h) = inner.handle.lock().unwrap_or_else(|e| e.into_inner()).take() {
             h.abort();
         }
-        if let Some(rt) = inner.rt.lock().unwrap().take() {
+        if let Some(rt) = inner.rt.lock().unwrap_or_else(|e| e.into_inner()).take() {
             rt.shutdown_timeout(Duration::from_millis(500));
         }
     }
@@ -146,13 +151,13 @@ async fn tick_loop(inner: Arc<SchedulerInner>) {
             break;
         }
         let now_ms = Utc::now().timestamp_millis();
-        let jobs = inner.jobs.lock().unwrap();
+        let jobs = inner.jobs.lock().unwrap_or_else(|e| e.into_inner());
         for job in jobs.iter() {
             // Resolve next-fire if not yet computed.
-            let mut next = *job.next_fire_ms.lock().unwrap();
+            let mut next = *job.next_fire_ms.lock().unwrap_or_else(|e| e.into_inner());
             if next.is_none() {
                 next = job.compute_next(now_ms);
-                *job.next_fire_ms.lock().unwrap() = next;
+                *job.next_fire_ms.lock().unwrap_or_else(|e| e.into_inner()) = next;
             }
             let due = match next {
                 Some(t) => t <= now_ms,
@@ -170,10 +175,10 @@ async fn tick_loop(inner: Arc<SchedulerInner>) {
                 });
                 submit_py_task(func, args, kwargs);
                 inner.stats.fired.fetch_add(1, Ordering::Relaxed);
-                *job.last_fire_ms.lock().unwrap() = Some(now_ms);
+                *job.last_fire_ms.lock().unwrap_or_else(|e| e.into_inner()) = Some(now_ms);
                 // Advance to the next fire time.
                 let adv = job.compute_next(now_ms);
-                *job.next_fire_ms.lock().unwrap() = adv;
+                *job.next_fire_ms.lock().unwrap_or_else(|e| e.into_inner()) = adv;
             }
         }
     }
@@ -216,7 +221,7 @@ impl PyScheduler {
             last_fire_ms: Mutex::new(None),
             next_fire_ms: Mutex::new(None),
         };
-        inner.jobs.lock().unwrap().push(job);
+        inner.jobs.lock().unwrap_or_else(|e| e.into_inner()).push(job);
         Ok(id)
     }
 
@@ -249,7 +254,7 @@ impl PyScheduler {
             last_fire_ms: Mutex::new(None),
             next_fire_ms: Mutex::new(None),
         };
-        inner.jobs.lock().unwrap().push(job);
+        inner.jobs.lock().unwrap_or_else(|e| e.into_inner()).push(job);
         Ok(id)
     }
 
@@ -268,7 +273,7 @@ impl PyScheduler {
     fn stats(&self, py: Python<'_>) -> PyResult<Py<PyDict>> {
         let inner = Scheduler::get();
         let d = PyDict::new(py);
-        d.set_item("jobs", inner.jobs.lock().unwrap().len())?;
+        d.set_item("jobs", inner.jobs.lock().unwrap_or_else(|e| e.into_inner()).len())?;
         d.set_item("fired", inner.stats.fired.load(Ordering::Relaxed))?;
         d.set_item("failed", inner.stats.failed.load(Ordering::Relaxed))?;
         d.set_item("running", inner.running.load(Ordering::SeqCst))?;
@@ -279,14 +284,20 @@ impl PyScheduler {
     fn jobs(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let inner = Scheduler::get();
         let list = PyList::empty(py);
-        for job in inner.jobs.lock().unwrap().iter() {
+        for job in inner.jobs.lock().unwrap_or_else(|e| e.into_inner()).iter() {
             let d = PyDict::new(py);
             d.set_item("id", job.id)?;
             d.set_item("name", &job.name)?;
             d.set_item("cron", job.cron.as_ref().map(|s| s.to_string()))?;
             d.set_item("interval_secs", job.interval.map(|i| i.as_secs()))?;
-            d.set_item("last_fire_ms", *job.last_fire_ms.lock().unwrap())?;
-            d.set_item("next_fire_ms", *job.next_fire_ms.lock().unwrap())?;
+            d.set_item(
+                "last_fire_ms",
+                *job.last_fire_ms.lock().unwrap_or_else(|e| e.into_inner()),
+            )?;
+            d.set_item(
+                "next_fire_ms",
+                *job.next_fire_ms.lock().unwrap_or_else(|e| e.into_inner()),
+            )?;
             list.append(d)?;
         }
         Ok(list.into_any().unbind())
@@ -295,7 +306,7 @@ impl PyScheduler {
     /// Remove a job by id. Returns True if found.
     fn remove(&self, job_id: u64) -> bool {
         let inner = Scheduler::get();
-        let mut jobs = inner.jobs.lock().unwrap();
+        let mut jobs = inner.jobs.lock().unwrap_or_else(|e| e.into_inner());
         let before = jobs.len();
         jobs.retain(|j| j.id != job_id);
         jobs.len() != before
@@ -305,7 +316,7 @@ impl PyScheduler {
 /// Used by `app.run()` to start the scheduler when jobs are registered.
 pub fn maybe_start_if_jobs() {
     let inner = Scheduler::get();
-    if !inner.jobs.lock().unwrap().is_empty() {
+    if !inner.jobs.lock().unwrap_or_else(|e| e.into_inner()).is_empty() {
         Scheduler::start();
     }
 }

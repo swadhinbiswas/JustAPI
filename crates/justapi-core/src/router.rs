@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use hyper::Method;
@@ -47,7 +47,7 @@ struct RouteCache<T> {
 #[derive(Debug)]
 struct CacheInner<T> {
     map: HashMap<(Method, String), CacheEntry<T>>,
-    order: Vec<(Method, String)>,
+    order: VecDeque<(Method, String)>,
 }
 
 impl<T: Clone> RouteCache<T> {
@@ -55,7 +55,7 @@ impl<T: Clone> RouteCache<T> {
         Self {
             inner: Mutex::new(CacheInner {
                 map: HashMap::with_capacity(capacity),
-                order: Vec::with_capacity(capacity),
+                order: VecDeque::with_capacity(capacity),
             }),
             capacity: capacity.max(1),
         }
@@ -71,11 +71,10 @@ impl<T: Clone> RouteCache<T> {
     fn insert(&self, key: (Method, String), entry: CacheEntry<T>) {
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         if !inner.map.contains_key(&key) {
-            inner.order.push(key.clone());
+            inner.order.push_back(key.clone());
             if inner.order.len() > self.capacity {
-                if let Some(old) = inner.order.first().cloned() {
+                if let Some(old) = inner.order.pop_front() {
                     inner.map.remove(&old);
-                    inner.order.remove(0);
                 }
             }
         }
