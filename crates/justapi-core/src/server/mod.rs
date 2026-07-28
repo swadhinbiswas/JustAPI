@@ -1821,6 +1821,7 @@ async fn serve_with_tls(
     static_mounts: Vec<StaticMount>,
     metrics: Metrics,
     shutdown: Option<CancellationToken>,
+    shutdown_timeout: std::time::Duration,
     #[cfg(feature = "wasm")] wasm_middleware: Option<Arc<crate::wasm::WasmEngine>>,
     #[cfg(feature = "ws")] ws_handler: Option<WsHandler>,
 ) -> Result<()> {
