@@ -1376,6 +1376,8 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
+    /// Skipped under Miri: ring FFI (OPENSSL_cpuid_setup) not supported by Miri.
+    #[cfg(not(miri))]
     #[tokio::test]
     async fn test_jwt_valid_token() {
         let handler: HandlerFn<TestBody> = Arc::new(|_req: Request<TestBody>| {
@@ -1537,6 +1539,8 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
+    /// Skipped under Miri: ring FFI (OPENSSL_cpuid_setup) not supported by Miri.
+    #[cfg(not(miri))]
     #[tokio::test]
     async fn test_jwt_roles_check() {
         let handler: HandlerFn<TestBody> = Arc::new(|_req: Request<TestBody>| {
@@ -1564,6 +1568,8 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
+    /// Skipped under Miri: ring FFI (OPENSSL_cpuid_setup) not supported by Miri.
+    #[cfg(not(miri))]
     #[tokio::test]
     async fn test_jwt_roles_missing() {
         let handler: HandlerFn<TestBody> = Arc::new(|_req: Request<TestBody>| {
@@ -1591,6 +1597,8 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     }
 
+    /// Skipped under Miri: ring FFI (OPENSSL_cpuid_setup) not supported by Miri.
+    #[cfg(not(miri))]
     #[tokio::test]
     async fn test_jwt_scopes_check() {
         let handler: HandlerFn<TestBody> = Arc::new(|_req: Request<TestBody>| {
@@ -1618,6 +1626,8 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
+    /// Skipped under Miri: ring FFI (OPENSSL_cpuid_setup) not supported by Miri.
+    #[cfg(not(miri))]
     #[tokio::test]
     async fn test_jwt_scopes_missing() {
         let handler: HandlerFn<TestBody> = Arc::new(|_req: Request<TestBody>| {
@@ -1837,6 +1847,8 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
+    /// Skipped under Miri: ring FFI (OPENSSL_cpuid_setup) not supported by Miri.
+    #[cfg(not(miri))]
     #[tokio::test]
     async fn oauth2_valid_credentials_returns_token() {
         let oauth2 = OAuth2Password::new(
