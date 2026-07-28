@@ -32,13 +32,13 @@ jobs:
           # 1. Build and run on PR branch
           cargo build --release -p justapi-bench --bin justapi-bench
           cargo run --release -p justapi-bench --bin justapi-bench -- --duration 10 > pr_bench.txt
-          PR_RPS=$(grep -oP 'Requests per second:\s*\K[0-9]+' pr_bench.txt || echo "0")
+          PR_RPS=$(grep -oP '\K[0-9]+(?= ops/sec)' pr_bench.txt || echo "0")
           
           # 2. Checkout main branch and run
           git checkout main
           cargo build --release -p justapi-bench --bin justapi-bench
           cargo run --release -p justapi-bench --bin justapi-bench -- --duration 10 > main_bench.txt
-          MAIN_RPS=$(grep -oP 'Requests per second:\s*\K[0-9]+' main_bench.txt || echo "0")
+          MAIN_RPS=$(grep -oP '\K[0-9]+(?= ops/sec)' main_bench.txt || echo "0")
           
           echo "Main RPS: $MAIN_RPS"
           echo "PR RPS: $PR_RPS"
