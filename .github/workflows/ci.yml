@@ -137,7 +137,7 @@ jobs:
       - name: Build and install justapi
         run: |
           uv venv --clear
-          uv pip install pytest httpx pydantic typing_extensions maturin
+          uv pip install pytest pytest-asyncio httpx pydantic typing_extensions maturin
           uv run maturin develop -m crates/justapi-py/Cargo.toml
 
       - name: Run pytest
