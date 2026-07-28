@@ -11,6 +11,7 @@ use crate::ResponseBody;
 
 /// The result of a single health check.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum HealthStatus {
     Healthy,
     Degraded(String),
@@ -76,13 +77,39 @@ impl HealthRegistry {
     }
 
     /// Run all registered checks and return a health report.
+    /// Checks are run in parallel with a per-check timeout of 5 seconds.
     pub async fn check_all(&self) -> HealthReport {
-        let mut components = Vec::with_capacity(self.checks.len());
-        for check in &self.checks {
-            let status = (check.func)().await;
-            components.push(ComponentStatus { name: check.name, status });
+        let check_timeout = std::time::Duration::from_secs(5);
+        let futs: Vec<_> = self
+            .checks
+            .iter()
+            .enumerate()
+            .map(|(i, check)| {
+                let func = check.func.clone();
+                async move {
+                    let status = match tokio::time::timeout(check_timeout, func()).await {
+                        Ok(status) => status,
+                        Err(_) => HealthStatus::Unhealthy(format!(
+                            "health check '{}' timed out after {}s",
+                            check.name,
+                            check_timeout.as_secs()
+                        )),
+                    };
+                    (i, check.name, status)
+                }
+            })
+            .collect();
+
+        let mut results = Vec::with_capacity(futs.len());
+        // Run all checks concurrently using join_all
+        let outcomes = futures::future::join_all(futs).await;
+        // Sort by original index to maintain registration order
+        let mut sorted = outcomes;
+        sorted.sort_by_key(|(i, _, _)| *i);
+        for (_, name, status) in sorted {
+            results.push(ComponentStatus { name, status });
         }
-        HealthReport { components }
+        HealthReport { components: results }
     }
 
     /// Produces an HTTP response for the `/health` endpoint.
@@ -114,6 +141,7 @@ impl HealthRegistry {
 
 /// The overall health status derived from all components.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum OverallHealth {
     Healthy,
     Degraded,

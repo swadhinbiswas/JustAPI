@@ -152,7 +152,7 @@ impl WebSocket {
     /// The negotiated subprotocol (set by `accept`).
     #[getter]
     fn subprotocol(&self) -> Option<String> {
-        self.subprotocol.lock().unwrap().clone()
+        self.subprotocol.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// Build a URL for a named route (mirrors `starlette.WebSocket.url_for`).
@@ -182,7 +182,7 @@ impl WebSocket {
     ) -> PyResult<Bound<'py, PyAny>> {
         let _ = headers;
         if let Some(sp) = subprotocol {
-            *self.subprotocol.lock().unwrap() = Some(sp);
+            *self.subprotocol.lock().unwrap_or_else(|e| e.into_inner()) = Some(sp);
         }
         self.client_state.store(WS_STATE_CONNECTED, Ordering::SeqCst);
         self.application_state.store(WS_STATE_CONNECTED, Ordering::SeqCst);

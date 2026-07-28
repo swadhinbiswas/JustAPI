@@ -8,30 +8,22 @@ use crate::json_response;
 use crate::middleware::HandlerFn;
 
 /// Wraps a handler fn so that panics are caught, logged, and converted to 500 responses.
+///
+/// NOTE: We no longer manipulate the global panic hook per-request (that was a race
+/// condition under concurrent load). The workspace `panic = "abort"` policy means
+/// genuine panics terminate the process and the supervisor restarts it. This wrapper
+/// uses `catch_unwind` to convert panics into 500 responses without touching global state.
 pub fn with_panic_recovery(handler: HandlerFn) -> HandlerFn {
     Arc::new(move |req: Request<Incoming>| {
         let handler = handler.clone();
         Box::pin(async move {
-            let prev = std::panic::take_hook();
-            std::panic::set_hook(Box::new(|info| {
-                let msg = info
-                    .payload()
-                    .downcast_ref::<&str>()
-                    .map(|s| s.to_string())
-                    .or_else(|| info.payload().downcast_ref::<String>().cloned())
-                    .unwrap_or_else(|| "unknown panic".to_string());
-                let location = info.location().map(|l| l.to_string()).unwrap_or_default();
-                tracing::error!(
-                    panic = true,
-                    message = %msg,
-                    location = %location,
-                    "Handler panicked"
-                );
-            }));
-
+            // SAFETY: The handler is wrapped in AssertUnwindSafe to catch panics.
+            // The workspace `panic = "abort"` policy means genuine panics terminate
+            // the process, so this is only needed for the catch_unwind path.
+            // If the handler holds Rc/RefCell/&mut across the catch point, this
+            // could lead to undefined states — but the handler is a Box<dyn Fn>
+            // which is Send + Sync, so interior mutability is the only concern.
             let result = std::panic::AssertUnwindSafe(handler(req)).catch_unwind().await;
-
-            std::panic::set_hook(prev);
 
             match result {
                 Ok(Ok(resp)) => Ok(resp),
@@ -42,10 +34,20 @@ pub fn with_panic_recovery(handler: HandlerFn) -> HandlerFn {
                         r#"{"detail":"Internal error"}"#,
                     ))
                 }
-                Err(_panic) => Ok(json_response(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    r#"{"detail":"Internal server error"}"#,
-                )),
+                Err(panic) => {
+                    let msg = if let Some(s) = panic.downcast_ref::<&str>() {
+                        s.to_string()
+                    } else if let Some(s) = panic.downcast_ref::<String>() {
+                        s.clone()
+                    } else {
+                        "unknown panic".to_string()
+                    };
+                    tracing::error!(panic = true, message = %msg, "Handler panicked");
+                    Ok(json_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        r#"{"detail":"Internal server error"}"#,
+                    ))
+                }
             }
         })
     })

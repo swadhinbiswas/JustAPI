@@ -73,3 +73,17 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "fuzz_websocket"
+path = "fuzz_targets/fuzz_websocket.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_grpc"
+path = "fuzz_targets/fuzz_grpc.rs"
+test = false
+doc = false
+bench = false
+

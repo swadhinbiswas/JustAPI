@@ -41,14 +41,34 @@ impl Secret {
     ///
     /// Tries env var first, then file, then returns the inline value.
     /// Never logs the resolved value (only the source name).
+    /// For file-based secrets, checks that the file is not world-readable.
     pub fn resolve(&self) -> Result<String, anyhow::Error> {
         match &self.source {
             SecretSource::Env(var) => {
                 std::env::var(var).map_err(|_| anyhow::anyhow!("env var {} not set", var))
             }
-            SecretSource::File(path) => std::fs::read_to_string(path)
-                .map(|s| s.trim().to_string())
-                .map_err(|e| anyhow::anyhow!("cannot read secret file {}: {}", path.display(), e)),
+            SecretSource::File(path) => {
+                // Check file permissions — warn if world-readable
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    if let Ok(meta) = std::fs::metadata(path) {
+                        let mode = meta.permissions().mode();
+                        // Check if "other" has read permission (bit 2 of mode)
+                        if mode & 0o004 != 0 {
+                            tracing::warn!(
+                                path = %path.display(),
+                                "Secret file is world-readable (mode {:o}). \
+                                 Consider restricting permissions to 0600.",
+                                mode
+                            );
+                        }
+                    }
+                }
+                std::fs::read_to_string(path).map(|s| s.trim().to_string()).map_err(|e| {
+                    anyhow::anyhow!("cannot read secret file {}: {}", path.display(), e)
+                })
+            }
             SecretSource::Inline(value) => Ok(value.clone()),
         }
     }

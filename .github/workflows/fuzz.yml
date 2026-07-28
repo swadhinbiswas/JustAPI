@@ -21,16 +21,22 @@ jobs:
       # Run every declared fuzz target. `cargo-fuzz` fails the job on the first
       # crash it finds, so any regression in a protocol/parser surface blocks CI.
       - name: Run fuzz_router
-        run: cargo +nightly fuzz run fuzz_router -- -max_total_time=60
+        run: cargo +nightly fuzz run fuzz_router -- -max_total_time=300
       - name: Run fuzz_file_paths
-        run: cargo +nightly fuzz run fuzz_file_paths -- -max_total_time=60
+        run: cargo +nightly fuzz run fuzz_file_paths -- -max_total_time=300
       - name: Run fuzz_multipart
-        run: cargo +nightly fuzz run fuzz_multipart -- -max_total_time=60
+        run: cargo +nightly fuzz run fuzz_multipart -- -max_total_time=300
       - name: Run fuzz_body
-        run: cargo +nightly fuzz run fuzz_body -- -max_total_time=60
+        run: cargo +nightly fuzz run fuzz_body -- -max_total_time=300
       - name: Run fuzz_query_params
-        run: cargo +nightly fuzz run fuzz_query_params -- -max_total_time=60
+        run: cargo +nightly fuzz run fuzz_query_params -- -max_total_time=300
       - name: Run fuzz_headers
-        run: cargo +nightly fuzz run fuzz_headers -- -max_total_time=60
+        run: cargo +nightly fuzz run fuzz_headers -- -max_total_time=300
       - name: Run fuzz_jwt
-        run: cargo +nightly fuzz run fuzz_jwt -- -max_total_time=60
+        run: cargo +nightly fuzz run fuzz_jwt -- -max_total_time=300
+      - name: Run fuzz_pipeline
+        run: cargo +nightly fuzz run fuzz_pipeline -- -max_total_time=300
+      - name: Run fuzz_websocket
+        run: cargo +nightly fuzz run fuzz_websocket -- -max_total_time=300
+      - name: Run fuzz_grpc
+        run: cargo +nightly fuzz run fuzz_grpc -- -max_total_time=300

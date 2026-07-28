@@ -57,6 +57,25 @@ impl GatewayState {
     }
 
     fn load_config(path: &Path) -> anyhow::Result<(GatewayConfigData, GatewayRouter)> {
+        // Security: check file permissions before reading
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(meta) = std::fs::metadata(path) {
+                let mode = meta.permissions().mode();
+                // Check if "other" has write permission (bit 1 of mode)
+                if mode & 0o002 != 0 {
+                    warn!(
+                        path = %path.display(),
+                        "Gateway config file is world-writable (mode {:o}). \
+                         This is a security risk — an attacker could redirect traffic. \
+                         Consider restricting permissions to 0600.",
+                        mode
+                    );
+                }
+            }
+        }
+
         let data = std::fs::read_to_string(path)?;
         let config: GatewayConfigData = serde_json::from_str(&data)?;
 
@@ -120,15 +139,13 @@ impl GatewayState {
         Ok(())
     }
 
-    pub fn get_route<'a, 'p>(
-        &'a self,
-        _method: &Method,
-        _path: &'p str,
-    ) -> Option<crate::router::Match<'a, 'p, GatewayRoute>> {
-        let _current_router = self.router.load();
-        // Since we are borrowing from `current_router` which is an Arc guard, we need to return owned or clone if we want to drop the guard.
-        // For simplicity, we can just return a clone of the `GatewayRoute` and its params.
-        None // Wait, we will implement this inside the Middleware where the guard lives.
+    pub fn get_route(
+        &self,
+        method: &Method,
+        path: &str,
+    ) -> Option<crate::router::RouteResolution<GatewayRoute>> {
+        let router_guard = self.router.load();
+        router_guard.inner.resolve(method, path).ok()
     }
 }
 

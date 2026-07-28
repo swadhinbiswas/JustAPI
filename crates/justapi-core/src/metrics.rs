@@ -131,11 +131,20 @@ impl Metrics {
     /// Record a response status code for status-breakdown tracking.
     pub fn record_status(&self, status: StatusCode) {
         let code: u16 = status.into();
-        match code / 100 {
-            2 => self.inner.status_2xx.fetch_add(1, Ordering::Relaxed),
-            3 => self.inner.status_3xx.fetch_add(1, Ordering::Relaxed),
-            4 => self.inner.status_4xx.fetch_add(1, Ordering::Relaxed),
-            _ => self.inner.status_5xx.fetch_add(1, Ordering::Relaxed),
+        match code {
+            200..=299 => {
+                self.inner.status_2xx.fetch_add(1, Ordering::Relaxed);
+            }
+            300..=399 => {
+                self.inner.status_3xx.fetch_add(1, Ordering::Relaxed);
+            }
+            400..=499 => {
+                self.inner.status_4xx.fetch_add(1, Ordering::Relaxed);
+            }
+            500..=599 => {
+                self.inner.status_5xx.fetch_add(1, Ordering::Relaxed);
+            }
+            _ => {} // 1xx informational codes are not counted
         };
     }
 

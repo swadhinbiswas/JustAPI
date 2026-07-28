@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   justapi:
     build:
@@ -25,9 +23,9 @@ services:
   db:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: justapi
-      POSTGRES_PASSWORD: justapi
-      POSTGRES_DB: justapi
+      POSTGRES_USER: ${POSTGRES_USER:-justapi}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: ${POSTGRES_DB:-justapi}
     ports:
       - "5432:5432"
     volumes:
@@ -49,7 +47,7 @@ services:
       retries: 5
 
   jaeger:
-    image: jaegertracing/all-in-one:latest
+    image: jaegertracing/all-in-one:1.62
     ports:
       - "16686:16686"
       - "4318:4318"

@@ -43,13 +43,13 @@ jobs:
         run: cargo fmt --check
 
       - name: Clippy
-        run: cargo clippy --workspace -- -D warnings
+        run: cargo clippy --workspace --tests -- -D warnings
 
       - name: Build
         run: cargo build --workspace
 
       - name: Test
-        run: cargo test --workspace
+        run: cargo test --workspace --all-features
 
   miri:
     name: Miri (justapi-core)
@@ -177,6 +177,67 @@ jobs:
         with:
           command: check
           arguments: --all-features
+
+  benchmark:
+    name: Benchmark Regression Gate
+    runs-on: ubuntu-latest
+    needs: [check]
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Python (for PyO3)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-bench-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bench-
+
+      - name: Build benchmark binary
+        run: cargo build --release -p justapi-bench
+
+      - name: Run benchmark
+        run: |
+          cargo run --release -p justapi-bench -- --duration 5 --connections 50 > bench_current.txt
+          
+      - name: Checkout main branch
+        run: git checkout main
+
+      - name: Build baseline benchmark
+        run: cargo build --release -p justapi-bench
+
+      - name: Run baseline benchmark
+        run: |
+          cargo run --release -p justapi-bench -- --duration 5 --connections 50 > bench_main.txt
+
+      - name: Compare benchmarks
+        run: |
+          CURRENT_RPS=$(grep -oP 'Requests/sec:\s+\K[\d.]+' bench_current.txt)
+          MAIN_RPS=$(grep -oP 'Requests/sec:\s+\K[\d.]+' bench_main.txt)
+          THRESHOLD=$(echo "$MAIN_RPS * 0.95" | bc)
+          
+          echo "Current: $CURRENT_RPS RPS"
+          echo "Main: $MAIN_RPS RPS"
+          echo "Threshold (95%): $THRESHOLD RPS"
+          
+          if (( $(echo "$CURRENT_RPS < $THRESHOLD" | bc -l) )); then
+            echo "::error::Benchmark regression detected! Current ($CURRENT_RPS) < 95% of main ($MAIN_RPS)"
+            exit 1
+          fi
+          
+          echo "Benchmark check passed"
 
   docker:
     name: Build & Push Docker Image

@@ -106,14 +106,14 @@ impl Body for FanoutBody {
         match Pin::new(&mut this.inner).poll_frame(cx) {
             Poll::Ready(Some(Ok(frame))) => {
                 if let Some(chunk) = frame.data_ref() {
-                    this.acc.lock().expect("coalesce buffer poisoned").extend_from_slice(chunk);
+                    this.acc.lock().unwrap_or_else(|e| e.into_inner()).extend_from_slice(chunk);
                 }
                 Poll::Ready(Some(Ok(frame)))
             }
             Poll::Ready(None) => {
                 if !this.finished {
                     this.finished = true;
-                    let full = this.acc.lock().expect("coalesce buffer poisoned").split().freeze();
+                    let full = this.acc.lock().unwrap_or_else(|e| e.into_inner()).split().freeze();
                     this_tx_send(&this.tx, full, this.status, &this.headers);
                 }
                 Poll::Ready(None)
@@ -131,7 +131,7 @@ impl Drop for FanoutBody {
     fn drop(&mut self) {
         if !self.finished {
             self.finished = true;
-            let full = self.acc.lock().expect("coalesce buffer poisoned").split().freeze();
+            let full = self.acc.lock().unwrap_or_else(|e| e.into_inner()).split().freeze();
             this_tx_send(&self.tx, full, self.status, &self.headers);
         }
     }

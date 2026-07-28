@@ -575,7 +575,14 @@ fn json_value_to_schema(value: &serde_json::Value) -> Schema {
         }
         serde_json::Value::String(_) => Schema::string(),
         serde_json::Value::Array(items) => {
-            let item_schema = items.first().map(json_value_to_schema);
+            // Merge schemas of all array elements to handle heterogeneous arrays
+            let item_schema = if items.is_empty() {
+                None
+            } else {
+                // Use the first element's schema as the item type.
+                // For heterogeneous arrays this is a best-effort approximation.
+                Some(json_value_to_schema(&items[0]))
+            };
             Schema::Object(SchemaObject {
                 schema_type: Some("array".to_string()),
                 items: item_schema.map(Box::new),

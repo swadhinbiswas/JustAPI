@@ -13,6 +13,7 @@ mod mail;
 mod message_builder;
 mod multipart;
 mod native;
+#[cfg(feature = "redis-rate-limit")]
 mod rate_limit;
 mod request;
 pub mod scheduler;
@@ -27,6 +28,7 @@ pub use database::{Database, DbParam, DbPool};
 pub use mail::PyMailer;
 pub use multipart::UploadFile;
 pub use native::{validate_value, TokenStreamResponse, ValidatedStreamResponse};
+#[cfg(feature = "redis-rate-limit")]
 pub use rate_limit::PyRateLimitResult;
 pub use request::{HTTPConnection, Headers, QueryParams, Request, RequestStream, State, URL};
 pub use websocket::WebSocket;
@@ -61,6 +63,7 @@ fn _justapi(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<buffer_test::ZeroCopyBuffer>()?;
     auth::register(m)?;
 
+    #[cfg(feature = "redis-rate-limit")]
     rate_limit::register(m)?;
     m.add_function(wrap_pyfunction!(_test_zero_copy, m)?)?;
     m.add_class::<native::JustAPIApp>()?;

@@ -31,6 +31,7 @@ pub fn colors_enabled() -> bool {
 
 /// Severity level for a [`Diagnostic`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum DiagLevel {
     /// A fatal problem that prevents the operation from completing.
     Error,
@@ -139,24 +140,24 @@ impl Diagnostic {
         out.push_str(self.level.label());
         if let Some(ref c) = self.code {
             out.push('[');
-            out.push_str(c);
+            out.push_str(&sanitize(c));
             out.push(']');
         }
         out.push_str(": ");
-        out.push_str(&self.message);
+        out.push_str(&sanitize(&self.message));
         out.push('\n');
 
         // Context
         if let Some(ref ctx) = self.context {
             out.push_str("  --> ");
-            out.push_str(ctx);
+            out.push_str(&sanitize(ctx));
             out.push('\n');
         }
 
         // Suggestions
         for s in &self.suggestions {
             out.push_str("   = help: ");
-            out.push_str(s);
+            out.push_str(&sanitize(s));
             out.push('\n');
         }
 
@@ -174,14 +175,14 @@ impl Diagnostic {
         out.push_str(self.level.label());
         if let Some(ref c) = self.code {
             out.push('[');
-            out.push_str(c);
+            out.push_str(&sanitize(c));
             out.push(']');
         }
         out.push_str(RESET);
         out.push_str(BOLD);
         out.push_str(WHITE);
         out.push_str(": ");
-        out.push_str(&self.message);
+        out.push_str(&sanitize(&self.message));
         out.push_str(RESET);
         out.push('\n');
 
@@ -189,7 +190,7 @@ impl Diagnostic {
         if let Some(ref ctx) = self.context {
             out.push_str(CYAN);
             out.push_str("  --> ");
-            out.push_str(ctx);
+            out.push_str(&sanitize(ctx));
             out.push_str(RESET);
             out.push('\n');
         }
@@ -198,7 +199,7 @@ impl Diagnostic {
         for s in &self.suggestions {
             out.push_str(GREEN);
             out.push_str("   = help: ");
-            out.push_str(s);
+            out.push_str(&sanitize(s));
             out.push_str(RESET);
             out.push('\n');
         }
@@ -223,7 +224,8 @@ impl fmt::Display for Diagnostic {
 /// Strip all ANSI CSI escape sequences from `input`.
 ///
 /// Useful in tests that need to assert on rendered diagnostic text
-/// regardless of colour settings.
+/// regardless of colour settings. Also used to sanitize user-supplied
+/// strings before rendering to prevent ANSI escape sequence injection.
 pub fn strip_ansi(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     let mut chars = input.chars();
@@ -240,6 +242,12 @@ pub fn strip_ansi(input: &str) -> String {
         }
     }
     out
+}
+
+/// Sanitize a user-supplied string by stripping ANSI escape sequences.
+/// This prevents terminal injection attacks when rendering diagnostics.
+fn sanitize(s: &str) -> String {
+    strip_ansi(s)
 }
 
 // ── Tests ────────────────────────────────────────────────────────────

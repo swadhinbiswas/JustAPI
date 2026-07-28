@@ -1,7 +1,7 @@
 # =============================================================================
 # Stage 1: Build the Rust CLI binary and Python wheel
 # =============================================================================
-FROM rust:1.75-bookworm AS builder
+FROM rust:1.85-bookworm AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libssl-dev pkg-config python3 python3-pip python3-venv \
@@ -52,4 +52,4 @@ USER justapi
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/live')"]
 
-ENTRYPOINT ["python", "demo_app.py"]
+ENTRYPOINT ["justapi", "serve"]

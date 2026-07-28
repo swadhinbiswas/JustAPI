@@ -101,13 +101,20 @@ pub struct CookieJar {
 
 impl CookieJar {
     /// Parse the `Cookie` header into a key-value map.
+    /// Handles quoted cookie values per RFC 6265 (e.g., `name="value"`).
     pub fn from_request<B>(req: &Request<B>) -> Self {
         let mut cookies = HashMap::new();
         if let Some(header) = req.headers().get("cookie").and_then(|v| v.to_str().ok()) {
             for pair in header.split(';') {
                 let pair = pair.trim();
                 if let Some((name, value)) = pair.split_once('=') {
-                    cookies.insert(url_decode(name.trim()), url_decode(value.trim()));
+                    let name = url_decode(name.trim());
+                    let mut value = url_decode(value.trim());
+                    // RFC 6265: strip surrounding quotes if present
+                    if value.len() >= 2 && value.starts_with('"') && value.ends_with('"') {
+                        value = value[1..value.len() - 1].to_string();
+                    }
+                    cookies.insert(name, value);
                 }
             }
         }

@@ -66,6 +66,10 @@ impl RateLimiter {
         replenish_rate: u64,
         tokens: u64,
     ) -> anyhow::Result<RateLimitResult> {
+        if replenish_rate == 0 {
+            return Err(anyhow::anyhow!("replenish_rate must be > 0"));
+        }
+
         match self {
             RateLimiter::Redis { client, script } => {
                 let mut conn = client.clone();

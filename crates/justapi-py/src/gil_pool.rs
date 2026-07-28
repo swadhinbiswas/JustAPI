@@ -168,7 +168,8 @@ fn profile_gil_pool(total_ns: u64) {
     }
     use std::sync::Mutex;
     static STATS: std::sync::OnceLock<Mutex<(u64, u128)>> = std::sync::OnceLock::new();
-    let mut s = STATS.get_or_init(|| Mutex::new((0u64, 0u128))).lock().unwrap();
+    let mut s =
+        STATS.get_or_init(|| Mutex::new((0u64, 0u128))).lock().unwrap_or_else(|e| e.into_inner());
     s.0 += 1;
     s.1 += total_ns as u128;
     if s.0.is_multiple_of(100_000) {

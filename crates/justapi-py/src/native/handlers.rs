@@ -36,6 +36,24 @@ fn db_acquire_error_response(e: DbAcquireError) -> Response<ResponseBody> {
 pub(crate) type CrudConfig = Arc<Vec<Option<(String, Vec<String>, String)>>>;
 
 use super::types::*;
+
+/// Shared state for both production and test handlers.
+/// Extracts the common parameters to reduce duplication between
+/// `make_native_handler` and `make_test_handler`.
+pub(crate) struct HandlerState {
+    pub router: Arc<Router<usize>>,
+    pub handlers: Arc<Vec<Py<PyAny>>>,
+    pub schemas: Arc<Vec<Option<Py<PyAny>>>>,
+    pub schema_jsons: Arc<Vec<Option<String>>>,
+    pub query_schema_jsons: Arc<Vec<Option<String>>>,
+    pub db_pool: Arc<Option<AnyPool>>,
+    pub db_url: Arc<Option<String>>,
+    pub app: Arc<Option<Py<PyAny>>>,
+    pub needs_request: Arc<Vec<bool>>,
+    pub native: Arc<Vec<bool>>,
+    pub schema_validators: Arc<Vec<Option<justapi_core::validate::CompiledValidator>>>,
+    pub max_body_size: usize,
+}
 #[allow(clippy::too_many_arguments)]
 /// Env-gated profiler for the GIL-path FFI cost. Activated only when the
 /// `JUSTAPI_PROFILE` environment variable is set; otherwise returns immediately
@@ -52,7 +70,10 @@ fn profile_gil_path(build_ns: u64, handler_ns: u64) {
     }
     use std::sync::Mutex;
     static STATS: std::sync::OnceLock<Mutex<(u64, u128, u128)>> = std::sync::OnceLock::new();
-    let mut s = STATS.get_or_init(|| Mutex::new((0u64, 0u128, 0u128))).lock().unwrap();
+    let mut s = STATS
+        .get_or_init(|| Mutex::new((0u64, 0u128, 0u128)))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     s.0 += 1;
     s.1 += build_ns as u128;
     s.2 += handler_ns as u128;
@@ -680,6 +701,11 @@ fn exception_detail(py: Python<'_>, val: &Bound<'_, PyAny>) -> serde_json::Value
 /// app.post("/users", create_user, schema=UserSchema)
 /// app.run("127.0.0.1:8080")
 /// ```
+/// Build the main request handler for the production server.
+///
+/// **IMPORTANT:** `make_test_handler` below duplicates much of this logic.
+/// Any bug fix or feature addition here MUST be mirrored there. See P2-4
+/// in deepanalysis.md for the tracked deduplication task.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn make_native_handler<B>(
     router: Arc<Router<usize>>,
@@ -1019,6 +1045,14 @@ where
 }
 
 /// Build a handler for the test client.
+///
+/// **IMPORTANT:** This duplicates much of `make_native_handler` above.
+/// Any bug fix or feature addition there MUST be mirrored here.
+/// The differences are:
+/// - Test handler uses hardcoded scheme ("http"), client (None), http_version ("1.1")
+/// - Test handler doesn't extract auth claims from request extensions
+/// - Test handler doesn't support batchers or crud_specs
+/// See P2-4 in deepanalysis.md for the tracked deduplication task.
 #[allow(clippy::too_many_arguments)]
 pub fn make_test_handler<B>(
     router: Arc<Router<usize>>,

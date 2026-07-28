@@ -59,7 +59,7 @@ struct TaskQueue {
 
 impl TaskQueue {
     fn push(&self, task: Task) {
-        let mut g = self.tasks.lock().unwrap();
+        let mut g = self.tasks.lock().unwrap_or_else(|e| e.into_inner());
         g.push_back(task);
         self.size.fetch_add(1, Ordering::Relaxed);
         self.not_empty.notify_one();
@@ -67,7 +67,7 @@ impl TaskQueue {
 
     /// Blocks until a task is available or shutdown is signalled.
     fn pop(&self) -> Option<Task> {
-        let mut g = self.tasks.lock().unwrap();
+        let mut g = self.tasks.lock().unwrap_or_else(|e| e.into_inner());
         loop {
             if let Some(t) = g.pop_front() {
                 self.size.fetch_sub(1, Ordering::Relaxed);
@@ -146,7 +146,7 @@ fn runner() -> &'static Arc<Runner> {
         for _ in 0..workers {
             let r = Arc::clone(&runner);
             let h = thread::spawn(move || worker(&r));
-            runner.handles.lock().unwrap().push(h);
+            runner.handles.lock().unwrap_or_else(|e| e.into_inner()).push(h);
         }
 
         runner
@@ -239,13 +239,14 @@ impl BackgroundTasks {
             args: args.clone().unbind(),
             kwargs: kwargs.map(|k| k.clone().unbind()),
         };
-        self.pending.lock().unwrap().push(task);
+        self.pending.lock().unwrap_or_else(|e| e.into_inner()).push(task);
         Ok(())
     }
 
     /// Schedule all queued tasks onto the shared Rust executor (non-blocking).
     fn run(&self) -> PyResult<()> {
-        let tasks: Vec<Task> = std::mem::take(&mut *self.pending.lock().unwrap());
+        let tasks: Vec<Task> =
+            std::mem::take(&mut *self.pending.lock().unwrap_or_else(|e| e.into_inner()));
         let r = runner();
         for t in tasks {
             r.enqueue(t);
@@ -258,7 +259,7 @@ impl BackgroundTasks {
     }
 
     fn task_count(&self) -> usize {
-        self.pending.lock().unwrap().len()
+        self.pending.lock().unwrap_or_else(|e| e.into_inner()).len()
     }
 
     /// Process-wide counters: submitted/active/completed/failed/dropped/async.
@@ -282,7 +283,7 @@ impl BackgroundTasks {
         r.queue.shutdown.store(true, Ordering::Relaxed);
         r.queue.not_empty.notify_all();
         if wait.unwrap_or(true) {
-            for h in r.handles.lock().unwrap().drain(..) {
+            for h in r.handles.lock().unwrap_or_else(|e| e.into_inner()).drain(..) {
                 let _ = h.join();
             }
         }
