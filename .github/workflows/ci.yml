@@ -142,7 +142,7 @@ jobs:
 
       - name: Run pytest
         run: |
-          uv run -- PYTHONPATH=./crates/justapi-py/python pytest -v --ignore=benchmarks --ignore=demo_shop --ignore=test_project
+          PYTHONPATH=./crates/justapi-py/python uv run pytest -v --ignore=benchmarks --ignore=demo_shop --ignore=test_project
 
   pytest-freethreaded:
     name: Pytest (Free-threaded Python)
