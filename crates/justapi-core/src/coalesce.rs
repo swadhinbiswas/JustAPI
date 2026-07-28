@@ -331,6 +331,9 @@ mod tests {
         assert_eq!(counter.load(Ordering::SeqCst), 1);
     }
 
+    /// This test is skipped under Miri due to a known tokio DuplexStream
+    /// Stacked Borrows violation (not a real bug in production code).
+    #[cfg(not(miri))]
     #[tokio::test]
     async fn concurrent_identical_gets_coalesce_to_one_handler_call() {
         let counter = Arc::new(AtomicU64::new(0));
@@ -392,6 +395,9 @@ mod tests {
         assert_eq!(counter2.load(Ordering::SeqCst), 1);
     }
 
+    /// This test is skipped under Miri due to a known tokio DuplexStream
+    /// Stacked Borrows violation (not a real bug in production code).
+    #[cfg(not(miri))]
     #[tokio::test]
     async fn leader_error_is_shared_with_waiters() {
         let counter = Arc::new(AtomicU64::new(0));
