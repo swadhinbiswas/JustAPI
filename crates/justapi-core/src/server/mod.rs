@@ -899,6 +899,7 @@ impl Server {
                 self.static_mounts.clone(),
                 metrics,
                 self.shutdown,
+                self.shutdown_timeout,
                 #[cfg(feature = "wasm")]
                 wasm_middleware,
                 ws_handler,
@@ -913,6 +914,7 @@ impl Server {
                 self.static_mounts.clone(),
                 metrics,
                 self.shutdown,
+                self.shutdown_timeout,
                 #[cfg(feature = "wasm")]
                 wasm_middleware,
             )
