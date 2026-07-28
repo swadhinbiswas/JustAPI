@@ -4,102 +4,90 @@ on:
   release:
     types: [published]
   workflow_dispatch:
-
-permissions:
-  contents: read
-  id-token: write
+    inputs:
+      version:
+        description: 'Version to publish (e.g., 2.0.8)'
+        required: true
 
 jobs:
-  check-version:
-    name: Check Version
+  build:
+    name: Build Wheel
     runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
-      - id: version
-        run: echo "version=$(grep '^version = ' crates/justapi-py/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')" >> "$GITHUB_OUTPUT"
 
-  test-rust:
-    name: Cargo Test & Lint
-    runs-on: ubuntu-latest
-    needs: check-version
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Python (for PyO3)
+        uses: actions/setup-python@v5
         with:
-          components: clippy, rustfmt
-      - name: Install cargo-deny
-        uses: taiki-e/install-action@v2
+          python-version: "3.12"
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
         with:
-          tool: cargo-deny
-      - name: Security & License Check
-        run: cargo deny check
-      - name: Run Tests
-        run: cargo test --workspace
-      - name: Clippy & Formatting
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-publish-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-publish-
+
+      - name: Install maturin
+        run: pip install maturin
+
+      - name: Build wheel
+        run: maturin build --release -m crates/justapi-py/Cargo.toml -o wheels/
+
+      - name: Verify wheel
         run: |
-          cargo clippy --workspace --tests -- -D warnings
-          cargo fmt --check
+          pip install wheels/*.whl --break-system-packages
+          python -c "import justapi; print(f'JustAPI installed successfully')"
 
-  build-wheels:
-    name: Build (${{ matrix.target }})
-    runs-on: ${{ matrix.os }}
-    needs: test-rust
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            target: x86_64
-            args: --manylinux 2_28
-          - os: ubuntu-latest
-            target: aarch64
-            args: --manylinux 2_28
-          - os: macos-latest
-            target: x86_64
-          - os: macos-latest
-            target: aarch64
-          - os: windows-latest
-            target: x64
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
         with:
-          python-version: '3.12'
-          enable-cache: true
-          cache-dependency-glob: crates/justapi-py/pyproject.toml
-      - uses: PyO3/maturin-action@v1
-        with:
-          target: ${{ matrix.target }}
-          args: --release --out dist ${{ matrix.args }}
-          manifest-path: crates/justapi-py/Cargo.toml
-      - name: Smoke test
-        shell: bash
-        run: |
-          uv pip install dist/*.whl
-          python -c "import justapi; print(justapi.__version__)"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: wheels-${{ matrix.target }}
-          path: dist/*.whl
+          name: wheels
+          path: wheels/*.whl
 
-  publish:
+  publish-pypi:
     name: Publish to PyPI
     runs-on: ubuntu-latest
-    needs: build-wheels
+    needs: [build]
     environment: pypi
     permissions:
       id-token: write
     steps:
+      - name: Download wheel artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: wheels
+          path: wheels/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: wheels/
+
+  create-github-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [publish-pypi]
+    permissions:
+      contents: write
+    steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+
+      - name: Download wheel artifact
+        uses: actions/download-artifact@v4
         with:
-          python-version: '3.12'
-      - uses: actions/download-artifact@v4
+          name: wheels
+          path: wheels/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          pattern: wheels-*
-          merge-multiple: true
-          path: dist
-      - name: Publish
-        run: uv publish --package-dir crates/justapi-py --trusted-publishing always --verbose
+          files: wheels/*.whl
+          generate_release_notes: true

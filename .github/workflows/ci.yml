@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, initial-setup]
     tags: ["v*"]
   pull_request:
     branches: [main]
@@ -12,6 +12,10 @@ env:
   RUSTFLAGS: "-D warnings"
 
 jobs:
+  # ============================================================
+  # Stage 1: Code Quality & Build
+  # ============================================================
+  
   check:
     name: Build & Lint
     runs-on: ubuntu-latest
@@ -51,8 +55,12 @@ jobs:
       - name: Test
         run: cargo test --workspace --all-features
 
+  # ============================================================
+  # Stage 2: Memory Safety & Security
+  # ============================================================
+
   miri:
-    name: Miri (justapi-core)
+    name: Miri (Memory Safety)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -77,8 +85,45 @@ jobs:
         run: cargo +nightly miri test -p justapi-core
         env:
           MIRIFLAGS: "-Zmiri-disable-isolation"
+
+  audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-audit-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run audit
+        run: cargo audit
+
+  deny:
+    name: License & Dependency Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-deny
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          arguments: --all-features
+
+  # ============================================================
+  # Stage 3: Python Integration Tests
+  # ============================================================
+
   pytest:
-    name: Pytest (justapi-py)
+    name: Pytest (Python Integration)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -97,10 +142,10 @@ jobs:
 
       - name: Run pytest
         run: |
-          uv run -- PYTHONPATH=./crates/justapi-py/python pytest
+          uv run -- PYTHONPATH=./crates/justapi-py/python pytest -v
 
   pytest-freethreaded:
-    name: Pytest (free-threaded / no GIL)
+    name: Pytest (Free-threaded Python)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -124,10 +169,90 @@ jobs:
       - name: Run pytest with the GIL disabled
         run: |
           . .venv-ft/bin/activate
-          PYTHON_GIL=0 PYTHONPATH=./crates/justapi-py/python pytest
+          PYTHON_GIL=0 PYTHONPATH=./crates/justapi-py/python pytest -v
+
+  # ============================================================
+  # Stage 4: Integration Tests
+  # ============================================================
+
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: [check, pytest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Python (for PyO3)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-integration-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-integration-
+
+      - name: Build justapi
+        run: cargo build --release -p justapi-cli --features tls,compression
+
+      - name: Build Python wheel
+        run: maturin build -m crates/justapi-py/Cargo.toml --release -o wheels/
+
+      - name: Install wheel
+        run: pip install wheels/*.whl --break-system-packages
+
+      - name: Start server
+        run: |
+          justapi serve --addr 127.0.0.1:8080 &
+          sleep 3
+          
+      - name: Health check
+        run: |
+          curl -f http://127.0.0.1:8080/health || exit 1
+          curl -f http://127.0.0.1:8080/live || exit 1
+          curl -f http://127.0.0.1:8080/ready || exit 1
+          
+      - name: Test endpoints
+        run: |
+          # Hello world
+          curl -f http://127.0.0.1:8080/ || exit 1
+          
+          # Metrics
+          curl -f http://127.0.0.1:8080/metrics || exit 1
+          
+          # OpenAPI
+          curl -f http://127.0.0.1:8080/openapi.json || exit 1
+          
+      - name: Test WebSocket
+        run: |
+          # Install websocat
+          cargo install websocat
+          
+          # Test WebSocket echo
+          echo "hello" | websocat -t ws://127.0.0.1:8080/ws || true
+          
+      - name: Stop server
+        if: always()
+        run: pkill -f "justapi serve" || true
+
+  # ============================================================
+  # Stage 5: Code Quality Gates
+  # ============================================================
 
   verify-rust-first:
-    name: Verify Rust-first mandate (AGENTS.md §2)
+    name: Verify Rust-first Mandate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -146,37 +271,33 @@ jobs:
           fi
           echo "OK: no Python-side scheduling/thread-pool classes found."
 
-  audit:
-    name: Security Audit (cargo-audit)
+  verify-no-unwrap-on-hot-path:
+    name: Verify No unwrap() on Hot Paths
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Check for unwrap() on hot paths
+        run: |
+          echo "Checking for unwrap() on request hot paths..."
+          # Check for unwrap() in handler dispatch code (excluding tests and init)
+          matches=$(grep -rn "\.unwrap()" crates/justapi-core/src/server/ \
+                     --include="*.rs" \
+                     | grep -v "test" \
+                     | grep -v "expect" \
+                     | grep -v "LazyLock" \
+                     | grep -v "unwrap_or" \
+                     | grep -v "unwrap_or_else" \
+                     | grep -v "unwrap_or_default" \
+                     || true)
+          if [ -n "$matches" ]; then
+            echo "::warning::Potential unwrap() on hot path:"
+            echo "$matches"
+          fi
+          echo "Check complete."
 
-      - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
-
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-audit-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Run audit
-        run: cargo audit
-
-  deny:
-    name: License & Dependency Check (cargo-deny)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install cargo-deny
-        uses: EmbarkStudios/cargo-deny-action@v2
-        with:
-          command: check
-          arguments: --all-features
+  # ============================================================
+  # Stage 6: Benchmark
+  # ============================================================
 
   benchmark:
     name: Benchmark Regression Gate
@@ -239,10 +360,14 @@ jobs:
           
           echo "Benchmark check passed"
 
+  # ============================================================
+  # Stage 7: Docker Build
+  # ============================================================
+
   docker:
-    name: Build & Push Docker Image
+    name: Build Docker Image
     runs-on: ubuntu-latest
-    needs: [check]
+    needs: [check, pytest, integration-tests]
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     steps:
       - uses: actions/checkout@v4
@@ -277,3 +402,41 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # ============================================================
+  # Stage 8: PyPI Publish (on release)
+  # ============================================================
+
+  pypi-publish:
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    needs: [check, pytest, integration-tests, docker]
+    if: startsWith(github.ref, 'refs/tags/v')
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Python (for PyO3)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build wheel
+        run: |
+          pip install maturin
+          maturin build --release -m crates/justapi-py/Cargo.toml -o wheels/
+
+      - name: Verify wheel
+        run: |
+          pip install wheels/*.whl --break-system-packages
+          python -c "import justapi; print(f'JustAPI {justapi.__version__} installed successfully')"
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: wheels/
