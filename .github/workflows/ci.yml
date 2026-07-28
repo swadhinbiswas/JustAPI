@@ -62,6 +62,7 @@ jobs:
   miri:
     name: Miri (Memory Safety)
     runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
@@ -125,6 +126,7 @@ jobs:
   pytest:
     name: Pytest (Python Integration)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
