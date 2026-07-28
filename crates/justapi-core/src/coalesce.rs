@@ -298,7 +298,7 @@ mod tests {
         })
     }
 
-    #[cfg(not(miri))]
+    #[allow(dead_code)]
     fn error_handler(counter: Arc<AtomicU64>, delay_ms: u64) -> HandlerFn {
         Arc::new(move |_req| {
             let counter = counter.clone();
