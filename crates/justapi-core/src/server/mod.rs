@@ -25,7 +25,7 @@ use crate::middleware::{
 use crate::plugin::PluginRegistry;
 use crate::router::Router;
 use crate::static_files::{StaticDir, StaticMount};
-use crate::{error_response, json_response, ResponseBody};
+use crate::{error_response, ResponseBody};
 #[cfg(feature = "ws")]
 use futures::StreamExt;
 use serde_json;
@@ -260,6 +260,7 @@ pub struct Server {
     plugin_registry: PluginRegistry,
     #[cfg(feature = "wasm")]
     wasm_middleware: Option<Arc<crate::wasm::WasmEngine>>,
+    #[cfg(feature = "grpc")]
     grpc_addr: Option<SocketAddr>,
     #[cfg(feature = "grpc")]
     grpc_handler: Option<crate::grpc::GrpcHandler>,
@@ -312,6 +313,7 @@ impl Server {
             wasm_middleware: None,
             #[cfg(feature = "tls")]
             tls: None,
+            #[cfg(feature = "grpc")]
             grpc_addr: None,
             #[cfg(feature = "grpc")]
             grpc_handler: None,
@@ -1437,7 +1439,7 @@ async fn handle_request(
                                         .unwrap_or(StatusCode::FORBIDDEN),
                                 );
                                 metrics.record_latency(start.elapsed().as_secs_f64() * 1000.0);
-                                return Ok(json_response(
+                                return Ok(crate::json_response(
                                     StatusCode::from_u16(status_code as u16)
                                         .unwrap_or(StatusCode::FORBIDDEN),
                                     &body,
