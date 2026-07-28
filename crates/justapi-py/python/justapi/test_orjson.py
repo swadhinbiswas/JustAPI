@@ -40,6 +40,10 @@ def test_orjson_preferred_when_available():
 
 def test_orjson_produces_compact_json():
     """orjson produces compact JSON (no spaces after separators)."""
+    try:
+        import orjson
+    except ImportError:
+        pytest.skip("orjson not installed")
     hlp = _reload_helper()
     data = {"a": 1, "b": 2}
     result = hlp._dumps(data)
