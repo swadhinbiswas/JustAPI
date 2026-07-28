@@ -30,7 +30,14 @@ from . import testing as testing
 from . import tracing as tracing
 from . import status as status
 
-from ._justapi import serve, TokenStreamResponse, ValidatedStreamResponse, Dag, DagNode, RateLimiter, RateLimitResult, Request, HTTPConnection, Headers, QueryParams, URL, State, RequestStream, UploadFile  # type: ignore[import-untyped]
+from ._justapi import serve, TokenStreamResponse, ValidatedStreamResponse, Dag, DagNode, Request, HTTPConnection, Headers, QueryParams, URL, State, RequestStream, UploadFile  # type: ignore[import-untyped]
+
+# RateLimiter is behind the redis-rate-limit feature flag
+try:
+    from ._justapi import RateLimiter, RateLimitResult  # type: ignore[import-untyped]
+except ImportError:
+    RateLimiter = None  # type: ignore[assignment,misc]
+    RateLimitResult = None  # type: ignore[assignment,misc]
 from ._justapi import Database, DbPool, DbParam  # type: ignore[import-untyped]
 from .app import JustAPIApp, JustAPI, Depends, Mailer, adaptive_batch, APIRouter, Controller, controller, route_get, route_post, route_put, route_patch, route_delete, route_query, route_sse, route_websocket, JustAPITestClient, RequestValidationError, Session
 from .system import build_help, build_openapi, register_system_routes
