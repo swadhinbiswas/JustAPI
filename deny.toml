@@ -9,7 +9,7 @@ feature-depth = 1
 [advisories]
 ignore = [
     "RUSTSEC-2024-0436",  # paste: unmaintained, transitive via candle-core/gemm — no replacement available
-    "RUSTSEC-2025-0001",  # rustls-pemfile: unmaintained, but actively used for TLS cert loading
+    "RUSTSEC-2025-0134",  # rustls-pemfile: unmaintained, but actively used for TLS cert loading
     "RUSTSEC-2023-0071",  # rsa: Marvin Attack timing side-channel, transitive via sqlx-mysql — no fix yet
     # spin 0.9.8: yanked, transitive via flume → sqlx-sqlite — no impact on our usage
 ]
