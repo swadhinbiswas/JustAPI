@@ -36,24 +36,6 @@ fn db_acquire_error_response(e: DbAcquireError) -> Response<ResponseBody> {
 pub(crate) type CrudConfig = Arc<Vec<Option<(String, Vec<String>, String)>>>;
 
 use super::types::*;
-
-/// Shared state for both production and test handlers.
-/// Extracts the common parameters to reduce duplication between
-/// `make_native_handler` and `make_test_handler`.
-pub(crate) struct HandlerState {
-    pub router: Arc<Router<usize>>,
-    pub handlers: Arc<Vec<Py<PyAny>>>,
-    pub schemas: Arc<Vec<Option<Py<PyAny>>>>,
-    pub schema_jsons: Arc<Vec<Option<String>>>,
-    pub query_schema_jsons: Arc<Vec<Option<String>>>,
-    pub db_pool: Arc<Option<AnyPool>>,
-    pub db_url: Arc<Option<String>>,
-    pub app: Arc<Option<Py<PyAny>>>,
-    pub needs_request: Arc<Vec<bool>>,
-    pub native: Arc<Vec<bool>>,
-    pub schema_validators: Arc<Vec<Option<justapi_core::validate::CompiledValidator>>>,
-    pub max_body_size: usize,
-}
 #[allow(clippy::too_many_arguments)]
 /// Env-gated profiler for the GIL-path FFI cost. Activated only when the
 /// `JUSTAPI_PROFILE` environment variable is set; otherwise returns immediately
@@ -1052,6 +1034,7 @@ where
 /// - Test handler uses hardcoded scheme ("http"), client (None), http_version ("1.1")
 /// - Test handler doesn't extract auth claims from request extensions
 /// - Test handler doesn't support batchers or crud_specs
+///
 /// See P2-4 in deepanalysis.md for the tracked deduplication task.
 #[allow(clippy::too_many_arguments)]
 pub fn make_test_handler<B>(
