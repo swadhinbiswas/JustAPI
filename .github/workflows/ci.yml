@@ -327,21 +327,21 @@ jobs:
             ${{ runner.os }}-bench-
 
       - name: Build benchmark binary
-        run: cargo build --release -p justapi-bench
+        run: cargo build --release -p justapi-bench --bin justapi-bench
 
       - name: Run benchmark
         run: |
-          cargo run --release -p justapi-bench -- --duration 5 --connections 50 > bench_current.txt
+          cargo run --release -p justapi-bench --bin justapi-bench -- --duration 5 --connections 50 > bench_current.txt
           
       - name: Checkout main branch
         run: git checkout main
 
       - name: Build baseline benchmark
-        run: cargo build --release -p justapi-bench
+        run: cargo build --release -p justapi-bench --bin justapi-bench
 
       - name: Run baseline benchmark
         run: |
-          cargo run --release -p justapi-bench -- --duration 5 --connections 50 > bench_main.txt
+          cargo run --release -p justapi-bench --bin justapi-bench -- --duration 5 --connections 50 > bench_main.txt
 
       - name: Compare benchmarks
         run: |
