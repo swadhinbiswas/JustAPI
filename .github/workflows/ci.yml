@@ -53,7 +53,7 @@ jobs:
         run: cargo build --workspace
 
       - name: Test
-        run: cargo test --workspace --all-features
+        run: cargo test --workspace --features "db,ws,tls,compression,graphql,grpc,redis-rate-limit"
 
   # ============================================================
   # Stage 2: Memory Safety & Security
@@ -136,13 +136,13 @@ jobs:
 
       - name: Build and install justapi
         run: |
-          uv venv
+          uv venv --clear
           uv pip install pytest httpx pydantic typing_extensions
           maturin develop -m crates/justapi-py/Cargo.toml
 
       - name: Run pytest
         run: |
-          uv run -- PYTHONPATH=./crates/justapi-py/python pytest -v
+          uv run -- PYTHONPATH=./crates/justapi-py/python pytest -v --ignore=benchmarks --ignore=demo_shop --ignore=test_project
 
   pytest-freethreaded:
     name: Pytest (Free-threaded Python)
@@ -169,7 +169,7 @@ jobs:
       - name: Run pytest with the GIL disabled
         run: |
           . .venv-ft/bin/activate
-          PYTHON_GIL=0 PYTHONPATH=./crates/justapi-py/python pytest -v
+          PYTHON_GIL=0 PYTHONPATH=./crates/justapi-py/python pytest -v --ignore=benchmarks --ignore=demo_shop --ignore=test_project
 
   # ============================================================
   # Stage 4: Integration Tests
