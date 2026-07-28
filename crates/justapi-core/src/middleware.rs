@@ -1864,6 +1864,8 @@ mod tests {
         assert!(body["expires_in"].as_u64().unwrap() > 0);
     }
 
+    /// Skipped under Miri: ring FFI (OPENSSL_cpuid_setup) not supported by Miri.
+    #[cfg(not(miri))]
     #[tokio::test]
     async fn oauth2_issued_token_verified_by_jwt_auth() {
         let oauth2 = OAuth2Password::new(
