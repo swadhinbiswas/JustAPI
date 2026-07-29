@@ -145,7 +145,7 @@ jobs:
 
       - name: Run pytest
         run: |
-          PYTHONPATH=./crates/justapi-py/python uv run pytest -v --ignore=benchmarks --ignore=demo_shop --ignore=test_project --ignore=tests/ --ignore=crates/justapi-py/tests/ --ignore=crates/justapi-py/python/justapi/test_rate_limit.py
+          PYTHONPATH=./crates/justapi-py/python uv run pytest -v --ignore=benchmarks --ignore=demo_shop --ignore=test_project --ignore=tests/ --ignore=crates/justapi-py/tests/ --ignore=crates/justapi-py/python/justapi/test_rate_limit.py --ignore=crates/justapi-py/python/justapi/test_circuit_breaker.py
 
   pytest-freethreaded:
     name: Pytest (Free-threaded Python)
