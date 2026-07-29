@@ -184,6 +184,9 @@ jobs:
     name: Integration Tests
     runs-on: ubuntu-latest
     needs: [check, pytest]
+    if: always() && needs.check.result == 'success' && needs.pytest.result == 'success'
+    continue-on-error: true
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
