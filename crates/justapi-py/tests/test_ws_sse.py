@@ -2,7 +2,6 @@
 
 import multiprocessing
 import time
-import socket
 
 import pytest
 import requests
@@ -16,13 +15,7 @@ except ImportError:
     WEBSOCKETS_AVAILABLE = False
 
 
-# Use dynamic port to avoid conflicts
-def get_free_port():
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(('', 0))
-        return s.getsockname()[1]
-
-PORT = get_free_port()
+PORT = 18091
 
 
 def run_server():
