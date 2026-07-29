@@ -1929,6 +1929,8 @@ mod tests {
 
     // --- Per-route rate limiter tests (Phase 55.1) ---
 
+    /// Skipped under Miri: governor uses raw_cpuid (inline assembly) not supported by Miri.
+    #[cfg(not(miri))]
     #[tokio::test]
     async fn per_route_rate_limit_allows_matching_prefix() {
         let rl = PerRouteRateLimiter::new().add_rule(
@@ -1947,6 +1949,8 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
+    /// Skipped under Miri: governor uses raw_cpuid (inline assembly) not supported by Miri.
+    #[cfg(not(miri))]
     #[tokio::test]
     async fn per_route_rate_limit_rejects_when_exceeded() {
         let rl = PerRouteRateLimiter::new().add_rule(
@@ -1971,6 +1975,8 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
     }
 
+    /// Skipped under Miri: governor uses raw_cpuid (inline assembly) not supported by Miri.
+    #[cfg(not(miri))]
     #[tokio::test]
     async fn per_route_rate_limit_different_limits_per_prefix() {
         let rl = PerRouteRateLimiter::new()
@@ -1997,6 +2003,8 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
     }
 
+    /// Skipped under Miri: governor uses raw_cpuid (inline assembly) not supported by Miri.
+    #[cfg(not(miri))]
     #[tokio::test]
     async fn per_route_rate_limit_method_filter() {
         let rl = PerRouteRateLimiter::new().add_rule(
@@ -2026,6 +2034,8 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
     }
 
+    /// Skipped under Miri: governor uses raw_cpuid (inline assembly) not supported by Miri.
+    #[cfg(not(miri))]
     #[tokio::test]
     async fn per_route_rate_limit_no_fallback_allows_unmatched() {
         let rl = PerRouteRateLimiter::new().add_rule(
@@ -2047,6 +2057,8 @@ mod tests {
         }
     }
 
+    /// Skipped under Miri: governor uses raw_cpuid (inline assembly) not supported by Miri.
+    #[cfg(not(miri))]
     #[tokio::test]
     async fn per_route_rate_limit_fallback_applies_to_unmatched() {
         let rl = PerRouteRateLimiter::new()
