@@ -1,3 +1,8 @@
+---
+title: Troubleshooting
+description: Common issues and solutions for JustAPI deployments.
+---
+
 # JustAPI Troubleshooting Guide
 
 Common issues and solutions for JustAPI deployments.
