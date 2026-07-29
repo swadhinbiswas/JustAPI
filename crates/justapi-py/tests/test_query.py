@@ -29,12 +29,18 @@ def run_server():
 def server():
     p = multiprocessing.Process(target=run_server)
     p.start()
-    time.sleep(1.5)
+    # Wait for server to be ready with retry
+    for _ in range(20):
+        try:
+            requests.get(f"http://127.0.0.1:{PORT}/hello", timeout=1)
+            break
+        except (requests.ConnectionError, requests.Timeout):
+            time.sleep(0.5)
     try:
         yield
     finally:
         p.terminate()
-        p.join()
+        p.join(timeout=5)
 
 
 def test_query_returns_body(server):

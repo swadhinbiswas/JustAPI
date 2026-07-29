@@ -32,7 +32,13 @@ def fetch(url):
 def test_circuit_breaker():
     p = multiprocessing.Process(target=run_server)
     p.start()
-    time.sleep(1.5)  # Wait for server to start
+    # Wait for server to be ready with retry
+    for _ in range(20):
+        try:
+            urllib.request.urlopen("http://127.0.0.1:8088/ok", timeout=1)
+            break
+        except Exception:
+            time.sleep(0.5)
 
     try:
         # Request 1: fails, should return 500 (Python exception caught and mapped to 500)
