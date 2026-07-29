@@ -1,3 +1,8 @@
+---
+title: API Stability
+description: JustAPI's commitment to backward compatibility and stability.
+---
+
 # JustAPI API Stability Guarantees
 
 JustAPI's commitment to backward compatibility and stability.
