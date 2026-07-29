@@ -5,6 +5,65 @@ All notable changes to JustAPI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.8] - 2026-07-28
+
+### Security Fixes
+- **CRITICAL:** Fixed global panic hook race condition in `panic.rs` (P0-1)
+- **CRITICAL:** Fixed RwLock poisoning panics in `PerRouteCircuitBreakerMiddleware` (P0-2)
+- **CRITICAL:** Fixed division by zero in rate limiter (P0-3)
+- **HIGH:** Added SQL identifier validation for CRUD table/column names (H-1)
+- **HIGH:** Fixed WebSocket unwrap on hot path (H-2)
+- **HIGH:** GraphiQL now gated on `JUSTAPI_ENABLE_GRAPHIQL` env var (H-3)
+- **HIGH:** Added 5-second per-check timeout in health checks (H-5)
+- **MEDIUM:** Added Mutex poison recovery to Python bindings (7 files) (M-5)
+- **MEDIUM:** Fixed ChaosMiddleware potential panic on misconfigured latency (M-6)
+- **MEDIUM:** Added `nosniff` header to large file streaming path (M-7)
+
+### Bug Fixes
+- Added GraphQL query depth/complexity limits (depth=10, complexity=200)
+- Added 4 MiB gRPC message size limit
+- Added 1024-route capacity for circuit breakers with FIFO eviction
+- Added symlink resolution in static file serving via `canonicalize()`
+- Added `x-content-type-options: nosniff` header to all static file responses
+- Fixed poisoned mutex cascading panics in request coalescer
+- Redis dependency now feature-gated behind `redis-rate-limit`
+
+### Performance
+- Router FIFO cache eviction now O(1) with `VecDeque`
+- Accept-Encoding now respects RFC 7231 quality values
+- Health checks now run in parallel
+- Metrics no longer misclassify 1xx status codes
+- Environment variables cached with `LazyLock`
+- CRUD query params now URL-decoded
+
+### Code Quality
+- Server code partially split: `ws.rs`, `sse_ws.rs`, `handler_exec.rs` extracted
+- Added `#[non_exhaustive]` to public enums for forward compatibility
+- ANSI injection prevention in diagnostics
+- Documented known limitations in code comments
+- Implemented `GatewayState::get_route()` (was a stub returning `None`)
+
+### CI/CD
+- Added `--tests` flag to clippy in CI
+- Added `--all-features` to cargo test in CI
+- Added `fuzz_pipeline`, `fuzz_websocket`, `fuzz_grpc` targets to fuzz workflow
+- Fuzzing duration increased from 60s to 5 minutes per target
+- Added benchmark regression gate to CI (95% threshold)
+- Added integration test job (server startup, health checks, endpoints)
+- Added PyPI publish workflow with OIDC trusted publishers
+
+### Documentation
+- Created troubleshooting guide (10 common issues)
+- Created performance tuning guide (10 optimization areas)
+- Created migration guide from Robyn/Granian
+- Created API stability guarantees document
+- All docs integrated into docs_site
+
+### Testing
+- 6 new edge case tests for SQL validation, health timeouts, chaos config
+- 2 new fuzz targets (WebSocket, gRPC)
+- 521 total tests passing
+
 ## [Unreleased]
 
 ### Added
