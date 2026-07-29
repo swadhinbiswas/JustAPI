@@ -1216,6 +1216,8 @@ mod tests {
     // Additional Timeout edge case tests
     // -----------------------------------------------------------------------
 
+    /// Skipped under Miri: may cause runtime shutdown issues in some environments.
+    #[cfg(not(miri))]
     #[tokio::test]
     async fn test_timeout_very_long() {
         let mw = TimeoutMiddleware::new(Duration::from_secs(60));
