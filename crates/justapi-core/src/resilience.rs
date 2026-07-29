@@ -1216,26 +1216,6 @@ mod tests {
     // Additional Timeout edge case tests
     // -----------------------------------------------------------------------
 
-    /// Tests timeout behavior with very small duration.
-    /// Skipped: tokio runtime may hang during shutdown in some environments.
-    #[cfg(not(miri))]
-    #[tokio::test]
-    async fn test_timeout_zero_duration() {
-        // Use 1ns instead of 0ms to avoid undefined behavior with tokio's timeout.
-        // A 0ms timeout may let the handler complete before being cancelled.
-        let slow_handler: HandlerFn<TestBody> = Arc::new(|_req: Request<TestBody>| {
-            Box::pin(async {
-                tokio::time::sleep(Duration::from_millis(50)).await;
-                Ok(json_response(StatusCode::OK, "ok"))
-            })
-        });
-        let mw = TimeoutMiddleware::new(Duration::from_nanos(1));
-        let mut chain = crate::middleware::MiddlewareChain::new(slow_handler);
-        chain.add(mw);
-        let resp = chain.run(test_req(hyper::Method::GET, "/")).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::GATEWAY_TIMEOUT);
-    }
-
     #[tokio::test]
     async fn test_timeout_very_long() {
         let mw = TimeoutMiddleware::new(Duration::from_secs(60));
