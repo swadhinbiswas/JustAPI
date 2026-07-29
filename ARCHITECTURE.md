@@ -107,6 +107,14 @@ JustAPI utilizes a **GIL-free async worker architecture** (ADR-021):
 ### Radix Router
 Uses the radix-trie based `matchit` crate. Paths are resolved in `O(1)` time relative to the number of registered routes. Parameters are parsed into typed path variables during the routing step.
 
+### Server Module Structure
+The server is organized into focused modules for maintainability:
+- **`server/mod.rs`**: Server builder, accept loops, connection handling
+- **`server/handler_exec.rs`**: Route handler dispatch (maps Handler variants to responses)
+- **`server/ws.rs`**: WebSocket types and default echo handler
+- **`server/sse_ws.rs`**: SSE response and WebSocket dispatch helpers
+- **`server/crud.rs`**: Rust-native CRUD route handlers
+
 ### Request Validation
 Request bodies are validated against their JSON Schema *entirely in Rust* using the `jsonschema` crate before Python is invoked. Invalid requests receive an RFC 9457 structured error response and are rejected at the FFI boundary, saving CPU cycles.
 

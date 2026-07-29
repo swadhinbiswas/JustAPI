@@ -6,7 +6,7 @@
 </p>
 <p align="center">
 <a href="https://github.com/swadhinbiswas/JustAPI/actions/workflows/ci.yml">
-    <img src="https://github.com/swadhinbiswas/JustAPI/actions/workflows/ci.yml/badge.svg?branch=initial-setup" alt="CI">
+    <img src="https://github.com/swadhinbiswas/JustAPI/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI">
 </a>
 <a href="https://github.com/swadhinbiswas/JustAPI/actions/workflows/wheels.yml">
     <img src="https://github.com/swadhinbiswas/JustAPI/actions/workflows/wheels.yml/badge.svg" alt="Wheels">
@@ -14,7 +14,7 @@
 <a href="https://github.com/swadhinbiswas/JustAPI/actions/workflows/publish.yml">
     <img src="https://github.com/swadhinbiswas/JustAPI/actions/workflows/publish.yml/badge.svg" alt="Publish">
 </a>
-<a href="https://github.com/swadhinbiswas/JustAPI/blob/initial-setup/LICENSE">
+<a href="https://github.com/swadhinbiswas/JustAPI/blob/main/LICENSE">
     <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT">
 </a>
 <a href="https://www.python.org/downloads/">
@@ -23,7 +23,7 @@
 <a href="https://www.rust-lang.org/">
     <img src="https://img.shields.io/badge/rust-1.85+-E6522C.svg?logo=rust&logoColor=white" alt="Rust version">
 </a>
-<a href="https://github.com/swadhinbiswas/JustAPI/blob/initial-setup/deny.toml">
+<a href="https://github.com/swadhinbiswas/JustAPI/blob/main/deny.toml">
     <img src="https://img.shields.io/badge/cargo--deny-v0.20-passing-green.svg" alt="cargo-deny">
 </a>
 <a href="https://pypi.org/project/justapi/">
@@ -33,7 +33,7 @@
 
 ---
 
-**Documentation**: <a href="https://github.com/swadhinbiswas/JustAPI/tree/initial-setup/docs_site" target="_blank">https://github.com/swadhinbiswas/JustAPI/docs_site</a>
+**Documentation**: <a href="https://github.com/swadhinbiswas/JustAPI/tree/main/docs_site" target="_blank">https://github.com/swadhinbiswas/JustAPI/docs_site</a>
 
 **Source Code**: <a href="https://github.com/swadhinbiswas/JustAPI" target="_blank">https://github.com/swadhinbiswas/JustAPI</a>
 
