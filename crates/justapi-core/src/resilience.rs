@@ -752,7 +752,7 @@ mod tests {
     async fn test_timeout_returns_504() {
         let slow_handler: HandlerFn<TestBody> = Arc::new(|_req: Request<TestBody>| {
             Box::pin(async {
-                tokio::time::sleep(Duration::from_secs(10)).await;
+                tokio::time::sleep(Duration::from_millis(200)).await;
                 Ok(json_response(StatusCode::OK, r#"{"ok":true}"#))
             })
         });
@@ -1451,7 +1451,7 @@ mod tests {
 
         let slow_handler: HandlerFn<TestBody> = Arc::new(|_req: Request<TestBody>| {
             Box::pin(async {
-                tokio::time::sleep(Duration::from_secs(10)).await;
+                tokio::time::sleep(Duration::from_millis(500)).await;
                 Ok(json_response(StatusCode::OK, "ok"))
             })
         });

@@ -381,7 +381,7 @@ mod tests {
             let _ = router.at(&Method::GET, "/api/v3/users/42/posts/84");
         }
 
-        let iterations = 100_000u64;
+        let iterations = if cfg!(miri) { 50u64 } else { 100_000u64 };
         let mut total_ns = 0u64;
 
         let test_paths = [
@@ -405,8 +405,10 @@ mod tests {
         println!("500-route table: {} lookups, avg {}ns", total_lookups, avg_ns,);
 
         // Benchmark gate: average lookup should be under 2us (release) / 5us (debug)
-        // CI runners are slower than local machines, so we use a generous tolerance
-        let target = if cfg!(debug_assertions) { 5000 } else { 2000 };
-        assert!(avg_ns < target, "Route lookup too slow: {}ns (target < {}ns)", avg_ns, target);
+        // Skip threshold check in Miri interpreter mode
+        if !cfg!(miri) {
+            let target = if cfg!(debug_assertions) { 5000 } else { 2000 };
+            assert!(avg_ns < target, "Route lookup too slow: {}ns (target < {}ns)", avg_ns, target);
+        }
     }
 }

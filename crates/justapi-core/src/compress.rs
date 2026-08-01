@@ -317,6 +317,9 @@ mod tests {
 
     #[test]
     fn test_encoding_from_wildcard() {
+        #[cfg(feature = "brotli-compression")]
+        assert_eq!(Encoding::from_accept_encoding("*"), Encoding::Brotli);
+        #[cfg(not(feature = "brotli-compression"))]
         assert_eq!(Encoding::from_accept_encoding("*"), Encoding::Gzip);
     }
 

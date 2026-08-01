@@ -156,11 +156,11 @@ async fn test_health_check_timeout() {
 
     // Slow check (simulated)
     registry.register_fn("slow", || async {
-        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         HealthStatus::Healthy
     });
 
-    let report = registry.check_all().await;
+    let report = registry.check_all_with_timeout(std::time::Duration::from_millis(50)).await;
 
     // Fast check should pass
     let fast = report.components.iter().find(|c| c.name == "fast");

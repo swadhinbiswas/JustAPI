@@ -79,7 +79,11 @@ impl HealthRegistry {
     /// Run all registered checks and return a health report.
     /// Checks are run in parallel with a per-check timeout of 5 seconds.
     pub async fn check_all(&self) -> HealthReport {
-        let check_timeout = std::time::Duration::from_secs(5);
+        self.check_all_with_timeout(std::time::Duration::from_secs(5)).await
+    }
+
+    /// Run all registered checks with a custom per-check timeout.
+    pub async fn check_all_with_timeout(&self, check_timeout: std::time::Duration) -> HealthReport {
         let futs: Vec<_> = self
             .checks
             .iter()
