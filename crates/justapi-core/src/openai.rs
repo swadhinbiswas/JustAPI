@@ -815,8 +815,8 @@ mod tests {
     #[test]
     fn test_safe_status_invalid_code_falls_back_to_500() {
         assert_eq!(safe_status(0), StatusCode::INTERNAL_SERVER_ERROR);
-        assert_eq!(safe_status(999), StatusCode::INTERNAL_SERVER_ERROR);
-        assert_eq!(safe_status(70000), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(safe_status(99), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(safe_status(6000), StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(safe_status(u16::MAX), StatusCode::INTERNAL_SERVER_ERROR);
     }
 }

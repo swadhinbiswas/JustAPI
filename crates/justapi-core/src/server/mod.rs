@@ -1610,8 +1610,13 @@ async fn serve_connection(
     conn_metrics.connection_closed();
 }
 
-async fn serve_http(
-    listener: TcpListener,
+/// Shared accept loop logic for TCP, UDS, and TLS servers.
+/// Accepts connections from the listener, spawns `serve_connection` for each,
+/// and handles graceful shutdown.
+async fn serve_generic<S>(
+    mut accept_fn: impl FnMut() -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<(S, Option<SocketAddr>)>> + Send>,
+    >,
     chain: Arc<MiddlewareChain>,
     static_dir: Option<StaticDir>,
     static_mounts: Vec<StaticMount>,
@@ -1620,10 +1625,10 @@ async fn serve_http(
     shutdown_timeout: std::time::Duration,
     #[cfg(feature = "wasm")] wasm_middleware: Option<Arc<crate::wasm::WasmEngine>>,
     #[cfg(feature = "ws")] ws_handler: Option<WsHandler>,
-) -> Result<()> {
-    // **IMPORTANT:** This duplicates `serve_unix` below. A future refactoring
-    // should extract the common accept loop into a generic function parameterized
-    // over the listener type. See P2-3 in deepanalysis.md.
+) -> Result<()>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
     let mut connections = tokio::task::JoinSet::new();
     let conn_semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(max_connections()));
 
@@ -1632,33 +1637,29 @@ async fn serve_http(
 
         let (stream, peer) = if let Some(token) = &token {
             tokio::select! {
-                result = listener.accept() => result?,
+                result = accept_fn() => result?,
                 _ = token.cancelled() => {
                     tracing::info!("Shutdown signal received, stopping accept loop");
                     break;
                 }
             }
         } else {
-            listener.accept().await?
+            accept_fn().await?
         };
-        tracing::debug!("Accepted connection from {}", peer);
+        tracing::debug!("Accepted connection from {:?}", peer);
 
-        // --- Normal HTTP via hyper -----------------------------------------
         let chain = chain.clone();
         let static_dir = static_dir.clone();
         let static_mounts = static_mounts.clone();
         #[cfg(feature = "wasm")]
         let wasm_middleware = wasm_middleware.clone();
-        let peer_addr = peer;
-
         #[cfg(feature = "ws")]
         let ws_handler = ws_handler.clone();
-
         let token_clone = shutdown.clone();
         let conn_semaphore = conn_semaphore.clone();
         connections.spawn(serve_connection(
             stream,
-            Some(peer_addr),
+            peer,
             chain,
             static_dir,
             static_mounts,
@@ -1687,6 +1688,43 @@ async fn serve_http(
     }
 
     Ok(())
+}
+
+async fn serve_http(
+    listener: TcpListener,
+    chain: Arc<MiddlewareChain>,
+    static_dir: Option<StaticDir>,
+    static_mounts: Vec<StaticMount>,
+    metrics: Metrics,
+    shutdown: Option<CancellationToken>,
+    shutdown_timeout: std::time::Duration,
+    #[cfg(feature = "wasm")] wasm_middleware: Option<Arc<crate::wasm::WasmEngine>>,
+    #[cfg(feature = "ws")] ws_handler: Option<WsHandler>,
+) -> Result<()> {
+    let local_addr = listener.local_addr()?;
+    tracing::info!("Listening on {}", local_addr);
+
+    let listener = Arc::new(listener);
+    serve_generic(
+        move || {
+            let listener = listener.clone();
+            Box::pin(async move {
+                let (stream, peer) = listener.accept().await?;
+                Ok((stream, Some(peer)))
+            })
+        },
+        chain,
+        static_dir,
+        static_mounts,
+        metrics,
+        shutdown,
+        shutdown_timeout,
+        #[cfg(feature = "wasm")]
+        wasm_middleware,
+        #[cfg(feature = "ws")]
+        ws_handler,
+    )
+    .await
 }
 
 /// Bind a Unix domain socket, removing any stale socket file left from a
@@ -1742,65 +1780,29 @@ async fn serve_unix(
     #[cfg(feature = "wasm")] wasm_middleware: Option<Arc<crate::wasm::WasmEngine>>,
     #[cfg(feature = "ws")] ws_handler: Option<WsHandler>,
 ) -> Result<()> {
-    let mut connections = tokio::task::JoinSet::new();
-    let conn_semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(max_connections()));
+    tracing::info!("Listening on Unix socket");
 
-    loop {
-        let token = shutdown.as_ref().cloned();
-
-        let (stream, _peer) = if let Some(token) = &token {
-            tokio::select! {
-                result = listener.accept() => result?,
-                _ = token.cancelled() => {
-                    tracing::info!("Shutdown signal received, stopping accept loop");
-                    break;
-                }
-            }
-        } else {
-            listener.accept().await?
-        };
-
-        let chain = chain.clone();
-        let static_dir = static_dir.clone();
-        let static_mounts = static_mounts.clone();
+    let listener = Arc::new(listener);
+    serve_generic(
+        move || {
+            let listener = listener.clone();
+            Box::pin(async move {
+                let (stream, _peer) = listener.accept().await?;
+                Ok((stream, None))
+            })
+        },
+        chain,
+        static_dir,
+        static_mounts,
+        metrics,
+        shutdown,
+        shutdown_timeout,
         #[cfg(feature = "wasm")]
-        let wasm_middleware = wasm_middleware.clone();
-
+        wasm_middleware,
         #[cfg(feature = "ws")]
-        let ws_handler = ws_handler.clone();
-
-        let conn_semaphore = conn_semaphore.clone();
-        connections.spawn(serve_connection(
-            stream,
-            None,
-            chain,
-            static_dir,
-            static_mounts,
-            conn_semaphore,
-            metrics.clone(),
-            shutdown.clone(),
-            #[cfg(feature = "wasm")]
-            wasm_middleware,
-            #[cfg(feature = "ws")]
-            ws_handler,
-        ));
-    }
-
-    if shutdown.is_some() {
-        tracing::info!("Waiting for {} active connections to drain...", connections.len());
-        tokio::select! {
-            _ = async { while connections.join_next().await.is_some() {} } => {
-                tracing::debug!("all connections closed gracefully");
-            }
-            _ = tokio::time::sleep(shutdown_timeout) => {
-                tracing::warn!("Graceful shutdown timeout exceeded. Dropping remaining connections.");
-            }
-        }
-    } else {
-        while connections.join_next().await.is_some() {}
-    }
-
-    Ok(())
+        ws_handler,
+    )
+    .await
 }
 
 // ---------------------------------------------------------------------------
@@ -2058,7 +2060,7 @@ mod tests {
     // Bind a Unix socket, serve a trivial handler over it, and confirm a raw
     // HTTP/1.1 request over the socket gets a 200 response. Exercises the
     // shared `serve_connection` path through `serve_unix`.
-    #[cfg(unix)]
+    #[cfg(all(unix, not(miri)))]
     #[tokio::test]
     async fn test_unix_socket_serves_http() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
