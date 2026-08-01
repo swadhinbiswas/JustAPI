@@ -84,7 +84,7 @@ jobs:
             ${{ runner.os }}-miri-
 
       - name: Run Miri on justapi-core
-        run: cargo +nightly miri test -p justapi-core --features db
+        run: cargo +nightly miri test -p justapi-core --lib --features db
         env:
           MIRIFLAGS: "-Zmiri-disable-isolation"
 
