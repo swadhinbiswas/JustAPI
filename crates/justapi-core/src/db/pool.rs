@@ -967,6 +967,8 @@ mod tests {
         assert!(IsolationLevel::ReadCommitted.is_supported(DbKind::Postgres));
     }
 
+    /// Skipped under Miri: SQLite FFI not supported by Miri.
+    #[cfg(not(miri))]
     #[tokio::test]
     async fn test_sqlite_roundtrip_types() {
         let pool =
@@ -997,6 +999,8 @@ mod tests {
         assert_eq!(row["big"], serde_json::Value::Null);
     }
 
+    /// Skipped under Miri: SQLite FFI not supported by Miri.
+    #[cfg(not(miri))]
     #[tokio::test]
     async fn test_transaction_detects_writes_and_reads() {
         let pool =
@@ -1013,6 +1017,8 @@ mod tests {
         assert_eq!(res, serde_json::json!([{ "total": 5 }]));
     }
 
+    /// Skipped under Miri: SQLite FFI not supported by Miri.
+    #[cfg(not(miri))]
     #[tokio::test]
     async fn test_stream_chunks() {
         let pool =
