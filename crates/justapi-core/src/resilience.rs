@@ -1062,6 +1062,8 @@ mod tests {
     // Additional Circuit Breaker edge case tests
     // -----------------------------------------------------------------------
 
+    /// Skipped under Miri: timing-sensitive test, Miri is too slow for precise timing.
+    #[cfg(not(miri))]
     #[tokio::test]
     async fn test_circuit_breaker_half_open_failure_reopens() {
         let config = CircuitBreakerConfig {
