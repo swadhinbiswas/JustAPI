@@ -911,6 +911,8 @@ mod tests {
         assert_eq!(normalize_db_url("postgres://localhost/db"), "postgres://localhost/db");
     }
 
+    /// Skipped under Miri: SQLite FFI not supported by Miri.
+    #[cfg(not(miri))]
     #[tokio::test]
     async fn test_sqlite_connect_relative_and_absolute_file() {
         // Previously both of these failed with SQLITE_CANTOPEN (code 14) because
