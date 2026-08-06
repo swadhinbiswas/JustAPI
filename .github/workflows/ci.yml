@@ -69,7 +69,7 @@ jobs:
       - name: Install Rust nightly + Miri
         uses: dtolnay/rust-toolchain@nightly
         with:
-          components: miri
+          components: miri, rust-src
 
       - name: Cache cargo registry
         uses: actions/cache@v4

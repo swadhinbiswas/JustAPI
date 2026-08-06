@@ -40,7 +40,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
         with:
-          components: miri
+          components: miri, rust-src
       - name: Run memory-safety gate
         # Fast: ASan on the full core suite + targeted Miri on the only
         # unsafe module (memory.rs). See scripts/sanitize.sh.
