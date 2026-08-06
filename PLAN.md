@@ -6,16 +6,21 @@
 
 ## Current status
 
-- **Active phase:** 2.0.8 pre-release hardening — ✅ all items complete. Wheel built, demo_shop 29/29 passes, pytest 159/159, cargo workspace 493+ passes.
+- **Active phase:** 2.0.8 pre-release hardening — core ✅, AI/inference **unverified** (see honest phase table, 2026-08-06). Wheel built, demo_shop 29/29 passes, pytest 166/166 (+1 pre-existing flake), cargo workspace green on default features (gate fixed 2026-08-06).
 - **Status:** All post-2.0.7 gaps closed (2026-07-25). **AI / inference / LLM work FROZEN until release 2.0.8** (ADR-067). Focus from 2026-07-25 session:
+  - **HTTP QUERY method (RFC 10008) — end-to-end verified + testable (2026-08-06).** The route chain (Python `app.query()` → native `query()` → Rust router keyed on `justapi_core::query_method()`) already existed; the gaps were test coverage and client plumbing. Added: core `TestClient::query`/`query_with`, PyO3 `JustAPITestClient.query`/`query_with`, `AsyncTestClient.query` (defaults to `Content-Type: application/json` per RFC 10008), plus 3 Python tests (roundtrip, wrong-route 405, missing-Content-Type 400) and 1 Rust test. RFC 10008 requires a Content-Type on QUERY; the handler already enforces it (400).
+  - **Differentiator sprint — one-command agent demo (2026-08-06).** `examples/agent_demo/run_demo.sh` starts the app, exercises all three Rust-owned differentiators (native MCP tools with Rust-inferred schemas, durable sessions, Rust-validated NDJSON streaming), and stops — no manual steps. Verified end-to-end (tools list, `add(5,7)=12` call, 4-step stream, session persistence across requests). `app.py` now accepts a port arg.
+  - **HTTP/3 (QUIC) transport — working module, feature-gated (2026-08-06, ADR-079).** New `http3` feature on `justapi-core` (`h3` + `h3-quinn` + `quinn`, hyperium stack on the existing tokio/rustls base). `crates/justapi-core/src/http3.rs`: `serve_http3()` binds UDP, runs a quinn endpoint + h3 server connection loop, bridges requests into `hyper::Request<Full<Bytes>>` and runs a caller-provided handler; `chain_to_http3_handler()` adapts a `MiddlewareChain<Full<Bytes>>`. End-to-end test (`tests/http3_test.rs`) does a real QUIC handshake with a self-signed cert (rcgen) and a round-trip through the h3-quinn client — **passes**. **Seam closed (ADR-082):** `app.enable_http3(cert, key)` now serves Python handlers over QUIC through the full native pipeline (GIL pool, DI, schema validation) — `make_native_handler<B>` is body-generic, so `run()` builds a second `MiddlewareChain<Full<Bytes>>` from the same app state and spawns `serve_http3` on the same port. Verified e2e: `{"handler":"python","route":"/native"}` over real QUIC. HTTP/3 is the one transport no Python framework ships.
+  - **DB CRUD benchmark re-run on current code (2026-08-06).** Re-ran `benchmarks/run_crud_bench.sh` against HEAD with a release wheel. Findings appended to BENCHMARKS.md: JustAPI native SELECT **181k RPS (×125 vs FastAPI)** — headline claim holds/improves; UPDATE 31.9k / DELETE 37.7k still lead. **Honest regression surfaced:** the Python-handler path measures 16.5k SELECT (was 107k in the 2026-07-26 ledger) and concurrent writes collapse to ~6 RPS at `-c 20` (147 at `-c 1`) — this is the GIL-pool backpressure fix (throttle, not drop), a correctness/throughput tradeoff, not a durability bug. Native path unaffected. Also documented the methodology gotcha: benchmarking must use a release wheel (debug `maturin develop` is ~4× slower).
   - **Generator dependencies (FastAPI-style `yield` in Depends)** — ✅ complete. `_resolve_kwargs`/`_resolve_dependencies_list` detect `inspect.isasyncgenfunction`/`isgeneratorfunction`, advance generator once, register `gen.aclose()`/`gen.close()` in `request["_dep_cleanup"]`. Handler wrappers run cleanup in `finally` block (LIFO order). 6 tests (async gen, sync gen, cleanup on error, nested, cached, no-cache).
   - **ORJSON as optional Rust-level serializer** — ✅ complete. `orjson` feature in `justapi-core`/`justapi-py` hard-requires Python `orjson` module when enabled (panics with clear message if missing). `orjson>=3.10` added to pyproject.toml as `[orjson]` extra and included in `[full]`. 7 tests.
   - **Production panic hotspot audit** — ✅ complete. Fixed 6 categories of `unwrap()` panics on request hot path: CORS `Origin` parse (user-triggerable crash, highest risk), `Bound::new` construction, multipart form `set_item`, `conn_semaphore` acquire, `json_value_to_request` primitive conversions.
+  - **GIL-pool concurrency bug (spurious 404s under load)** — ✅ fixed. `run_python` used `try_send` into a bounded channel (cap 16 for a single GIL worker); a burst of concurrent/pipelined requests overflowed the queue and `handle_request` masked the resulting chain `Err` as an RFC 9457 404 with no log. GIL pool now backpressures via `send().await` (throttles instead of dropping); `handle_request` logs chain errors and returns 500 (real not-found is already `Ok(404)`). Measured before: 4.1M/4.5M responses 404; after: 100% 200, ~110k rps. Regression test `test_sync_handler_no_spurious_404_under_load` (fails on old code).
   - **PyPI wheel** — built (`manylinux_2_34_x86_64`, 32 MB). Unpublished — blocked on `MATURIN_PYPI_TOKEN`.
 - **Demo_shop stress test (2026-07-18) — all D1–D4 defects fixed.** All 23 endpoints pass; 29-assertion e2e test passes. Framework gotchas documented in demo_shop/README.md (both resolved in framework).
-- **Gates (2026-07-25):** `cargo test --workspace` (493+ all pass) ✅, `cargo clippy --workspace --tests -- -D warnings` ✅, `cargo fmt --check` ✅, pytest 159 passed / 1 skipped ✅, demo_shop `test_app.py` 29/29 ✅.
+- **Gates (2026-08-06, re-run on current code):** `cargo test --workspace` ✅ green on **default features** (integration-test feature guards fixed — previously `db_bridge`/`edge_cases` failed without `--all-features`); `cargo clippy --workspace --all-features --lib -- -D warnings` ✅; `cargo fmt --check` ✅; pytest **169 passed / 1 skipped / 0 failed** (the long-standing `test_circuit_breaker` flake is FIXED — it was a real fork-safety bug in the GIL pool, ADR-081: a forked child inherited the parent's initialized pool whose worker threads don't exist → every Python request hung → 504s. Pool now tracks its PID and rebuilds after fork); demo_shop `test_app.py` 29/29 ✅. **Write-path defect found + fixed (ADR-080):** Python-handler writes no longer collapse under concurrency (160→3 RPS at c=11 was a pool double-acquire bug; now flat ~150 RPS c=1..50).
 - **Documentation site (2026-07-25):** docs_site rebuilt to FastAPI-level depth — 141 pages across 13 sections, Astro + Starlight build passes, full-text search with Pagefind. Sections: Getting Started (5), Tutorial (36), Advanced (27), How-To (7), API Reference (17), Deployment (9), Security (4), Observability (4), Inference (4), Reference (6), Resources (3), Contributing (5), Examples (1).
-- **Blocker:** none. Outstanding: PyPI publish (needs OIDC trusted publisher configured at pypi.org).
+- **Blocker:** none. Outstanding: PyPI publish (needs OIDC trusted publisher / `MATURIN_PYPI_TOKEN` at pypi.org) — the single most important remaining item; **AI/inference claims remain unverified on real hardware (Phase 52 frozen)**.
 
 ## Mission
 
@@ -25,58 +30,65 @@ cloud-native readiness.
 
 ## Phase table
 
+> **Honest status key (2026-08-06):**
+> - **✅ verified** = passing tests on current code + benchmarked where applicable.
+> - **🟡 implemented / unverified** = code exists, unit/integration tests pass, but
+>   the *real-world* claim is NOT proven: no real hardware/GPU/weights run, no
+>   production deployment. Do NOT treat as production-ready.
+> - **🔴 frozen** = deliberately deferred.
+
 | # | Phase | Status | Notes |
-|---|---|---|---|---|
-| 0 | Foundations | ✅ complete | Skeleton, CI, skills, baselines |
-| 1 | Minimal Viable Runtime | ✅ complete | HTTP/1.1, routing, PyO3, CLI |
-| 2 | Native Router | ✅ complete | matchit radix trie, route params |
-| 3 | Memory & Zero-Copy Pipeline | ✅ complete | arena+pool, 752k req/s |
-| 4 | Execution Model & GIL Strategy | ✅ complete | ADR-008: dedicated Python worker thread |
-| 5 | Middleware Engine + Auth | ✅ complete | CORS, SecurityHeaders, JWT, RateLimiter, 0.18% overhead |
-| 6 | Serialization | ✅ complete | serde_json (89ns), simd-json feature |
-| 7 | TLS + HTTP/2 | ✅ complete | rustls, ALPN, 10.7% overhead |
-| 8 | WebSocket + SSE | ✅ complete | tokio-tungstenite, SSE streaming |
-| 9 | Static Assets, Caching, Observability | ✅ complete | StaticDir, Prometheus, compression, OTel |
-| 10 | ASGI Shim + Native API | ✅ complete | Tier A+B, graceful shutdown, 81 tests |
-| 11 | Request Validation & Serialization | ✅ complete | JSON Schema validation, Pydantic bridge, 97 tests |
-| 12 | Database ORM Integration | ✅ complete | Pool, migrations, query builders, Python bridge |
-| 13 | Testing Utilities | ✅ complete | TestClient, async fixtures, snapshot testing |
-| 14 | Production Observability | ✅ complete | Metrics histograms, structured logging, health checks, alerting, audit, panic recovery |
-| **15** | **Graceful Degradation & Circuit Breakers** | **✅ complete** | **44 resilience tests, generic B support** |
-| 19 | Plugin System & Extensibility | ✅ complete | third-party plugin API |
-| 20 | Benchmark & Optimization (Beat FastAPI) | ✅ complete | final gate, prove superiority |
-| 21 | Advanced DX: Signature Parsing & DI | ✅ complete | `Depends()`, auto-extract args |
-| 22 | True Async & Advanced Web Features | ✅ complete | No-block async, WS/SSE, BackgroundTasks |
-| 23 | Templating Engine Integration | ✅ complete | Jinja2/MiniJinja support |
-| 24 | gRPC & Protobuf Support | ✅ complete | Native gRPC via Tonic |
-| 25 | Ultimate Scale (1M RPS tuning) | ✅ complete | Hyper-optimization for 1M RPS |
-| 26 | Zero-Copy AI Data Boundary | ✅ complete | Arrow/DLPack via PyO3 buffer protocol |
-| 27 | Adaptive Batching Router | ✅ complete | ML model serving |
-| 28 | WASM Middleware Engine | ✅ complete | wasmtime embedded |
-| 29 | High-Throughput LLM Streaming (SSE 2.0) | ✅ complete | TokenStreamResponse |
-| 30 | Layered Dependency Injection | ✅ complete | Litestar-style DI |
-| 31 | Class-Based Controllers & Route Composition | ✅ complete | @controller classes |
-| 32 | Native Enterprise Rate Limiting | ✅ complete | GCRA + Redis |
-| 33 | Circuit Breakers & Graceful Degradation | ✅ complete | 44 resilience tests |
-| 34 | Dynamic Configuration (Hot Reloading) | ✅ complete | file watcher + admin API |
-| 35 | GraphQL & Federation Gateway | ✅ complete | async-graphql, Apollo Federation |
-| 36 | Agentic Workflow DAG Engine | ✅ complete | DAG orchestration in Rust |
-| 37 | OTel Distributed Tracing | ✅ complete | OTLP, contextvars, 225 tests |
-| 38 | Hardware-Accelerated JWT & Security | ✅ complete | RS256/ES256, CORS builder, IpRateLimiter, 236 tests |
-| 39 | SAST, Fuzzing & Memory Safety | ✅ complete | 6 fuzz targets, miri, SAFETY comments, 236 tests |
-| 40 | The JustAPI 2.0 "Singularity" Release | 🟡 in progress | Consolidated Py package, OpenAPI, README, Docker (155MB), abi3 wheel, ARCHITECTURE.md, CONTRIBUTING.md. PyPI upload pending token + manylinux_2_28 build |
-| 41 | Native Inference Engine Foundation | ✅ complete | `justapi-inference` crate on Candle (CPU default; cuda feature-gated), `Engine`/`Model` trait, streaming, 24 tests pass |
-| 42 | KV-Cache Manager (PagedAttention, Rust) | ✅ complete | `KvBlockPool` paged allocator + clock eviction, `PrefixCache` hash-based prefix reuse, `Sequence` handles. 16 tests, 260 workspace total |
-| 43 | Continuous-Batching Scheduler | ✅ complete | `Scheduler` with prefill/decode interleave, chunked prefill, back-pressure, prefix-cache integration. 9 tests, 269 workspace total |
-| 44 | OpenAI-Compatible API Server | ✅ complete | `/v1/chat/completions`, `/v1/completions`, `/v1/embeddings`, `/v1/models` wired to `justapi-inference` (GIL-free); streaming SSE; feature-gated `inference` |
-| 45 | Quantization + Multi-LoRA | ✅ complete | AWQ/GPTQ/FP8 GGUF quant + LoRA adapter registry + RealModel forward pass (all feature-gated `real`) |
-| 46 | LLM Control Plane | ✅ complete | model registry/versioning, KV-aware routing, LLM autoscaling (KV-pressure/TTFT), multi-replica supervisor |
-| 47 | FastAPI Parity (model-deploy essentials) | ✅ complete | ApiKeyAuth + OAuth2Password + multipart + Form/Cookie/Header + JsonResponse<T> (248 tests) |
-| 48 | Production Hardening for AI | ✅ complete | speculative decoding + disaggregated P/D + structural benchmark vs vLLM/SGLang + K8s AI inference gateway plugin (97 inference tests) |
-| 49 | Tree-based Speculative Decoding | ✅ complete | Medusa/EAGLE-style tree verification wired into serving path. Acceptance rate up to 3× higher than draft-target. |
-| 50 | RadixAttention Prefix Caching | ✅ complete | `RadixPrefixCache` wired into `Scheduler`: O(1) prefix lookup on admission, LRU eviction, finished-seq block promotion. |
-| 51 | Scheduler Serving Integration | ✅ complete | `SchedulerEngine` bridges Engine+Scheduler; prefix cache metrics in `/metrics`; sampling params plumbed; real throughput benchmark. 151 inference tests. |
-| **52** | **GPU Benchmark Gate** | **🔴 frozen — AI deferred to 2.0.8** | **Run SchedulerEngine vs naive vs vLLM on real GPU with real weights. Measure tokens/sec, TTFT, ITL. DEFERRED: no CUDA driver upgrade, no real-weight run (ADR-067). MockModel CPU run only as plumbing check.** |
+|---|---|---|---|
+| 0 | Foundations | ✅ verified | Skeleton, CI, skills, baselines |
+| 1 | Minimal Viable Runtime | ✅ verified | HTTP/1.1, routing, PyO3, CLI; 766k req/s |
+| 2 | Native Router | ✅ verified | matchit radix trie, route params, 51ns lookup |
+| 3 | Memory & Zero-Copy Pipeline | ✅ verified | arena+pool, 752k req/s |
+| 4 | Execution Model & GIL Strategy | ✅ verified | ADR-008: dedicated Python worker thread |
+| 5 | Middleware Engine + Auth | ✅ verified | CORS, SecurityHeaders, JWT, RateLimiter, 0.18% overhead |
+| 6 | Serialization | ✅ verified | serde_json (89ns), simd-json feature |
+| 7 | TLS + HTTP/2 | ✅ verified | rustls, ALPN, 10.7% overhead |
+| 8 | WebSocket + SSE | ✅ verified | tokio-tungstenite, SSE streaming |
+| 9 | Static Assets, Caching, Observability | ✅ verified | StaticDir, Prometheus, compression, OTel |
+| 10 | Native API | ✅ verified | Fully native pipeline — ASGI shim deprecated/removed (2026-08-06) |
+| 11 | Request Validation & Serialization | ✅ verified | JSON Schema validation, Pydantic bridge |
+| 12 | Database ORM Integration | ✅ verified | Pool, migrations, query builders, Python bridge. **2026-08-06: write-path saturation bug fixed (ADR-080)** |
+| 13 | Testing Utilities | ✅ verified | TestClient, async fixtures, snapshot testing |
+| 14 | Production Observability | ✅ verified | Metrics histograms, structured logging, health checks, alerting, audit, panic recovery |
+| **15** | **Graceful Degradation & Circuit Breakers** | **✅ verified** | **44 resilience tests, generic B support** |
+| 19 | Plugin System & Extensibility | ✅ verified | third-party plugin API |
+| 20 | Benchmark & Optimization (Beat FastAPI) | ✅ verified | ledger in BENCHMARKS.md (native SELECT ×125 vs FastAPI, 2026-08-06) |
+| 21 | Advanced DX: Signature Parsing & DI | ✅ verified | `Depends()`, auto-extract args |
+| 22 | True Async & Advanced Web Features | ✅ verified | No-block async, WS/SSE, BackgroundTasks |
+| 23 | Templating Engine Integration | ✅ verified | Jinja2/MiniJinja support |
+| 24 | gRPC & Protobuf Support | ✅ verified | Native gRPC via Tonic (compiles + tests; no prod deployment) |
+| 25 | Ultimate Scale (1M RPS tuning) | 🟡 implemented / unverified | Native fast path hits 430-724k on fixture; **1M RPS never measured — the phase title overclaims** |
+| 26 | Zero-Copy AI Data Boundary | 🟡 implemented / unverified | Arrow/DLPack via PyO3 buffer protocol; no real-model integration test |
+| 27 | Adaptive Batching Router | 🟡 implemented / unverified | `adaptive_batch` decorator exists; no real-model throughput proof |
+| 28 | WASM Middleware Engine | 🟡 implemented / unverified | wasmtime embedded; no real-world workload proof |
+| 29 | High-Throughput LLM Streaming (SSE 2.0) | ✅ verified | TokenStreamResponse, tests pass (framework-level) |
+| 30 | Layered Dependency Injection | ✅ verified | Litestar-style DI, tests |
+| 31 | Class-Based Controllers & Route Composition | ✅ verified | @controller classes, tests |
+| 32 | Native Enterprise Rate Limiting | ✅ verified | GCRA + Redis |
+| 33 | Circuit Breakers & Graceful Degradation | ✅ verified | 44 resilience tests |
+| 34 | Dynamic Configuration (Hot Reloading) | ✅ verified | file watcher + admin API |
+| 35 | GraphQL & Federation Gateway | 🟡 implemented / unverified | async-graphql wired; "Apollo Federation" never tested against a real gateway |
+| 36 | Agentic Workflow DAG Engine | 🟡 implemented / unverified | DAG orchestration in Rust, tests pass; no real agent workload proof |
+| 37 | OTel Distributed Tracing | ✅ verified | OTLP, contextvars, 225 tests |
+| 38 | Hardware-Accelerated JWT & Security | ✅ verified | RS256/ES256, CORS builder, IpRateLimiter |
+| 39 | SAST, Fuzzing & Memory Safety | ✅ verified | 6 fuzz targets, miri, SAFETY comments |
+| 40 | The JustAPI 2.0 "Singularity" Release | 🟡 in progress | **PyPI upload still blocked (no token)** — see Next actions |
+| 41 | Native Inference Engine Foundation | 🟡 implemented / unverified | Candle CPU; `Engine`/`Model` traits, 24 tests. **No real-weights run (MockModel only)** |
+| 42 | KV-Cache Manager (PagedAttention, Rust) | 🟡 implemented / unverified | `KvBlockPool`, `PrefixCache`; unit tests only, no real model |
+| 43 | Continuous-Batching Scheduler | 🟡 implemented / unverified | `Scheduler` prefill/decode interleave; **CPU MockModel only, 0.4% of naive on instant-forward (scheduler sleep dominates)** |
+| 44 | OpenAI-Compatible API Server | 🟡 implemented / unverified | `/v1/*` wired to inference (GIL-free); exercised with MockModel only |
+| 45 | Quantization + Multi-LoRA | 🟡 implemented / unverified | AWQ/GPTQ/FP8 + LoRA registry, feature-gated `real`; **never run with real weights** |
+| 46 | LLM Control Plane | 🟡 implemented / unverified | model registry, KV-aware routing, autoscaling; plumbing only |
+| 47 | FastAPI Parity (model-deploy essentials) | ✅ verified | ApiKeyAuth + OAuth2Password + multipart + Form/Cookie/Header + JsonResponse<T> (248 tests) |
+| 48 | Production Hardening for AI | 🟡 implemented / unverified | speculative decoding + disaggregated P/D + structural benchmarks; **structural = MockModel ratios, NOT real-GPU tokens/sec** |
+| 49 | Tree-based Speculative Decoding | 🟡 implemented / unverified | Medusa/EAGLE-style tree verification; acceptance-rate proof on MockModel only |
+| 50 | RadixAttention Prefix Caching | 🟡 implemented / unverified | `RadixPrefixCache` wired into Scheduler; unit-tested, no real model |
+| 51 | Scheduler Serving Integration | 🟡 implemented / unverified | `SchedulerEngine` bridges Engine+Scheduler; **CPU fixture with instant-forward MockModel** |
+| **52** | **GPU Benchmark Gate** | **🔴 frozen** | **The only honest status for "LLM performance": no CUDA driver, no real-weight run (ADR-067). The claim "beats vLLM" is UNTESTED.** |
 
 ---
 
@@ -155,7 +167,12 @@ cloud-native readiness.
 
 ## Phase 10 — ASGI Shim + Native API (completed 2026-07-05)
 
-### Tier A — ASGI Shim
+> **Deprecation note (2026-08-06):** the Tier A ASGI shim was **removed**. JustAPI
+> is now a fully native runtime — routing, middleware, validation, and
+> serialization all run in Rust with no ASGI/Starlette dependency. Tier A below
+> is historical record only; the native API (Tier B) is the sole supported path.
+
+### Tier A — ASGI Shim (historical)
 - [x] `Server::with_handler()`, `MiddlewareChain::set_handler()`
 - [x] ASGI worker thread with persistent asyncio event loop, `serve_with_app()`
 - [x] Lifespan protocol, streaming response via `ResponseEvent` bridge
@@ -603,6 +620,20 @@ Don't duplicate that reasoning here — just reference the entry.
 
 2. Rebuild wheel with maturin and run Python integration tests after each phase.
 
+3. **[PROPOSED — see docs/SCOPE_CUT.md] Scope-cut for a testable core.**
+   Three tiers: (1) `justapi-core` `default = []` + `full` convenience flag +
+   CI split (fast default-features gate vs `--all-features` matrix); (2)
+   `justapi-py` maps Python extras to core features (`pip install
+   justapi[db|ws|grpc|graphql|inference|http3|otlp|...]`) with import-hint
+   degradation; (3) fix the `db_bridge`/`edge_cases` integration-test feature
+   guards. Requires a focused session: the Python glue currently imports
+   DB/WS/gRPC symbols unconditionally, so the binding layer needs
+   feature-guarding first.
+
+4. **[DONE — ADR-082] HTTP/3 native pipeline wiring.** `app.enable_http3(cert, key)`
+   serves Python handlers over QUIC through the full native pipeline; verified
+   end-to-end (`http3_python_native_pipeline` test).
+
 ## Production-readiness plan (2.0.8 pre-release hardening)
 
 Full plan in `PRODUCTION_PLAN.md` (written 2026-07-20 from the audit + live
@@ -630,7 +661,7 @@ reproductions). Blockers tracked there; summary:
   `multiprocessing` fork contamination (passes in isolation).
 - **P2.1:** no real DB-backed CRUD benchmark vs FastAPI/Robyn exists — the only
   fair "real life" number is missing.
-- **P3.1:** portable `manylinux_2_28` wheel built + `twine check` PASSED (installs/imports in a fresh venv); **unpublished** — blocked on `MATURIN_PYPI_TOKEN` (no token in env). Add `musllinux`/`aarch64` wheels before release.
+- **P3.1:** **4 portable wheels built + twine check PASSED + fresh-venv install verified** (2026-08-06): manylinux x86_64 + aarch64, musllinux x86_64 + aarch64 (via `maturin --zig`). All include the ADR-080/081 fixes. **Unpublished** — blocked only on `MATURIN_PYPI_TOKEN`. `scripts/publish.sh` = build all 4 platforms + verify + upload in one command.
 
 ## Open issues / follow-ups (2026-07-11)
 
@@ -654,7 +685,7 @@ reproductions). Blockers tracked there; summary:
 
 - Rust owns I/O, Python owns application logic (ADR-008)
 - Dedicated Python worker thread (zero GIL contention)
-- Tier B (native) for performance, Tier A (ASGI) for compatibility
+- Fully native stack — no ASGI compatibility layer (deprecated, see Phase 10 note)
 - All new features must have benchmark gates — if it doesn't beat FastAPI, it doesn't ship
 # JustAPI: The Singularity Master Plan (Phases 26 - 40)
 

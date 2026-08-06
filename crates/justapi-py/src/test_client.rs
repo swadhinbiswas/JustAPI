@@ -115,7 +115,6 @@ impl JustAPITestClient {
             schemas,
             schema_jsons,
             query_schema_jsons,
-            db_pool.clone(),
             db_url_str,
             app_py,
             needs_request,
@@ -190,6 +189,27 @@ impl JustAPITestClient {
     fn delete(&self, py: Python<'_>, path: &str) -> PyResult<Py<PyAny>> {
         let path = path.to_owned();
         self.do_request(py, move |client, rt| rt.block_on(client.delete(&path)))
+    }
+
+    /// Send an HTTP QUERY request (RFC 10008): safe, idempotent, body-carrying.
+    fn query(&self, py: Python<'_>, path: &str, body: Vec<u8>) -> PyResult<Py<PyAny>> {
+        let path = path.to_owned();
+        self.do_request(py, move |client, rt| rt.block_on(client.query(&path, body)))
+    }
+
+    /// QUERY with extra request headers (RFC 10008 requires a Content-Type).
+    #[pyo3(signature = (path, body, headers))]
+    fn query_with(
+        &self,
+        py: Python<'_>,
+        path: &str,
+        body: Vec<u8>,
+        headers: Vec<(String, String)>,
+    ) -> PyResult<Py<PyAny>> {
+        let path = path.to_owned();
+        let hdr: Vec<(&str, &str)> =
+            headers.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        self.do_request(py, move |client, rt| rt.block_on(client.query_with(&path, body, &hdr)))
     }
 }
 

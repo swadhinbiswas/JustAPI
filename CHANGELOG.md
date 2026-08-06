@@ -64,6 +64,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 2 new fuzz targets (WebSocket, gRPC)
 - 521 total tests passing
 
+## [2.0.9-dev] - 2026-08-06
+
+### Added
+- **HTTP/3 (QUIC) transport** — `app.enable_http3(cert_path, key_path)` serves the app over HTTP/3 on the same port as TCP (feature `http3`; h3 + h3-quinn + quinn). Python handlers, DI, schema validation, and the GIL pool all work over QUIC (ADR-079, ADR-082)
+- **`Security` dependency marker** — `Security(dep, scopes=...)` is `Depends` with OAuth2-scope metadata (FastAPI parity); top-level re-exports of `JwtAuth`, `OAuth2PasswordBearer`, `OAuth2PasswordRequestForm`, `OAuth2PasswordRequestFormStrict` from `justapi.auth`
+- **QUERY method (RFC 10008) testability** — `TestClient::query`/`query_with`, `JustAPITestClient.query`/`query_with`, `AsyncTestClient.query` (RFC requires Content-Type; enforced with 400)
+- **`scripts/sanitize.sh`** — fast memory-safety gate: ASan on the full core suite + targeted Miri on the only `unsafe` module (`memory.rs`); replaces the 20+ min full-suite Miri run
+- **4 portable wheels** — manylinux + musllinux × x86_64 + aarch64 via `maturin --zig`; `scripts/publish.sh` builds/verifies/upload all
+
+### Fixed
+- **CRITICAL: Python-handler write-path collapse** — concurrent writes dropped to ~3 RPS at c=11 (was 150 at c=10): the request-scoped auto-transaction double-acquired pool connections (`2N` for `N` writes). Removed; SQLite BUSY/LOCK now maps to 503 Retry-After. Writes now flat ~150 RPS c=1..50 (ADR-080)
+- **CRITICAL: GIL pool not fork-safe** — a forked child inherited the parent's initialized pool whose worker threads don't exist → every Python request hung (504s). Pool now tracks its PID and rebuilds after `fork(2)`; fixes prefork deployments and the long-standing `test_circuit_breaker` flake (ADR-081)
+- **DI awaitedness bug** — `Depends`/`Security` on async callable *instances* (e.g. `OAuth2PasswordBearer`) were invoked without awaiting (unawaited coroutines leaked); `_is_async_callable` now checks `__call__`
+- **Default-feature test gate** — `db_bridge`/`edge_cases` integration tests now carry proper `#![cfg(feature = ...)]` guards; `cargo test --workspace` passes on default features
+
+### Changed
+- **PLAN.md honesty pass** — phase table distinguishes ✅ verified vs 🟡 implemented/unverified (all AI/inference phases marked unverified: MockModel-only, no GPU/real weights); Phase 52 stays frozen
+- **Docs fabrication sweep** — removed false APIs from docs (`justapi.middleware`, `PyScheduler`, `enable_rate_limiter`, `enable_compression`, `fastapi.security` imports); rewrote security tutorials, scheduler API, performance-tuning with the real API
+- **README comparison table** — now states the honest breakdown (700k native fast path / 120k Python / 180k DB SELECT) instead of a single number
+
 ## [Unreleased]
 
 ### Added

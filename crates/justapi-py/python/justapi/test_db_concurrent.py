@@ -70,3 +70,66 @@ async def test_concurrent_writes_via_test_client():
         if os.path.exists(db_path):
             os.unlink(db_path)
         os.rmdir(tmpdir)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_writes_small_pool_no_saturation_collapse():
+    """Regression: concurrent Python-handler writes must NOT collapse when the
+    pool is small (ADR-080).
+
+    The old request-scoped auto-transaction acquired a pool connection on the
+    async runtime and held it while the request queued on the single GIL
+    worker, then the handler's `app.db.query` acquired a *second* connection:
+    2N connections for N concurrent writes on an N-connection pool → immediate
+    saturation ("pool timed out", ~150 RPS at c=10 → ~3 RPS at c=11). With the
+    fix, concurrent writes stay flat and all persist.
+    """
+    tmpdir = tempfile.mkdtemp()
+    db_path = os.path.join(tmpdir, "svc_small_pool.db")
+    open(db_path, "w").close()
+    try:
+        from justapi import Database
+
+        app = JustAPIApp()
+        # A deliberately tiny pool: 2 connections for 50 concurrent writers.
+        app.set_database(
+            Database(f"sqlite://{db_path}", max_connections=2, request_acquire_timeout=5.0)
+        )
+
+        @app.post("/items")
+        async def create(request):
+            body = request.json()
+            app.db.query(
+                "INSERT INTO items(name, qty) VALUES (?, ?)",
+                [body["name"], body["qty"]],
+            )
+            return {"ok": True}
+
+        async with AsyncTestClient(app, database=f"sqlite://{db_path}") as c:
+            app.db.query(
+                "CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT, qty INTEGER)"
+            )
+            import asyncio
+
+            async def insert_one(v):
+                return await c.post(
+                    "/items", f'{{"name":"w{v}","qty":{v}}}'.encode()
+                )
+
+            results = await asyncio.gather(
+                *(insert_one(v) for v in range(50)),
+                return_exceptions=True,
+            )
+            # Every request must complete successfully (200) — the old code
+            # returned 500/503 "pool timed out" for the majority here.
+            errors = [
+                r for r in results if isinstance(r, Exception) or r.get("status") != 200
+            ]
+            assert not errors, f"{len(errors)} writes failed: {errors[:3]}"
+
+            rows = app.db.query("SELECT COUNT(*) AS c FROM items")
+            assert rows[0]["c"] == 50, f"expected 50 rows, got {rows[0]['c']}"
+    finally:
+        if os.path.exists(db_path):
+            os.unlink(db_path)
+        os.rmdir(tmpdir)

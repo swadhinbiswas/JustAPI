@@ -7,7 +7,7 @@ keywords: [JustAPI, response cookies, response headers, Set-Cookie, custom heade
 ## Setting Cookies
 
 ```python
-from starlette.responses import JSONResponse
+from justapi import JSONResponse
 from justapi import JustAPIApp
 
 app = JustAPIApp()

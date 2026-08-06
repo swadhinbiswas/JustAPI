@@ -24,7 +24,7 @@ Set up templates in your app:
 
 ```python
 from justapi import JustAPIApp
-from starlette.templating import Jinja2Templates
+from justapi import Jinja2Templates
 
 app = JustAPIApp()
 templates = Jinja2Templates(directory="templates")

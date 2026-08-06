@@ -13,6 +13,8 @@ pub mod gateway;
 #[cfg(feature = "graphql")]
 pub mod graphql;
 pub mod health;
+#[cfg(feature = "http3")]
+pub mod http3;
 #[cfg(feature = "mail")]
 pub mod mail;
 pub mod memory;
@@ -138,12 +140,25 @@ pub fn service_unavailable_response(detail: &str) -> Response<ResponseBody> {
 
 /// Map a SQLx error from a request-path DB operation to the right status.
 /// Saturation (`PoolTimedOut`/`PoolClosed`) becomes `503` (backpressure);
-/// everything else is a `500`.
+/// SQLite lock contention (`SQLITE_BUSY` after `busy_timeout`) is also a
+/// transient, retryable condition → `503` with `Retry-After`, so a concurrent
+/// write crunch doesn't surface as a 5s stall + 500. Everything else is a 500.
 #[cfg(feature = "db")]
 pub fn db_error_response(e: &sqlx::Error) -> Response<ResponseBody> {
     match e {
         sqlx::Error::PoolTimedOut | sqlx::Error::PoolClosed => {
             service_unavailable_response("database pool saturated; please retry shortly")
+        }
+        sqlx::Error::Database(db_err) => {
+            let code = db_err.code().map(|c| c.to_string()).unwrap_or_default();
+            // SQLite extended result codes: 5 = SQLITE_BUSY, 6 = SQLITE_LOCKED
+            // (517 = BUSY_SNAPSHOT, 518 = BUSY_RECOVERY, 261 = LOCKED_SHAREDCACHE).
+            let is_lock = matches!(code.as_str(), "5" | "6" | "517" | "518" | "261");
+            if is_lock {
+                service_unavailable_response("database is locked; please retry shortly")
+            } else {
+                error_response(hyper::StatusCode::INTERNAL_SERVER_ERROR, "database error")
+            }
         }
         _ => error_response(hyper::StatusCode::INTERNAL_SERVER_ERROR, "database error"),
     }

@@ -1,5 +1,6 @@
 """Integration test for Tier B Native API (JustAPIApp).
 """
+import concurrent.futures
 import json
 import subprocess
 import sys
@@ -21,9 +22,21 @@ async def echo_handler(request):
         "body": request["body"],
     }
 
+# A synchronous (GIL-bound) handler: under CPython only one worker can run it
+# at a time, so a burst of requests exercises the GIL pool's bounded dispatch
+# queue (capacity 16 per worker). Before the backpressure fix, overflowing that
+# queue surfaced as spurious RFC 9457 404s with no log (try_send rejection
+# masked by handle_request). This handler keeps the pool busy long enough that
+# many requests accumulate concurrently.
+def sync_handler(request):
+    import time as _t
+    _t.sleep(0.0005)
+    return {"message": "sync"}
+
 app = JustAPIApp()
 app.get("/hello/{name}", hello_handler)
 app.post("/echo", echo_handler)
+app.get("/sync", sync_handler)
 app.run("127.0.0.1:9867")
 """
 
@@ -93,5 +106,49 @@ def test_native_api():
             proc.communicate()
 
 
+def test_sync_handler_no_spurious_404_under_load():
+    """Regression: a burst of concurrent requests to a GIL-bound (sync)
+    Python handler must not produce spurious 404s.
+
+    The GIL pool dispatches jobs through a bounded channel (cap 16/worker for a
+    single GIL worker). Dispatch used `try_send`, so any overflow surfaced as a
+    handler error that `handle_request` masked as an RFC 9457 404. With
+    `send().await` backpressure the pool throttles instead of dropping, and the
+    handler-chain error branch now returns 500 instead of a fake 404.
+    """
+    proc = subprocess.Popen(
+        [sys.executable, "-c", SERVER_SCRIPT],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    addr = "127.0.0.1:9867"
+    time.sleep(0.8)
+
+    def fire(_):
+        try:
+            resp = urllib.request.urlopen(f"http://{addr}/sync", timeout=10)
+            return resp.status
+        except urllib.error.HTTPError as e:
+            return e.code
+        except Exception:
+            return -1
+
+    try:
+        # 64 threads >> GIL pool capacity of 16, forcing queue contention.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=32) as ex:
+            statuses = list(ex.map(fire, range(512)))
+        bad = [s for s in statuses if s != 200]
+        assert not bad, f"Expected all 200, got non-200 statuses: {bad}"
+        print("PASS: 512 concurrent /sync requests -> all 200 (no spurious 404)")
+    finally:
+        proc.terminate()
+        try:
+            proc.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+
+
 if __name__ == "__main__":
     test_native_api()
+    test_sync_handler_no_spurious_404_under_load()

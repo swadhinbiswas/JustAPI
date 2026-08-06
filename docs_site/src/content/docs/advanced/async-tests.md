@@ -1,17 +1,18 @@
 ---
 title: Async Tests
-description: Write async test functions with httpx.AsyncClient for JustAPI applications.
-keywords: [JustAPI, async tests, httpx, AsyncClient, pytest-asyncio]
+description: Write async tests with AsyncTestClient for JustAPI applications.
+keywords: [JustAPI, async tests, pytest-asyncio, AsyncTestClient, TestClient]
 ---
+
+JustAPI ships its own in-process test client — no external ASGI transport needed.
+Use `AsyncTestClient` for async tests and `JustAPITestClient` for sync tests.
 
 ## Async Test Client
 
-Use `httpx.AsyncClient` for async testing:
-
 ```python
 import pytest
-import httpx
 from justapi import JustAPIApp
+from justapi.testing import AsyncTestClient
 
 app = JustAPIApp()
 
@@ -19,45 +20,50 @@ app = JustAPIApp()
 async def hello():
     return {"message": "Hello!"}
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_hello():
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/hello")
-        assert response.status_code == 200
-        assert response.json() == {"message": "Hello!"}
+    async with AsyncTestClient(app) as client:
+        resp = await client.get("/hello")
+        assert resp.status == 200
+        assert resp.json() == {"message": "Hello!"}
 ```
 
-## Testing with Dependencies
+The client runs the full Rust pipeline (routing, middleware, native fast path)
+in-process, so tests exercise the same code paths as production.
+
+## Testing Database-Backed Routes
 
 ```python
-def override_get_db():
-    return TestDB()
-
-app.dependency_overrides[get_db] = override_get_db
-
-@pytest.mark.anyio
-async def test_with_override():
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/items/")
-        assert response.status_code == 200
+@pytest.mark.asyncio
+async def test_db():
+    async with AsyncTestClient(app, database="sqlite::memory:") as client:
+        resp = await client.post("/items", b'{"name":"widget"}')
+        assert resp.status == 200
 ```
 
-## Setup and Teardown
+## Fixtures
 
 ```python
+import pytest
+from justapi.testing import AsyncTestClient
+
 @pytest.fixture
 async def client():
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as c:
+    async with AsyncTestClient(app) as c:
         yield c
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_example(client):
-    response = await client.get("/hello")
-    assert response.status_code == 200
+    resp = await client.get("/hello")
+    assert resp.status == 200
 ```
+
+## Supported Methods
+
+`get`, `post`, `put`, `patch`, `delete` — each returns a response object with
+`.status` and `.json()` (mirroring the sync `JustAPITestClient`).
 
 ## See Also
 
-- [Testing](/tutorials/testing/) — sync testing with JustAPITestClient
-- [Testing with Overrides](/advanced/async-tests/) — dependency overrides
+- [Testing](/tutorials/testing/) — sync testing with `JustAPITestClient`
 - [Debugging](/tutorials/debugging/) — debugging techniques

@@ -155,10 +155,11 @@ app.run("0.0.0.0:8000")
 
 Granian is an ASGI server (like Uvicorn), not a framework. You likely use it with FastAPI or Starlette.
 
-**Option A:** Migrate to JustAPI as a framework (recommended)
-**Option B:** Use JustAPI as an ASGI server (compatibility mode)
+JustAPI is a self-contained runtime: it hosts its own Rust HTTP server and does
+not serve third-party ASGI applications. To move off Granian you migrate the
+framework, not just the transport.
 
-### Option A: Full Migration to JustAPI
+### Option A: Full Migration to JustAPI (recommended)
 
 ```python
 # Before (FastAPI + Granian)
@@ -178,23 +179,12 @@ async def hello():
     return {"message": "Hello"}
 ```
 
-### Option B: ASGI Compatibility Mode
+### Option B: Run Both During Transition
 
-```python
-# Keep your FastAPI app, run on JustAPI's Rust runtime
-from fastapi import FastAPI
-from justapi import JustAPIApp
-
-fastapi_app = FastAPI()
-
-@fastapi_app.get("/hello")
-async def hello():
-    return {"message": "Hello"}
-
-# Run FastAPI app on JustAPI's Rust server
-app = JustAPIApp()
-app.run("0.0.0.0:8000", asgi_app=fastapi_app)
-```
+If you need to keep a FastAPI app live while migrating, run JustAPI and the
+legacy ASGI app side by side and route by path with a reverse proxy (see
+[Behind a Proxy](/advanced/behind-a-proxy/)). Port route-by-route onto JustAPI
+and move the proxy weights over as each route is migrated.
 
 ### Step 2: Update Server Configuration
 
@@ -221,8 +211,7 @@ from starlette.middleware.cors import CORSMiddleware
 app.add_middleware(CORSMiddleware, allow_origins=["*"])
 
 # After (JustAPI)
-from justapi.middleware import CORS
-app.add_middleware(CORS(allow_origins=["*"]))
+app.add_cors(allow_origins=["*"])
 ```
 
 ---
@@ -331,12 +320,13 @@ async def error():
 ```python
 # Robyn - Manual implementation
 
-# JustAPI - Built-in JWT
-from justapi import JWTAuth
-auth = JWTAuth(secret="your-secret-key")
+# JustAPI - Built-in JWT (Rust-native middleware, validates every request)
+from justapi import JustAPIApp
+
+app = JustAPIApp()
+app.set_jwt_auth(secret="your-secret-key")
 
 @app.get("/protected")
-@auth.require
 async def protected_endpoint():
     return {"message": "Authenticated"}
 ```

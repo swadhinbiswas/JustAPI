@@ -3,6 +3,7 @@
 //! routing. SQLite runs in-memory (always available); Postgres/MySQL tests are
 //! skipped unless a `JUSTAPI_TEST_PG_URL` / `JUSTAPI_TEST_MYSQL_URL` env var is
 //! provided, so the suite stays hermetic by default.
+#![cfg(feature = "db")]
 
 use base64::Engine;
 use justapi_core::db::{AnyPool, DatabaseConfig, DbKind, IsolationLevel, Param};

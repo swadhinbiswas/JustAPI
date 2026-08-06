@@ -8,6 +8,7 @@ license.workspace = true
 default = ["opentelemetry"]
 tls = ["rustls", "tokio-rustls", "rustls-pemfile"]
 ws = ["tokio-tungstenite", "sha1"]
+http3 = ["dep:h3", "dep:h3-quinn", "dep:quinn", "tls"]
 compression = []
 brotli-compression = ["compression", "brotli"]
 zstd-compression = ["compression", "zstd"]
@@ -78,6 +79,10 @@ justapi-inference = { path = "../justapi-inference", optional = true }
 tempfile = "3.27.0"
 lettre = { workspace = true, optional = true }
 minijinja = { workspace = true, optional = true }
+h3 = { workspace = true, optional = true }
+h3-quinn = { workspace = true, optional = true }
+quinn = { workspace = true, optional = true }
+rustls-pki-types.workspace = true
 
 [dev-dependencies]
 proptest = "1"

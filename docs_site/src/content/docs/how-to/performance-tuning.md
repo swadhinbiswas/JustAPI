@@ -200,81 +200,72 @@ redis-cli info clients
 
 ## 5. Middleware Optimization
 
-### Middleware Order Matters
+### Prefer Native Middleware
 
-Middleware executes in the order it's added. Put fastest middleware first:
+JustAPI's CORS, security headers, and JWT auth run in the Rust middleware
+chain with zero GIL overhead. Prefer them over Python middleware:
 
 ```python
 from justapi import JustAPIApp
-from justapi.middleware import CORS, SecurityHeaders, RateLimiter
 
 app = JustAPIApp()
 
-# Order matters: fastest first
-app.add_middleware(CORS())           # Fast (header check)
-app.add_middleware(SecurityHeaders()) # Fast (header addition)
-app.add_middleware(RateLimiter())     # Medium (Redis check)
+# Rust-native: CORS
+app.add_cors(allow_origins=["https://example.com"])
+
+# Rust-native: security headers (HSTS optional)
+app.enable_secure_headers(with_hsts=True)
+
+# Rust-native: JWT auth (validates every request in Rust)
+app.set_jwt_auth(secret="your-hmac-secret")
 ```
 
-### Disable Unused Middleware
+### Python Middleware for Custom Logic
+
+Custom per-request logic is an async Python middleware. Keep it to logic that
+must run in Python — the native fast path bypasses Python middleware by design:
 
 ```python
-# Minimal middleware for maximum performance
-app = JustAPIApp(middlewares=[])
-
-# Or select specific middleware
-app = JustAPIApp(middlewares=[CORS()])
-```
-
-### Middleware Profiling
-
-```python
-import time
-
 @app.middleware("http")
 async def profile_middleware(request, call_next):
     start = time.perf_counter()
     response = await call_next(request)
     duration = time.perf_counter() - start
-    
+
     if duration > 0.1:  # Log slow middleware
-        print(f"Slow middleware: {request.url.path} took {duration:.3f}s")
-    
+        print(f"Slow middleware: {request.get('path')} took {duration:.3f}s")
+
     return response
 ```
 
+> **Performance note:** Python middleware runs on the Python side of the
+> boundary and is bypassed (by design) by the native fast path
+> (`native=True`). For hot endpoints, prefer native middleware
+> (`add_cors`, `enable_secure_headers`, `set_jwt_auth`) or no middleware.
+
+### Middleware Profiling
+
+The built-in metrics include per-request latency histograms — see
+[Observability](/advanced/observability/) for p50/p95/p99 tracking.
+
 ---
 
-## 6. Compression Settings
+## 6. Response Compression
 
-### Enable Compression
+Response compression (Gzip, with feature-gated Brotli/Zstd) is a Rust-side
+server option:
 
-```python
-from justapi import JustAPIApp
-
-app = JustAPIApp()
-app.enable_compression(
-    min_size=1024,  # Minimum response size to compress (bytes)
-    algorithms=["gzip", "deflate"]  # Enabled algorithms
-)
+```rust
+// justapi-core / CLI: add compression to the server chain
+let server = Server::new(addr).add_compression();
 ```
 
-### Algorithm Performance
-
-| Algorithm | Speed | Compression Ratio | Use Case |
-|-----------|-------|-------------------|----------|
-| gzip | Fast | Good | General purpose |
-| deflate | Fastest | Moderate | When speed matters |
-| brotli | Slow | Best | Static assets |
-| zstd | Fast | Best | Large payloads |
-
-### Disable Compression for Specific Routes
-
-```python
-@app.get("/api/fast", compress=False)
-async def fast_endpoint():
-    return {"data": "small"}
-```
+For Python apps, compression is applied per-response via a streaming or
+static response with the appropriate `Content-Encoding` — see the
+[Streaming Output](/advanced/streaming-output/) guide. The Rust
+`CompressionMiddleware` compresses responses based on the client's
+`Accept-Encoding`, with Brotli/Zstd enabled by the `brotli-compression` /
+`zstd-compression` feature flags.
 
 ---
 
@@ -282,31 +273,22 @@ async def fast_endpoint():
 
 ### Response Caching
 
-```python
-from justapi import JustAPIApp
-from justapi.middleware import CacheControl
-
-app = JustAPIApp()
-app.add_middleware(CacheControl(
-    max_age=3600,  # 1 hour
-    private=False
-))
-```
-
-### Route-Level Caching
-
-```python
-@app.get("/api/data", cache={"max_age": 300, "private": True})
-async def cached_data():
-    return expensive_computation()
-```
-
 ### Static File Caching
 
-JustAPI automatically sets cache headers for static files:
+JustAPI automatically sets cache headers for static files (served via
+`app.frontend(...)` or a static mount):
 - ETag-based validation
-- 1-hour cache lifetime
+- `Cache-Control` headers
 - 304 Not Modified responses
+
+### Response Caching for Custom Routes
+
+For route-level response caching, hold a short-lived cache yourself (e.g. a
+dict keyed by path, or Redis via the `RateLimiter`/Redis integration) and
+return the cached payload from the handler. JustAPI's request coalescing
+(`app.enable_request_coalescing(...)`) collapses thundering-herd traffic on
+identical concurrent requests into a single upstream call — a useful
+read-path optimization for expensive endpoints.
 
 ---
 

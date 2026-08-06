@@ -130,6 +130,15 @@ class AsyncTestClient:
     async def delete(self, path: str) -> dict:
         return await self._run("DELETE", path)
 
+    async def query(self, path: str, body: bytes = b"") -> dict:
+        client = self._client
+        if client is None:
+            raise RuntimeError("AsyncTestClient not initialized")
+        loop = asyncio.get_running_loop()
+        # RFC 10008 requires a Content-Type on QUERY requests.
+        fn = partial(client.query_with, path, body, [("Content-Type", "application/json")])
+        return await loop.run_in_executor(None, fn)
+
 
 # ---------------------------------------------------------------------------
 # Database test helpers

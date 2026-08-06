@@ -211,6 +211,38 @@ class Depends:
         self.use_cache = use_cache
 
 
+def _is_async_callable(obj):
+    """True if `obj` is an async function OR a callable instance whose
+    `__call__` is async. `inspect.iscoroutinefunction(obj)` returns False for
+    instances (e.g. `OAuth2PasswordBearer(...)`), which made the DI invoke
+    async dependencies without awaiting them.
+    """
+    if inspect.iscoroutinefunction(obj):
+        return True
+    call = getattr(obj, "__call__", None)
+    return call is not None and inspect.iscoroutinefunction(call)
+
+
+class Security(Depends):
+    """`Security(dependency)` is `Depends(dependency)` with OAuth2 scope
+    support, mirroring FastAPI's `Security`. The `scopes` are recorded for
+    OpenAPI documentation; scope enforcement is the dependency's job.
+
+        from justapi import Security
+        from justapi.auth import OAuth2PasswordBearer
+
+        oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+
+        @app.get("/items")
+        def list_items(token: str = Security(oauth2_scheme, scopes=["read"])):
+            ...
+    """
+
+    def __init__(self, dependency: typing.Callable, use_cache: bool = True, scopes=None):
+        super().__init__(dependency, use_cache=use_cache)
+        self.scopes = list(scopes) if scopes else []
+
+
 class Mailer:
     """SMTP email sender with optional template support.
 
@@ -603,7 +635,7 @@ class JustAPIApp:
                 gen = dep.dependency(**dep_kwargs)
                 res = next(gen)
                 request["_dep_cleanup"].append(gen.close)
-            elif inspect.iscoroutinefunction(dep.dependency):
+            elif _is_async_callable(dep.dependency):
                 res = await dep.dependency(**dep_kwargs)
             else:
                 res = dep.dependency(**dep_kwargs)
@@ -645,7 +677,7 @@ class JustAPIApp:
                     gen = param.default.dependency(**dep_kwargs)
                     res = next(gen)
                     request["_dep_cleanup"].append(gen.close)
-                elif inspect.iscoroutinefunction(param.default.dependency):
+                elif _is_async_callable(param.default.dependency):
                     res = await param.default.dependency(**dep_kwargs)
                 else:
                     res = param.default.dependency(**dep_kwargs)
@@ -915,11 +947,11 @@ class JustAPIApp:
         is_async = inspect.iscoroutinefunction(handler)
         for name, param in sig.parameters.items():
             if isinstance(param.default, Depends):
-                if inspect.iscoroutinefunction(param.default.dependency):
+                if _is_async_callable(param.default.dependency):
                     is_async = True
 
         for dep in all_deps:
-            if inspect.iscoroutinefunction(dep.dependency):
+            if _is_async_callable(dep.dependency):
                 is_async = True
 
         has_bg = "background_tasks" in sig.parameters or any(
@@ -1356,6 +1388,26 @@ class JustAPIApp:
         
     def enable_gateway(self, config_path: str):
         self._app.enable_gateway(config_path)
+
+    def enable_http3(self, cert_path: str, key_path: str):
+        """Enable an HTTP/3 (QUIC) listener alongside the TCP server.
+
+        ``run(addr)`` also binds the same address over UDP and serves the same
+        application handler with HTTP/3. QUIC requires TLS 1.3, so PEM
+        certificate and private-key files are required:
+
+            app.enable_http3(cert_path="certs/fullchain.pem",
+                             key_path="certs/privkey.pem")
+            app.run("0.0.0.0:443")
+
+        Requires the ``http3`` build feature; without it this method raises.
+        """
+        if not hasattr(self._app, "enable_http3"):
+            raise NotImplementedError(
+                "HTTP/3 support is not compiled into this build — rebuild with "
+                "the `http3` feature (justapi-core) or install a wheel built with it."
+            )
+        self._app.enable_http3(cert_path, key_path)
 
     def enable_circuit_breaker(self, failure_threshold: int = 5, reset_timeout_ms: int = 10000):
         """

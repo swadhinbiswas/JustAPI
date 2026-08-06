@@ -1,14 +1,21 @@
 ---
 title: Middleware
-description: Intercept requests and responses with JustAPI middleware for logging, timing, CORS, and custom processing — a FastAPI alternative built on Rust.
-keywords: middleware, CORS, request interception, JustAPI, FastAPI alternative, Rust middleware
+description: Intercept requests and responses with JustAPI middleware for logging, timing, CORS, and custom processing.
+keywords: middleware, CORS, request interception, JustAPI, Rust middleware
 ---
 
-Middleware lets you run code before and after every request. JustAPI supports the same middleware pattern as FastAPI and Starlette.
+Middleware lets you run code before and after every request. JustAPI has two
+middleware layers:
+
+- **Native Rust middleware** (CORS, JWT, security headers) — configured with
+  dedicated methods, runs on every request including the native fast path.
+- **Python middleware** — your own `async def mw(request, call_next)` callables,
+  registered with `@app.middleware("http")` or per-route `middlewares=`.
 
 ## Basic HTTP Middleware
 
-Use the `@app.middleware("http")` decorator:
+Use the `@app.middleware("http")` decorator. Middleware is **async** and must
+`await call_next(request)`:
 
 ```python
 import time
@@ -18,21 +25,27 @@ app = JustAPIApp()
 
 
 @app.middleware("http")
-def timing_middleware(request, call_next):
+async def timing_middleware(request, call_next):
     start = time.time()
-    response = call_next(request)
+    response = await call_next(request)
     elapsed = time.time() - start
-    response["headers"] = response.get("headers", []) + [
-        (b"X-Process-Time", str(elapsed).encode())
-    ]
+    response.headers.append(
+        (b"X-Process-Time", str(round(elapsed, 4)).encode())
+    )
     return response
 ```
 
-The middleware receives the `request` and a `call_next` function that dispatches the request down the chain. The return value is a response dict.
+`call_next` dispatches the request down the chain; the return value is the
+handler's response object.
+
+> **Performance:** Python middleware runs on the Python side of the boundary and
+> is bypassed (must be) by the native fast path. Prefer native middleware
+> (`add_cors`, `enable_secure_headers`, `set_jwt_auth`) when possible. Keep
+> Python middleware to logic that must run in Python.
 
 ## CORS Middleware
 
-JustAPI has a built-in CORS configuration method:
+JustAPI has a built-in, Rust-native CORS configuration method:
 
 ```python
 app.add_cors(
@@ -52,6 +65,8 @@ app.add_cors(
 
 ## Secure Headers Middleware
 
+Add safe HTTP security headers (Rust-native):
+
 ```python
 app.enable_secure_headers(with_hsts=True)
 ```
@@ -62,25 +77,24 @@ This adds:
 - `Strict-Transport-Security` (when `with_hsts=True`)
 - `Content-Security-Policy`
 - `X-XSS-Protection: 0`
-- `Referrer-Policy`
 
 ## Multiple Middleware
 
-Middlewares are executed in registration order:
+Middlewares are executed in registration order (first added is outermost):
 
 ```python
 @app.middleware("http")
-def middleware_one(request, call_next):
+async def middleware_one(request, call_next):
     print("Before 1")
-    response = call_next(request)
+    response = await call_next(request)
     print("After 1")
     return response
 
 
 @app.middleware("http")
-def middleware_two(request, call_next):
+async def middleware_two(request, call_next):
     print("Before 2")
-    response = call_next(request)
+    response = await call_next(request)
     print("After 2")
     return response
 ```
@@ -97,23 +111,17 @@ After 1
 
 ## Route-Level Middleware
 
-You can add middleware to specific routes or routers using dependencies:
+Attach middleware to individual routes:
 
 ```python
-from justapi import Depends, HTTPException, Header
+async def auth_middleware(request, call_next):
+    if not (request.get("headers") or {}).get("x-token"):
+        return {"status": 401, "body": {"detail": "unauthorized"}}
+    return await call_next(request)
 
-
-def require_admin(authorization: str = Header(...)):
-    if authorization != "Bearer admin-token":
-        raise HTTPException(403, "Admin access required")
-
-
-@router.get("/admin/users", dependencies=[Depends(require_admin)])
-def list_all_users(request):
-    return {"users": [...]}
-
-
-app.include_router(router, prefix="/api/v1")
+@app.get("/protected", middlewares=[auth_middleware])
+async def protected(request):
+    return {"message": "top secret"}
 ```
 
 ## Real-World Patterns
@@ -127,48 +135,48 @@ logger = logging.getLogger("justapi")
 
 
 @app.middleware("http")
-def log_requests(request, call_next):
-    method = request.method
-    path = request.path
-    logger.info(f"→ {method} {path}")
-    response = call_next(request)
-    status = response.get("status", 200)
-    logger.info(f"← {method} {path} → {status}")
+async def log_requests(request, call_next):
+    method = request.get("method")
+    path = request.get("path")
+    logger.info("→ %s %s", method, path)
+    response = await call_next(request)
+    status = getattr(response, "status_code", None) or 200
+    logger.info("← %s %s → %s", method, path, status)
     return response
 ```
 
-### Rate Limiting Middleware (via Dependency)
+### Authorization via Dependency
 
 ```python
 from justapi import Depends, HTTPException, Header
-import time
-
-request_counts = {}
-
-def rate_limiter(ip: str = Header("X-Forwarded-For")):
-    now = time.time()
-    window = 60  # 1 minute
-    max_requests = 100
-
-    # Clean old entries
-    request_counts[ip] = [t for t in request_counts.get(ip, []) if now - t < window]
-    request_counts[ip].append(now)
-
-    if len(request_counts[ip]) > max_requests:
-        raise HTTPException(429, "Rate limit exceeded")
 
 
-@app.get("/api/", dependencies=[Depends(rate_limiter)])
-def api_endpoint(request):
-    return {"data": "ok"}
+def require_admin(authorization: str = Header(...)):
+    if authorization != "Bearer admin-token":
+        raise HTTPException(403, "Admin access required")
+
+
+@app.get("/admin/users", dependencies=[Depends(require_admin)])
+def list_all_users(request):
+    return {"users": []}
 ```
+
+## Native Fast-Path Note
+
+The Rust native fast path (`native=True`) is a validate-and-echo shortcut that
+does **not** execute Python middleware or dependencies. Routes
+using `native=True` must not declare Python middleware/dependencies — the
+framework rejects that combination at registration time. Native middleware
+(`add_cors`, `enable_secure_headers`, `set_jwt_auth`) runs for all routes.
 
 ## How It Works Internally
 
-1. Middleware runs in the Rust middleware chain, not Python
-2. `call_next` dispatches through the chain to the handler
-3. The response dict flows back through each middleware's post-processing
-4. Built-in middleware (CORS, rate limiting) runs in Rust with zero GIL overhead
+1. **Native** middleware (CORS, security headers, JWT, rate limit) runs in the
+   Rust middleware chain with zero GIL overhead.
+2. **Python** middleware runs as an async wrapper around your handler on the
+   Python side.
+3. `call_next` dispatches down the middleware chain to the handler.
+4. The handler's result flows back through each middleware's post-processing.
 
 ## Next Steps
 

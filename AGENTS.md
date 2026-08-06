@@ -44,7 +44,7 @@ any non-trivial change — they catch different classes of mistakes:
 - **Core Runtime** — networking, protocol, memory, scheduler correctness and
   safety (`justapi-core`).
 - **Python Bindings** — PyO3 boundary, GIL/free-threading correctness, the
-  ASGI shim, native API (`justapi-py`).
+  native API (`justapi-py`).
 - **Protocol/Security** — TLS, auth, JWT, OAuth2/OIDC, request validation,
   SAST scanning, fuzzing, anything parsing untrusted input.
   Every change here needs a fuzz target or an explanation of why not.
@@ -88,7 +88,10 @@ any non-trivial change — they catch different classes of mistakes:
 - [ ] Tests pass (`cargo test --workspace`)
 - [ ] `cargo clippy --workspace --tests -- -D warnings` clean (includes test code)
 - [ ] `cargo fmt --check` clean
-- [ ] `cargo miri test -p justapi-core` clean (if core touched)
+- [ ] `bash scripts/sanitize.sh` clean (if core touched) — ASan on the full core
+      suite + a targeted Miri run on the only `unsafe` module (`memory.rs`).
+      This replaces the full-suite `cargo miri` run (interpreted = 20+ min for
+      mostly-safe code; sanitizers run at near-native speed).
 - [ ] Benchmarks run, numbers appended to `BENCHMARKS.md` (not overwritten)
 - [ ] No p99 regression >5% vs. previous phase without a `DECISIONS.md` entry
 - [ ] `PLAN.md` updated: phase status, next steps
@@ -120,7 +123,7 @@ justapi/
   Cargo.toml                # workspace root
   crates/
     justapi-core/          # networking, protocol, scheduler, memory
-    justapi-py/            # PyO3 bindings, ASGI shim, native API
+    justapi-py/            # PyO3 bindings, native API
     justapi-cli/           # `justapi` CLI binary
     justapi-bench/         # internal benchmark harness
   python/
@@ -141,7 +144,7 @@ Kernel → epoll/io_uring → Connection Manager → tokio task
   → TLS (rustls) → HTTP parse (hyper) → Router (matchit)
   → Middleware chain (Rust: auth/CORS/rate-limit/compression)
   → Python boundary (typed, zero-copy request view via PyO3 buffer protocol)
-  → Application code (ASGI shim OR native handler)
+  → Application code (native handler)
   → Rust serializer (serde_json/simd-json)
   → Response write → Socket
 ```
