@@ -211,3 +211,6 @@ class _JustAPIGrpcMockServer:
 
 class JustAPITestClient:
     def __new__(cls, app, database=None): ...
+
+JustAPI = JustAPIApp
+JustAPP = JustAPIApp

@@ -2276,3 +2276,6 @@ class JustAPITestClient:
         return _JustAPITestClient(inner, database=database)
 
 JustAPI = JustAPIApp
+
+# Short alias: `JustAPP()` == `JustAPIApp()`.
+JustAPP = JustAPIApp

@@ -152,3 +152,22 @@ def test_sync_handler_no_spurious_404_under_load():
 if __name__ == "__main__":
     test_native_api()
     test_sync_handler_no_spurious_404_under_load()
+
+
+def test_justapp_alias_is_justapiapp():
+    """JustAPP is an alias of JustAPIApp (and so is JustAPI)."""
+    from justapi import JustAPIApp, JustAPP, JustAPI
+
+    assert JustAPP is JustAPIApp
+    assert JustAPI is JustAPIApp
+
+    app = JustAPP()
+
+    @app.get("/")
+    def root():
+        return {"ok": True}
+
+    from justapi import JustAPITestClient
+
+    resp = JustAPITestClient(app).get("/")
+    assert resp["status"] == 200
