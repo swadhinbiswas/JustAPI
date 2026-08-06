@@ -110,5 +110,8 @@ def root():
 
 if __name__ == "__main__":
     # HTTP server (streaming + sessions) and an MCP stdio server are both
-    # available from the same app object.
-    app.run("127.0.0.1:8000")
+    # available from the same app object. Optional argv[1] = port.
+    import sys
+
+    port = sys.argv[1] if len(sys.argv) > 1 else "8000"
+    app.run(f"127.0.0.1:{port}")

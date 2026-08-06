@@ -8,7 +8,7 @@ keywords: [JustAPI, OAuth2, password, bearer, authentication, security]
 
 ```python
 from justapi import JustAPIApp, Depends, HTTPException
-from fastapi.security import OAuth2PasswordBearer
+from justapi.auth import OAuth2PasswordBearer
 
 app = JustAPIApp()
 

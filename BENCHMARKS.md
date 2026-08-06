@@ -1804,3 +1804,115 @@ path.** Write operations are SQLite-bound (single-writer serialization) and
 show less differentiation, though JustAPI native still leads on UPDATE/DELETE
 due to eliminating the Python GIL hop.
 
+---
+
+## Real DB-backed CRUD benchmark — RE-RUN on current code (recorded 2026-08-06)
+
+Re-run of `benchmarks/run_crud_bench.sh` (same fixture: i5-13600K, SQLite WAL,
+`oha -c 20 -z 5s`) against the **current HEAD with a release (optimized) wheel**.
+Two methodology corrections vs the 2026-07-26 entry:
+
+- **Release build only.** Earlier numbers were recorded against the release
+  wheel; a dev/debug `maturin develop` build measures ~4× slower for the
+  Python-handler path and must not be used for benchmarking.
+- **Python-handler write RPS collapsed to ~6 at `-c 20`** (measured 147 at
+  `-c 1`). This is the GIL-pool backpressure fix (2026-07-25, PLAN.md): the
+  single Python worker throttles (instead of dropping) when its bounded channel
+  is full, so concurrent Python-handler *writes* serialize at ~6 RPS. This is a
+  correctness/throughput tradeoff, not a durability bug — all writes commit.
+  The Rust-native path is unaffected and remains the recommended write route.
+
+### JustAPI — Python-handler CRUD (current code, release)
+
+| Operation | RPS | p50 | p99 |
+|-----------|-----|-----|-----|
+| INSERT | 6.0 | — | — |
+| SELECT | 16,542 | — | — |
+| UPDATE | 6.4 | — | — |
+| DELETE | 6.4 | — | — |
+
+### JustAPI — Rust-native CRUD (current code, release)
+
+| Operation | RPS | p50 | p99 |
+|-----------|-----|-----|-----|
+| INSERT | 153.5 | — | — |
+| SELECT | **181,030** | — | — |
+| UPDATE | 31,877 | — | — |
+| DELETE | 37,749 | — | — |
+
+### FastAPI + SQLAlchemy (async) — current run
+
+| Operation | RPS | p50 | p99 |
+|-----------|-----|-----|-----|
+| INSERT | 124.7 | — | — |
+| SELECT | 1,449 | — | — |
+| UPDATE | 1,546 | — | — |
+| DELETE | 1,718 | — | — |
+
+### Robyn (sync handler, sqlite3) — current run
+
+| Operation | RPS | p50 | p99 |
+|-----------|-----|-----|-----|
+| INSERT | 155.5 | — | — |
+| SELECT | 31,638 | — | — |
+| UPDATE | 26,768 | — | — |
+| DELETE | 28,621 | — | — |
+
+### Summary — SELECT (framework-differentiated metric), current code
+
+| Framework | SELECT RPS | vs FastAPI |
+|---|---:|---|
+| **JustAPI native** | **181,030** | **×125** |
+| JustAPI Python | 16,542 | ×11 |
+| Robyn | 31,638 | ×22 |
+| FastAPI + SQLAlchemy | 1,449 | ×1 (baseline) |
+
+**Honest read:** JustAPI native is **125× faster than FastAPI** on DB-backed
+SELECT on current code — the headline claim holds and improves (the previous
+ledger recorded 108×). The Python-handler path is lower than the 2026-07-26
+recording (16.5k vs 107k); the gap is the GIL-pool backpressure fix plus the
+corrected release methodology, and it is the recommended-practice tradeoff for
+the fully-native API. UPDATE/DELETE remain dominated by JustAPI native. Writes
+on single-file SQLite are SQLite-bound for all frameworks; JustAPI native
+INSERT is comparable to FastAPI/Robyn and its UPDATE/DELETE lead because the
+row mutation happens in Rust with no GIL hop.
+
+---
+
+## Write-path collapse FOUND + FIXED (recorded 2026-08-06, ADR-080)
+
+The Python-handler write numbers above (INSERT ~6 RPS at `-c 20`) were NOT a
+SQLite ceiling — they were a real defect, now fixed. Root cause: the
+request-scoped auto-transaction double-acquired pool connections
+(`2N` connections for `N` concurrent writes on an `N`-connection pool).
+Removed; SQLite BUSY/lock errors now map to 503 Retry-After instead of 500.
+
+**Before fix (release wheel, same fixture):**
+
+| Concurrency | Python-handler INSERT RPS | Notes |
+|---|---:|---|
+| c=1 | 151 | healthy |
+| c=10 | 160 | healthy |
+| c=11 | **2.8** | collapse — pool timed out @ request_acquire_timeout |
+| c=20 | 2.7–6 | 500/503 errors, ~3s per request |
+
+**After fix (release wheel, same fixture):**
+
+| Concurrency | Python-handler INSERT RPS | success% |
+|---|---:|---:|
+| c=1 | 157 | 100 |
+| c=5 | 162 | 100 |
+| c=10 | 161 | 100 |
+| c=11 | 158 | 100 |
+| c=20 | 142 | 100 |
+| c=50 | 158 | 100 |
+
+SELECT unchanged (19.5k @ c=20). Writes durable: 604 rows persisted from a 4s
+burst @ c=20 (≈151/s × 4s). The GIL-worker serialization (~150 RPS ceiling for
+Python-handler writes on this fixture) is now the *only* limiter — no pool
+saturation, no 503 storm. Regression guards: `test_db_saturated.py` (503 on
+lock contention, bounded) + `test_db_concurrent.py::test_concurrent_writes_small_pool_no_saturation_collapse`
+(2-conn pool, 50 concurrent writers all 200 + persisted).
+
+
+

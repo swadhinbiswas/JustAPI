@@ -40,6 +40,8 @@ When multiple requests arrive within the `window_ms` window, JustAPI collects th
 ## With Dependencies
 
 ```python
+from justapi import Security
+
 @app.post("/predict")
 @adaptive_batch(max_size=64, window_ms=5)
 def predict_batch(

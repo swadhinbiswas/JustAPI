@@ -9,7 +9,7 @@ keywords: [JustAPI, response, direct response, headers, status code]
 For full control over the response, return a `Response` object:
 
 ```python
-from starlette.responses import JSONResponse
+from justapi import JSONResponse
 from justapi import JustAPIApp
 
 app = JustAPIApp()
@@ -50,7 +50,7 @@ def with_headers():
 ## Redirect
 
 ```python
-from starlette.responses import RedirectResponse
+from justapi import RedirectResponse
 
 @app.get("/old-path")
 def old_path():

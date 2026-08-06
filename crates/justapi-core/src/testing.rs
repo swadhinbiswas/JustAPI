@@ -72,6 +72,24 @@ impl TestClient {
         self.request(Method::DELETE, path, Vec::new(), &[]).await
     }
 
+    /// Send an HTTP QUERY request (RFC 10008) with a body. QUERY is safe and
+    /// idempotent like GET but carries a request body like POST, so client
+    /// helpers mirror the POST shape.
+    pub async fn query(&self, path: &str, body: Vec<u8>) -> Result<TestResponse, anyhow::Error> {
+        self.query_with(path, body, &[]).await
+    }
+
+    /// QUERY with extra request headers (RFC 10008 requires a Content-Type).
+    pub async fn query_with(
+        &self,
+        path: &str,
+        body: Vec<u8>,
+        headers: &[(&str, &str)],
+    ) -> Result<TestResponse, anyhow::Error> {
+        let method = crate::query_method();
+        self.request(method, path, body, headers).await
+    }
+
     async fn request(
         &self,
         method: Method,
@@ -233,6 +251,18 @@ mod tests {
     async fn test_test_client_post() {
         let client = TestClient::new(ok_handler());
         let resp = client.post("/test", b"{}".to_vec()).await.unwrap();
+        assert_eq!(resp.status, 200);
+    }
+
+    #[tokio::test]
+    async fn test_test_client_query() {
+        let client = TestClient::new(ok_handler());
+        let resp = client.query("/test", b"{}".to_vec()).await.unwrap();
+        assert_eq!(resp.status, 200);
+        let resp = client
+            .query_with("/test", b"{}".to_vec(), &[("Content-Type", "application/json")])
+            .await
+            .unwrap();
         assert_eq!(resp.status, 200);
     }
 

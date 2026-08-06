@@ -1,20 +1,24 @@
 ---
 title: CORS (Cross-Origin Resource Sharing)
-description: Configure CORS headers in JustAPI to allow requests from other domains.
+description: Configure CORS in JustAPI to allow requests from other domains.
 keywords: [JustAPI, CORS, cross-origin, security, browser]
 ---
 
 ## Basic CORS
 
-CORS (Cross-Origin Resource Sharing) allows browsers to make requests to your API from different domains. Without CORS, browsers block these requests.
+CORS (Cross-Origin Resource Sharing) allows browsers to make requests to your
+API from different domains. Without CORS, browsers block these requests.
+
+JustAPI's CORS is **Rust-native** — it runs in the Rust middleware chain and
+covers all routes including the fast path and error responses. Configure it
+with `add_cors()`:
 
 ```python
 from justapi import JustAPIApp
 
 app = JustAPIApp()
 
-app.add_middleware(
-    CORSMiddleware,
+app.add_cors(
     allow_origins=["https://example.com"],
     allow_credentials=True,
     allow_methods=["*"],
@@ -27,13 +31,7 @@ app.add_middleware(
 For local development, allow all origins:
 
 ```python
-from justapi import JustAPIApp
-from starlette.middleware.cors import CORSMiddleware
-
-app = JustAPIApp()
-
-app.add_middleware(
-    CORSMiddleware,
+app.add_cors(
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
@@ -49,8 +47,7 @@ Never use `allow_origins=["*"]` in production. It defeats the purpose of CORS re
 In production, specify exactly which origins are allowed:
 
 ```python
-app.add_middleware(
-    CORSMiddleware,
+app.add_cors(
     allow_origins=[
         "https://app.example.com",
         "https://admin.example.com",
@@ -73,5 +70,5 @@ app.add_middleware(
 
 ## See Also
 
-- [Middleware](/tutorials/middleware/) — general middleware usage
+- [Advanced Middleware](/advanced/advanced-middleware/) — native middleware reference
 - [Security Policy](/security/policy/) — security best practices

@@ -50,7 +50,7 @@ These APIs are guaranteed backward-compatible within major versions:
 |-----------|--------|-------|
 | `JustAPIApp` class | ✅ Stable | Core application class |
 | Route decorators | ✅ Stable | `@app.get()`, `@app.post()`, etc. |
-| Request/Response objects | ✅ Stable | Starlette-compatible |
+| Request/Response objects | ✅ Stable | JustAPI-native (`Request`, `JSONResponse`, ...) |
 | Dependency injection | ✅ Stable | `Depends()` pattern |
 | Schema validation | ✅ Stable | `Schema` class |
 | Error handling | ✅ Stable | `HTTPException` |

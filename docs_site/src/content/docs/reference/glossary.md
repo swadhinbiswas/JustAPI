@@ -8,7 +8,7 @@ keywords: glossary, terminology, FastAPI alternative, Rust web framework, JustAP
 
 **APIRouter** — A class for grouping related routes into modular files. Supports the same decorators as `JustAPIApp`.
 
-**ASGI** — Asynchronous Server Gateway Interface. Python standard for async web servers. JustAPI provides an ASGI shim for compatibility.
+**ASGI** — Asynchronous Server Gateway Interface, the Python standard for async web servers (used by Starlette/FastAPI/Uvicorn). JustAPI is a **native Rust runtime** and does not implement ASGI; it runs its own pipeline for maximum throughput.
 
 ## B
 

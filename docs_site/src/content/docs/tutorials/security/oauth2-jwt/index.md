@@ -10,7 +10,7 @@ keywords: [JustAPI, OAuth2, JWT, password hashing, security, authentication]
 import jwt
 from datetime import datetime, timedelta
 from justapi import JustAPIApp, Depends, HTTPException
-from fastapi.security import OAuth2PasswordBearer
+from justapi.auth import OAuth2PasswordBearer
 from passlib.context import CryptContext
 
 SECRET_KEY = "your-secret-key"

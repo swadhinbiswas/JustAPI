@@ -78,6 +78,11 @@ pub struct JustAPIApp {
     pub gateway_config: Option<String>,
     pub circuit_breaker_config: Option<(usize, u64)>,
     pub coalesce_headers: Option<Vec<String>>,
+    /// HTTP/3 (QUIC) TLS certificate/key paths, set via `enable_http3(...)`.
+    /// When Some, `run()` also starts a UDP/QUIC listener serving the same
+    /// application handler over HTTP/3 (feature `http3` on justapi-core).
+    pub http3_cert: Option<String>,
+    pub http3_key: Option<String>,
     /// When true, apply safe (non-HSTS) security headers to every response by
     /// default. Off by default because forcing a CSP would break apps that load
     /// external resources (e.g. CDN-hosted docs UIs). Call
@@ -476,6 +481,8 @@ impl JustAPIApp {
             gateway_config: None,
             circuit_breaker_config: None,
             coalesce_headers: None,
+            http3_cert: None,
+            http3_key: None,
             secure_headers: false,
             secure_headers_config: None,
             metrics: None,
@@ -642,6 +649,16 @@ impl JustAPIApp {
     #[pyo3(name = "enable_request_coalescing")]
     fn enable_request_coalescing(&mut self, headers: Option<Vec<String>>) {
         self.coalesce_headers = Some(headers.unwrap_or_default());
+    }
+
+    /// Enable an HTTP/3 (QUIC) listener on the same address `run()` binds
+    /// (UDP, same port). `cert_path`/`key_path` are PEM TLS files (required —
+    /// QUIC uses TLS 1.3). The same application handler serves both transports.
+    #[cfg(feature = "http3")]
+    #[pyo3(name = "enable_http3")]
+    fn enable_http3(&mut self, cert_path: String, key_path: String) {
+        self.http3_cert = Some(cert_path);
+        self.http3_key = Some(key_path);
     }
 
     /// Apply safe security headers (`X-Content-Type-Options`, `X-Frame-Options`,
@@ -1789,6 +1806,8 @@ impl JustAPIApp {
         let frontend_mounts = std::mem::take(&mut app.frontend_mounts);
         let jwt_auth = app.jwt_auth.take();
         let cors = app.cors.take();
+        #[cfg(feature = "http3")]
+        let (app_http3_cert, app_http3_key) = (app.http3_cert.clone(), app.http3_key.clone());
 
         // The app object is surfaced on `Request.app`; capture it before
         // releasing the borrow (the server loop runs without the GIL held).
@@ -1797,6 +1816,9 @@ impl JustAPIApp {
         // Clone the app handle now (GIL held) so it can be moved into the
         // detached server loop, which runs without a GIL token.
         let app_py_http1: Option<Py<PyAny>> = app_py.as_ref().map(|a| a.clone_ref(py));
+        #[cfg(feature = "http3")]
+        let app_py_http3: Arc<Option<Py<PyAny>>> =
+            Arc::new(app_py_http1.as_ref().map(|a| a.clone_ref(py)));
         let app_py_ws: Arc<Option<Py<PyAny>>> =
             Arc::new(app_py_http1.as_ref().map(|a| a.clone_ref(py)));
         let _ = app_py;
@@ -1926,6 +1948,12 @@ impl JustAPIApp {
                     }
                 }
                 let batchers = Arc::new(batchers);
+                // Clone the Arc inputs so the HTTP/3 handler (built below,
+                // same app state) can share them after the TCP handler takes
+                // the originals.
+                #[cfg(feature = "http3")]
+                let (h3_router, h3_handlers, h3_schemas, h3_schema_jsons, h3_batchers, h3_db_url) =
+                    (router.clone(), handlers.clone(), schemas.clone(), schema_jsons.clone(), batchers.clone(), db_url_str.clone());
                 let handler = make_native_handler(
                     router,
                     handlers,
@@ -1943,6 +1971,55 @@ impl JustAPIApp {
                     schema_validators.clone(),
                     max_body_size,
                 );
+
+                // HTTP/3 (QUIC): build a second handler chain over
+                // `Full<Bytes>` bodies from the same app state and serve it on
+                // UDP alongside the TCP server. QUIC requires TLS certs; see
+                // `enable_http3`. The TCP chain and the QUIC chain share the
+                // same route table and Python handlers. (Spawn happens right
+                // before `server.run()` below.)
+                #[cfg(feature = "http3")]
+                let http3_bridge: Option<(
+                    justapi_core::http3::Http3Config,
+                    justapi_core::http3::Http3Handler,
+                )> = if let (Some(cert), Some(key)) =
+                    (app_http3_cert.clone(), app_http3_key.clone())
+                {
+                    let h3_query_jsons = query_schema_jsons.clone();
+                    let h3_db = db_pool.as_ref().map(|p| p.as_any_pool());
+                    let h3_app: Option<Py<PyAny>> =
+                        Python::attach(|py| app_py_http3.as_ref().as_ref().map(|a| a.clone_ref(py)));
+                    let h3_needs = needs_request.clone();
+                    let h3_native = native.clone();
+                    let h3_crud = crud_specs.clone();
+                    let h3_validators = schema_validators.clone();
+                    let h3_handler: justapi_core::middleware::HandlerFn<
+                        http_body_util::Full<bytes::Bytes>,
+                    > = make_native_handler(
+                        h3_router,
+                        h3_handlers,
+                        h3_schemas,
+                        h3_schema_jsons,
+                        h3_query_jsons,
+                        h3_batchers,
+                        h3_db,
+                        h3_db_url,
+                        "https".to_string(),
+                        h3_app,
+                        h3_needs,
+                        h3_native,
+                        h3_crud,
+                        h3_validators,
+                        max_body_size,
+                    );
+                    let h3_chain = justapi_core::middleware::MiddlewareChain::new(h3_handler);
+                    Some((
+                        justapi_core::http3::Http3Config { cert_path: cert, key_path: key },
+                        justapi_core::http3::chain_to_http3_handler(h3_chain),
+                    ))
+                } else {
+                    None
+                };
 
                 // Install signal handlers to trigger graceful shutdown.
                 // Ctrl+C is universal; on Unix we also handle SIGTERM so the
@@ -2254,6 +2331,30 @@ impl JustAPIApp {
                     a.metrics = Some(live_metrics);
                     a.health_registry = Some(live_health);
                 });
+
+                // Start the HTTP/3 (QUIC) listener on the same address (UDP)
+                // once the TCP server is fully configured.
+                #[cfg(feature = "http3")]
+                if let Some((h3_cfg, h3_bridge)) = http3_bridge {
+                    let h3_metrics = server.metrics().clone();
+                    let h3_cancel = shutdown.clone();
+                    let h3_addr = addr;
+                    tokio::spawn(async move {
+                        match justapi_core::http3::serve_http3(
+                            h3_addr,
+                            h3_cfg,
+                            h3_bridge,
+                            h3_metrics,
+                            h3_cancel,
+                        )
+                        .await
+                        {
+                            Ok(bound) => tracing::info!("HTTP/3 listening on udp://{}", bound),
+                            Err(e) => tracing::error!("Failed to start HTTP/3 listener: {:#}", e),
+                        }
+                    });
+                }
+
                 server.run().await
             })
         });

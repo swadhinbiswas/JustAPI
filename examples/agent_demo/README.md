@@ -19,6 +19,15 @@ differentiators — all owned by the Rust runtime, not Python:
 
 ## Run
 
+One command — starts the server, runs the full demo (tools list, tool call,
+streaming agent run, session state, session persistence), and stops:
+
+```bash
+bash examples/agent_demo/run_demo.sh
+```
+
+Manually, step by step:
+
 ```bash
 # from the repo root
 uv run examples/agent_demo/app.py

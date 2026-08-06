@@ -6,14 +6,14 @@ keywords: [JustAPI, static files, assets, mount, CSS, JavaScript]
 
 ## Basic Static Files
 
-Mount a directory to serve static files:
+Serve files from a directory at a path prefix:
 
 ```python
 from justapi import JustAPIApp
 
 app = JustAPIApp()
 
-app.mount("/static", directory="static", name="static")
+app.frontend("/static", "static")
 ```
 
 This serves files from the `static/` directory at `/static/`. For example, `static/style.css` is accessible at `/static/style.css`.
@@ -22,31 +22,37 @@ This serves files from the `static/` directory at `/static/`. For example, `stat
 
 ```python
 # Serve at /assets/*
-app.mount("/assets", directory="public/assets", name="assets")
+app.frontend("/assets", "public/assets")
 ```
 
 ## Multiple Static Directories
 
 ```python
-app.mount("/css", directory="static/css", name="css")
-app.mount("/js", directory="static/js", name="js")
-app.mount("/images", directory="static/images", name="images")
+app.frontend("/css", "static/css")
+app.frontend("/js", "static/js")
+app.frontend("/images", "static/images")
 ```
 
-## Mounting a Sub-application
+## Mounting an APIRouter as a Sub-application
 
-JustAPI supports mounting sub-applications (like Starlette or ASGI apps) at a path:
+JustAPI supports mounting an `APIRouter` at a path prefix:
 
 ```python
-from justapi import JustAPIApp
+from justapi import APIRouter, JustAPIApp
 
 app = JustAPIApp()
 
-# Mount a sub-application
-from starlette.applications import Starlette
-sub_app = Starlette()
-app.mount("/api/v2", sub_app, name="v2")
+# Serve a static SPA with index.html fallback for client-side routing
+app.frontend("/", "public", html=True)
+
+# Mount a router as a sub-application
+router = APIRouter(prefix="/api/v2")
+app.mount("/api/v2", router, name="v2")
 ```
+
+> JustAPI does not mount third-party ASGI/Starlette applications — the runtime
+> is a native Rust pipeline. Use `APIRouter` for sub-app structure, or place
+> JustAPI behind a path-routing reverse proxy to co-host legacy apps.
 
 ## See Also
 

@@ -161,7 +161,7 @@ app.include_controller(UserController)
 | `middleware(type)` | Decorator to register HTTP middleware (`"http"`) |
 | `add_cors(allow_origins, ...)` | Configure CORS |
 | `enable_secure_headers(with_hsts)` | Add security headers |
-| `add_middleware(middleware_cls, **kwargs)` | Add middleware class (Starlette parity) |
+| `add_middleware(middleware_cls, **kwargs)` | Add a middleware class; CORS classes are translated to the Rust-native CORS middleware (`add_cors`) |
 | `add_exception_handler(exc_class, handler)` | Register custom exception handler |
 
 ## Resilience
@@ -170,6 +170,7 @@ app.include_controller(UserController)
 |---|---|
 | `enable_circuit_breaker(failure_threshold, reset_timeout_ms)` | Enable circuit breaker |
 | `enable_request_coalescing(headers)` | Deduplicate concurrent identical requests |
+| `enable_http3(cert_path, key_path)` | Serve the app over HTTP/3 (QUIC) on the same port — requires the `http3` build feature and PEM TLS files |
 
 ## Database
 

@@ -106,7 +106,7 @@ For routes registered with `native=True` and a schema, JustAPI serves entirely i
 
 ### Where each competitor fits
 
-- **Robyn** — Rust runtime with a decorator API, the closest architectural peer. Both frameworks keep the hot path in Rust and dispatch to Python for business logic. JustAPI's edge is: (a) measured throughput advantage on all three standard workloads, (b) a native fast path (`native=True`) that eliminates the Python dispatch entirely for schema-backed routes, (c) an ASGI shim for compatibility with the Starlette middleware ecosystem, and (d) built-in MCP agent serving as a first-class primitive rather than an add-on.
+- **Robyn** — Rust runtime with a decorator API, the closest architectural peer. Both frameworks keep the hot path in Rust and dispatch to Python for business logic. JustAPI's edge is: (a) measured throughput advantage on all three standard workloads, (b) a native fast path (`native=True`) that eliminates the Python dispatch entirely for schema-backed routes, (c) a fully native middleware/validation stack with zero ASGI/Starlette dependency, and (d) built-in MCP agent serving as a first-class primitive rather than an add-on.
 
 - **Granian** — Rust ASGI *server*. It drops under existing FastAPI/Starlette apps without changing framework code. If your goal is a faster transport layer without migrating frameworks, Granian is the lower-friction choice. JustAPI wins when you want the full Rust stack — routing, serialization, middleware, auth, and agent serving — all native.
 
@@ -340,7 +340,7 @@ justapi create jsonrpc_api --db sqlite --api-type jsonrpc
 <tr><th>Category</th><th>Feature</th><th>Details</th></tr>
 
 <tr><td rowspan="4"><strong>Performance</strong></td>
-    <td>HTTP/1.1 & HTTP/2</td><td>700k+ req/s (native fast path)</td></tr>
+    <td>HTTP/1.1 & HTTP/2</td><td>~700k req/s native fast path (validate-and-echo, no Python); ~120k req/s Python-handler path (GIL-bound)</td></tr>
 <tr><td>TLS (rustls)</td><td>~10% overhead, no OpenSSL dependency</td></tr>
 <tr><td>Serialization</td><td>serde_json with optional simd-json</td></tr>
 <tr><td>Compression</td><td>gzip / deflate / brotli / zstd</td></tr>
@@ -423,8 +423,8 @@ JustAPI is designed to feel familiar. Here's a side-by-side:
 </tr>
 <tr>
 <td><strong>Performance</strong></td>
-<td>~36k req/s</td>
-<td><strong>~700k req/s</strong></td>
+<td>~36k req/s (hello-world)</td>
+<td><strong>~700k req/s</strong> (native fast path, validate-and-echo)<br>~120k req/s (Python handler, GIL-serialized)<br>~180k req/s (Rust-native DB SELECT)</td>
 </tr>
 </table>
 

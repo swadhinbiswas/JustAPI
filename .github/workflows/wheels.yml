@@ -33,7 +33,7 @@ jobs:
         run: cargo fmt --check
 
   miri-test:
-    name: Miri Test (justapi-core)
+    name: Memory Safety (ASan + targeted Miri)
     runs-on: ubuntu-latest
     needs: test-rust
     steps:
@@ -41,10 +41,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: miri
-      - name: Run Miri
-        run: cargo miri test -p justapi-core
-        env:
-          MIRIFLAGS: -Zmiri-disable-isolation
+      - name: Run memory-safety gate
+        # Fast: ASan on the full core suite + targeted Miri on the only
+        # unsafe module (memory.rs). See scripts/sanitize.sh.
+        run: bash scripts/sanitize.sh
 
   build-wheels:
     name: Build Wheels (${{ matrix.os }} - ${{ matrix.target }})

@@ -12,23 +12,7 @@ use justapi_core::router::Router;
 use justapi_core::xml;
 use justapi_core::{json_response, ResponseBody};
 
-use justapi_core::db::{AnyPool, DbAcquireError};
-
-/// Translate a request-path DB acquire failure into the correct response.
-/// A saturated/closed pool is backpressure → `503` (so clients retry); any
-/// other SQLx error is a genuine failure → `500`.
-fn db_acquire_error_response(e: DbAcquireError) -> Response<ResponseBody> {
-    match e {
-        DbAcquireError::TimedOut | DbAcquireError::PoolClosed => {
-            justapi_core::service_unavailable_response(
-                "database pool saturated; please retry shortly",
-            )
-        }
-        DbAcquireError::Other(_) => {
-            justapi_core::error_response(StatusCode::INTERNAL_SERVER_ERROR, "database error")
-        }
-    }
-}
+use justapi_core::db::AnyPool;
 
 /// Shared, per-route Rust-native CRUD config: `Some((table, columns,
 /// id_column))` means the route is served by `crud_dispatch_bytes` with the
@@ -932,26 +916,21 @@ where
                 }
             }
 
-            // Auto-transaction for write methods
-            let is_write = matches!(method, Method::POST | Method::PUT | Method::DELETE);
-            let tx = if is_write {
-                if let Some(ref pool) = *db_pool {
-                    match pool.begin_request().await {
-                        Ok(tx) => Some(tx),
-                        Err(e) => {
-                            tracing::error!("Failed to begin transaction: {:?}", e);
-                            return Ok(db_acquire_error_response(e));
-                        }
-                    }
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-
             // Offload Python execution (which acquires the GIL and blocks) to the blocking pool
             // to avoid starving Tokio's I/O worker threads.
+            //
+            // NOTE: there is deliberately NO auto-transaction begin here. A
+            // request-scoped `begin_request()` acquired a pool connection on the
+            // async runtime and then held it while the request waited in the
+            // single-worker GIL queue; the handler's own `app.db.query` then
+            // acquired a *second* connection (the tx was never passed to the
+            // handler). Under `N` concurrent write requests that is `2N`
+            // connections on an `N`-capacity pool → immediate saturation and the
+            // observed write-throughput collapse (150 RPS at c=10 → ~3 RPS at
+            // c=11, "pool timed out" at exactly `request_acquire_timeout`).
+            // The pool's own `request_acquire_timeout` already produces the fast
+            // 503 backpressure this used to provide; multi-statement atomicity
+            // is explicit via `app.db.transaction()`.
             let handlers_clone = handlers.clone();
             let schemas_clone = schemas.clone();
             let db_url_str = db_url.clone();
@@ -1008,19 +987,6 @@ where
             .await
             .map_err(|e| anyhow::anyhow!("GIL pool error: {}", e))?;
 
-            // Commit or rollback transaction
-            if let Some(tx) = tx {
-                if nr.status >= 200 && nr.status < 300 {
-                    if let Err(e) = tx.commit().await {
-                        tracing::error!("Failed to commit transaction: {}", e);
-                    }
-                } else {
-                    if let Err(e) = tx.rollback().await {
-                        tracing::error!("Failed to rollback transaction: {}", e);
-                    }
-                }
-            }
-
             Ok(nr_to_response(nr))
         })
     })
@@ -1043,7 +1009,6 @@ pub fn make_test_handler<B>(
     schemas: Arc<Vec<Option<Py<PyAny>>>>,
     schema_jsons: Arc<Vec<Option<String>>>,
     query_schema_jsons: Arc<Vec<Option<String>>>,
-    db_pool: Option<AnyPool>,
     db_url_str: Option<String>,
     app: Option<Py<PyAny>>,
     needs_request: Arc<Vec<bool>>,
@@ -1055,7 +1020,6 @@ where
     B: http_body::Body<Data = Bytes> + Send + Sync + Unpin + 'static,
     B::Error: std::error::Error + Send + Sync + 'static,
 {
-    let db_pool = Arc::new(db_pool);
     let db_url = Arc::new(db_url_str);
     let app = Arc::new(app);
     let req_scheme = "http".to_string();
@@ -1067,7 +1031,6 @@ where
         let query_schema_jsons = query_schema_jsons.clone();
         let schemas = schemas.clone();
         let schema_jsons = schema_jsons.clone();
-        let db_pool = db_pool.clone();
         let db_url = db_url.clone();
         let app = app.clone();
         let req_scheme = req_scheme.clone();
@@ -1205,26 +1168,11 @@ where
             let path_params: Vec<(String, String)> =
                 matched.params.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
 
-            // Auto-transaction for write methods
-            let is_write = matches!(method, Method::POST | Method::PUT | Method::DELETE);
-            let tx = if is_write {
-                if let Some(ref pool) = *db_pool {
-                    match pool.begin_request().await {
-                        Ok(tx) => Some(tx),
-                        Err(e) => {
-                            tracing::error!("Failed to begin transaction: {:?}", e);
-                            return Ok(db_acquire_error_response(e));
-                        }
-                    }
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-
             // Offload Python execution (which acquires the GIL and blocks) to the blocking pool
-            // to avoid starving Tokio's I/O worker threads.
+            // to avoid starving Tokio's I/O worker threads. (No auto-transaction:
+            // see the matching note in `make_native_handler` — a request-scoped
+            // tx acquired a second pool connection per write request and held it
+            // through the GIL queue, saturating the pool under concurrency.)
             let handlers_clone = handlers.clone();
             let schemas_clone = schemas.clone();
             let db_url_str = db_url.clone();
@@ -1282,19 +1230,6 @@ where
             })
             .await
             .map_err(|e| anyhow::anyhow!("GIL pool error: {}", e))?;
-
-            // Commit or rollback transaction
-            if let Some(tx) = tx {
-                if nr.status >= 200 && nr.status < 300 {
-                    if let Err(e) = tx.commit().await {
-                        tracing::error!("Failed to commit transaction: {}", e);
-                    }
-                } else {
-                    if let Err(e) = tx.rollback().await {
-                        tracing::error!("Failed to rollback transaction: {}", e);
-                    }
-                }
-            }
 
             Ok(nr_to_response(nr))
         })

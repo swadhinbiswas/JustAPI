@@ -8,8 +8,7 @@ keywords: [JustAPI, ecosystem, community, related projects, integrations]
 
 | Project | Purpose | Link |
 |---------|---------|------|
-| **Pydantic** | Data validation and serialization | [pydantic.dev](https://pydantic.dev/) |
-| **Starlette** | ASGI toolkit (used by JustAPI's shim) | [starlette.io](https://www.starlette.io/) |
+| **Pydantic** | Data validation and serialization (schema bridge) | [pydantic.dev](https://pydantic.dev/) |
 | **PyO3** | Python ↔ Rust FFI | [pyo3.rs](https://pyo3.rs/) |
 | **maturin** | Build Rust Python packages | [maturin.rs](https://www.maturin.rs/) |
 
@@ -18,9 +17,9 @@ keywords: [JustAPI, ecosystem, community, related projects, integrations]
 | Framework | What It Does |
 |-----------|-------------|
 | **Robyn** | Rust runtime, decorator API |
-| **Granian** | Rust ASGI server |
+| **Granian** | Rust ASGI server (ASGI-based, unlike JustAPI's native runtime) |
 | **Litestar** | Python-native ASGI framework |
-| **FastAPI** | Python web framework (the compatibility target) |
+| **FastAPI** | Python ASGI web framework (design inspiration for DX) |
 | **Typer** | CLI framework (FastAPI for CLIs) |
 
 ## Community
@@ -46,7 +45,7 @@ keywords: [JustAPI, ecosystem, community, related projects, integrations]
 - **criterion** — Rust benchmarking
 
 ### Deployment
-- **uvicorn** — ASGI server (JustAPI's ASGI shim)
+- **uvicorn** — Python ASGI server (runs FastAPI/Starlette apps; not used by JustAPI)
 - **gunicorn** — pre-fork server
 - **Docker** — container deployment
 - **Kubernetes** — orchestration

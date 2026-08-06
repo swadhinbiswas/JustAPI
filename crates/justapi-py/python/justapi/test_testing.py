@@ -39,10 +39,18 @@ async def app():
     async def delete_handler(request):
         return {"status": 204}
 
+    async def query_handler(request):
+        return {
+            "status": 200,
+            "headers": [(b"content-type", b"application/json")],
+            "body": request["body"],
+        }
+
     app.get("/hello/{name}", hello_handler)
     app.post("/echo", echo_handler)
     app.put("/echo", echo_handler)
     app.delete("/resource/{id}", delete_handler)
+    app.query("/search", query_handler)
 
     return app
 
@@ -105,6 +113,36 @@ async def test_async_404(client):
 async def test_async_wrong_method(client):
     resp = await client.get("/echo")
     assert resp["status"] == 405
+
+
+@pytest.mark.asyncio
+async def test_async_query(client):
+    payload = json.dumps({"q": "rust"}).encode()
+    resp = await client.query("/search", payload)
+    assert resp["status"] == 200
+    assert bytes(resp["body"]) == payload
+
+
+@pytest.mark.asyncio
+async def test_async_query_requires_body_route(client):
+    resp = await client.query("/hello/world", b"{}")
+    assert resp["status"] == 405
+
+
+@pytest.mark.asyncio
+async def test_query_requires_content_type(app):
+    from justapi import JustAPITestClient
+    import asyncio
+    loop = asyncio.get_running_loop()
+    client = await loop.run_in_executor(None, lambda: JustAPITestClient(app))
+    # No Content-Type header → RFC 10008 says reject with 400.
+    resp = await loop.run_in_executor(None, lambda: client.query_with(
+        "/search", b'{"q":"rust"}', []))
+    assert resp["status"] == 400
+    # With Content-Type → 200.
+    resp = await loop.run_in_executor(None, lambda: client.query_with(
+        "/search", b'{"q":"rust"}', [("Content-Type", "application/json")]))
+    assert resp["status"] == 200
 
 
 # ---------------------------------------------------------------------------

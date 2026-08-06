@@ -8,7 +8,7 @@ keywords: [JustAPI, security, current user, JWT, token]
 
 ```python
 from justapi import JustAPIApp, Security
-from fastapi.security import OAuth2PasswordBearer
+from justapi.auth import OAuth2PasswordBearer
 
 app = JustAPIApp()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")

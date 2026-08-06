@@ -12,6 +12,7 @@ default = ["mail"]
 mail = ["justapi-core/mail"]
 orjson = ["justapi-core/orjson"]
 redis-rate-limit = ["justapi-core/redis-rate-limit"]
+http3 = ["justapi-core/http3"]
 
 [dependencies]
 pyo3.workspace = true
@@ -19,6 +20,7 @@ justapi-core = { workspace = true, features = ["db", "ws", "wasm", "graphql", "g
 tokio.workspace = true
 http-body-util.workspace = true
 http-body = "1"
+bytes = "1"
 hyper.workspace = true
 http = "1"
 futures = "0.3"

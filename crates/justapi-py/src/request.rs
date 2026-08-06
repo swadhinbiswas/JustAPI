@@ -5,8 +5,8 @@ use pyo3_async_runtimes::tokio::future_into_py;
 
 /// Shared connection data backing both `Request` and `HTTPConnection`.
 ///
-/// Mirrors the ASGI connection scope plus the buffered payload, so the
-/// Starlette-style attribute surface can be served without re-parsing.
+/// Holds the parsed method/path/headers/query/buffer so the Starlette-style
+/// attribute surface can be served without re-parsing.
 pub(crate) struct Conn {
     pub(crate) method: String,
     pub(crate) path: String,

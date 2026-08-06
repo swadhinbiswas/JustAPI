@@ -35,12 +35,33 @@ app.add_cors(
 
 ## Rate Limiting
 
-```python
-# Global rate limit
-app.enable_rate_limiter(max_requests=1000, window_seconds=60)
+Rate limiting is a Rust-native GCRA token bucket, backed by Redis
+(feature-gated: `pip install justapi[redis-rate-limit]`). Create a limiter and
+check it per request/key inside your handler:
 
-# Per-IP rate limit
-app.enable_ip_rate_limiter(max_requests=100, window_seconds=60)
+```python
+import asyncio
+from justapi import RateLimiter
+
+limiter = await RateLimiter.new_redis("redis://127.0.0.1:6379")
+
+@app.get("/api")
+async def api(request):
+    # 100 requests per 60s per client IP
+    result = await limiter.check_limit(
+        key=request.get("client", ["?"])[0],  # client IP
+        capacity=100,      # burst capacity
+        replenish_rate=100 / 60,  # refill per second
+        tokens=1,          # cost of this request
+    )
+    if not result.allowed:
+        return {"status": 429, "body": '{"detail": "rate limit exceeded"}'}
+    return {"ok": True}
+```
+
+`RateLimitResult` carries `allowed` and `retry_after_ms` so you can emit a
+proper `429` with `Retry-After`. (The core `justapi-core` rate limiter also
+exposes a middleware form for Rust-native routes.)
 ```
 
 ## Request Body Size

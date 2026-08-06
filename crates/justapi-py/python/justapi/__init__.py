@@ -25,7 +25,15 @@ Usage:
 
 """
 
+__version__ = "2.0.8"
+
 from . import auth as auth
+from .auth import (  # noqa: F401 — top-level re-export (FastAPI parity, used by docs)
+    JwtAuth,
+    OAuth2PasswordBearer,
+    OAuth2PasswordRequestForm,
+    OAuth2PasswordRequestFormStrict,
+)
 from . import testing as testing
 from . import tracing as tracing
 from . import status as status
@@ -39,7 +47,7 @@ except ImportError:
     RateLimiter = None  # type: ignore[assignment,misc]
     RateLimitResult = None  # type: ignore[assignment,misc]
 from ._justapi import Database, DbPool, DbParam  # type: ignore[import-untyped]
-from .app import JustAPIApp, JustAPI, Depends, Mailer, adaptive_batch, APIRouter, Controller, controller, route_get, route_post, route_put, route_patch, route_delete, route_query, route_sse, route_websocket, JustAPITestClient, RequestValidationError, Session
+from .app import JustAPIApp, JustAPI, Depends, Security, Mailer, adaptive_batch, APIRouter, Controller, controller, route_get, route_post, route_put, route_patch, route_delete, route_query, route_sse, route_websocket, JustAPITestClient, RequestValidationError, Session
 from .system import build_help, build_openapi, register_system_routes
 from .exceptions import HTTPException, WebSocketException
 from .websockets import WebSocket, WebSocketState, WebSocketDisconnect
@@ -287,7 +295,7 @@ def pydantic_schema(model_class) -> str:
             name: str
             email: str
 
-        app.post("/users", handler, schema=pydantic_schema(UserModel))
+    app.post("/users", handler, schema=pydantic_schema(UserModel))
     """
     if hasattr(model_class, 'model_json_schema'):
         # Pydantic v2
@@ -304,7 +312,7 @@ def pydantic_schema(model_class) -> str:
 
 
 __all__ = [
-    "serve", "JustAPIApp", "JustAPI", "Depends", "Mailer", "Database", "DbPool", "DbParam", "Schema", "pydantic_schema", 
+    "__version__", "serve", "JustAPIApp", "JustAPI", "Depends", "Security", "Mailer", "Database", "DbPool", "DbParam", "Schema", "pydantic_schema", 
     "JustAPITestClient", "testing", "tracing", "auth", "Jinja2Templates", "BackgroundTasks", "Scheduler", 
     "TokenStreamResponse", "ValidatedStreamResponse", "WebSocket", "Dag", "DagNode", "RateLimiter", "RateLimitResult",
     "adaptive_batch", "APIRouter", "Controller", "controller", 
@@ -315,6 +323,7 @@ __all__ = [
     "FileResponse",
     "UploadFile", "RequestValidationError", "Param", "Path", "Query", "Header", 
     "Cookie", "Body", "File", "Form", "status", "HTTPException", "WebSocketException",
-    "WebSocketState", "WebSocketDisconnect",
+    "WebSocketState", "WebSocketDisconnect", "JwtAuth", "OAuth2PasswordBearer",
+    "OAuth2PasswordRequestForm", "OAuth2PasswordRequestFormStrict",
     "build_help", "build_openapi", "register_system_routes"
 ]

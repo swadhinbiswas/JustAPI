@@ -63,8 +63,8 @@ Customize the validation error response:
 
 ```python
 from justapi import JustAPIApp
-from starlette.requests import Request
-from starlette.responses import JSONResponse
+from justapi import Request
+from justapi import JSONResponse
 
 app = JustAPIApp()
 

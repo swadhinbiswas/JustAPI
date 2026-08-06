@@ -360,7 +360,7 @@ impl Server {
         self
     }
 
-    /// Set a custom fallback handler (used by the ASGI shim).
+    /// Set a custom fallback handler for the full middleware chain.
     pub fn with_handler(mut self, handler: crate::middleware::HandlerFn) -> Self {
         // A custom handler and the built-in default router are mutually
         // exclusive: installing the default router after a custom handler would
@@ -1473,14 +1473,17 @@ async fn handle_request(
                 }
                 Ok(response)
             }
-            Err(_) => {
-                metrics.record_status(StatusCode::NOT_FOUND);
+            Err(e) => {
+                metrics.record_status(StatusCode::INTERNAL_SERVER_ERROR);
                 metrics.record_latency(start.elapsed().as_secs_f64() * 1000.0);
 
-                if let Some(resp) = try_serve_static(&path, &static_dir, &static_mounts).await {
-                    return Ok::<_, anyhow::Error>(resp);
-                }
-                Ok(error_response(StatusCode::NOT_FOUND, "not found"))
+                // A "route not found" is signaled by the handler as `Ok(404)`
+                // (see justapi-py handlers). An `Err` here means the chain or a
+                // middleware genuinely failed (body read, GIL pool dispatch,
+                // batcher, ...). Return 500 so the failure is observable instead
+                // of being silently masked as a 404 with no log.
+                tracing::error!("Request to {} {} failed in handler chain: {:?}", method, path, e);
+                Ok(error_response(StatusCode::INTERNAL_SERVER_ERROR, "internal server error"))
             }
         },
         Err(_) => {

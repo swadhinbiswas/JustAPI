@@ -69,6 +69,7 @@ async fn test_oversized_header_rejected() {
 }
 
 #[tokio::test]
+#[cfg(feature = "db")]
 async fn test_sql_identifier_validation() {
     use justapi_core::server::{CrudOp, CrudSpec};
 

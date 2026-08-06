@@ -106,7 +106,7 @@ limiter = RateLimiter(max_requests=100, window=60)
 def rate_limited_data(request):
     client_id = request.client.host
     if not limiter.is_allowed(client_id):
-        from starlette.responses import JSONResponse
+        from justapi import JSONResponse
         return JSONResponse(content={"error": "Rate limit exceeded"}, status_code=429)
     return {"data": "ok"}
 ```

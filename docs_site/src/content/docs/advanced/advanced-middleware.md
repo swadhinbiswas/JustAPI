@@ -1,63 +1,112 @@
 ---
 title: Advanced Middleware
-description: Add ASGI middleware, HTTPS redirect, trusted hosts, and GZip compression in JustAPI.
-keywords: [JustAPI, middleware, ASGI, HTTPS redirect, trusted host, GZip]
+description: Add security headers, CORS, JWT, request coalescing, and custom Python pipeline middleware in JustAPI.
+keywords: [JustAPI, middleware, security headers, CORS, JWT, GZip]
 ---
 
-## Adding ASGI Middleware
+JustAPI's middleware runs in two layers:
 
-JustAPI supports any ASGI middleware:
+1. **Native Rust middleware** — CORS, JWT, security headers, and request
+   coalescing execute in the Rust chain for every request (covering the Rust
+   native fast path too). These are enabled with dedicated `enable_*` / `add_*`
+   methods.
+2. **Python middleware** — your own request `(request, call_next)` callables for
+   cross-cutting logic (timing, auth checks, header injection). Registered with
+   `@app.middleware("http")` or on a per-route `middlewares=` list.
+
+## Performance note
+
+Python middleware runs on the Python side of the boundary. For maximum
+throughput, prefer the native Rust middleware (CORS, security headers, JWT,
+rate limiting) or the native fast path — use Python middleware only for logic
+that must run in Python.
+
+## Security Headers
+
+Apply safe HTTP response headers (`X-Content-Type-Options: nosniff`,
+`X-Frame-Options: DENY`, `Content-Security-Policy: default-src 'self'`,
+`X-XSS-Protection: 0`):
 
 ```python
 from justapi import JustAPIApp
-from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
-from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 app = JustAPIApp()
 
-app.add_middleware(HTTPSRedirectMiddleware)
+# Omit HSTS by default (plaintext local termination). Pass with_hsts=True only
+# if you terminate TLS in-process.
+app.enable_secure_headers()
 ```
 
-## Trusted Host Middleware
+> Native (Rust-side) gzip response compression is available as a server option
+> (see `justapi serve --compress`). If you need per-route compression, wrap it
+> in Python middleware or place JustAPI behind a reverse proxy that handles TLS
+> and compression (see [Behind a Proxy](/advanced/behind-a-proxy/)).
 
-Guard against HTTP host header attacks:
+## CORS
+
+Rust-native CORS, covering all routes including the fast path and 404s:
 
 ```python
-app.add_middleware(
-    TrustedHostMiddleware,
-    allowed_hosts=["example.com", "*.example.com"],
+app.add_cors(
+    allow_origins=["https://example.com"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+    allow_credentials=True,
 )
 ```
 
-## GZip Compression
+## JWT Authentication (Rust-native)
 
 ```python
-from starlette.middleware.gzip import GZipMiddleware
-
-app.add_middleware(GZipMiddleware, minimum_size=500, compresslevel=9)
+app.set_jwt_auth(secret="your-secret", algorithm="HS256")
 ```
 
-## Custom ASGI Middleware
+## Request Coalescing (Singleflight)
 
-Write your own middleware class:
+Fuse concurrent identical requests into one upstream call:
+
+```python
+app.enable_request_coalescing(headers=["x-user-id"])
+```
+
+## Custom Python Middleware
+
+Write your own request/response middleware as a plain callable `(request, next)`.
 
 ```python
 import time
-from starlette.middleware.base import BaseHTTPMiddleware
+from justapi import JustAPIApp
 
-class TimingMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request, call_next):
-        start = time.time()
-        response = await call_next(request)
-        duration = time.time() - start
-        response.headers["X-Process-Time"] = str(round(duration, 4))
-        return response
+app = JustAPIApp()
 
-app.add_middleware(TimingMiddleware)
+@app.middleware("http")
+async def timing_middleware(request, call_next):
+    start = time.time()
+    response = await call_next(request)
+    response.headers["X-Process-Time"] = str(round(time.time() - start, 4))
+    return response
 ```
+
+Or attach it to a single route:
+
+```python
+async def auth_middleware(request, call_next):
+    if not (request.get("headers") or {}).get("x-token"):
+        return {"status": 401, "body": {"detail": "unauthorized"}}
+    return await call_next(request)
+
+@app.get("/protected", middlewares=[auth_middleware])
+async def protected(request):
+    return {"message": "top secret"}
+```
+
+> **Note:** The Rust native fast path is a validate-and-echo shortcut that does
+> not execute Python middleware or dependencies. If a route uses `native=True`,
+> it must not declare dependencies or Python middleware (the framework refuses
+> that combination at registration time).
 
 ## See Also
 
 - [Middleware](/tutorials/middleware/) — basic middleware usage
 - [Behind a Proxy](/advanced/behind-a-proxy/) — reverse proxy configuration
-- [Sub Applications](/advanced/sub-applications/) — mounting sub-apps
+- [JWT & Auth](/security/authentication/) — authentication middleware

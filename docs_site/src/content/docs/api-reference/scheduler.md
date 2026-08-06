@@ -1,73 +1,89 @@
 ---
 title: Scheduler API
 description: "API reference for the task scheduler in JustAPI, the FastAPI alternative — Rust-native cron-based periodic task scheduler."
-keywords: [scheduler, fastapi alternative, justapi, cron, periodic tasks, pyscheduler, rust native]
+keywords: [scheduler, fastapi alternative, justapi, cron, periodic tasks, rust native]
 ---
 
-## `PyScheduler` Object
+## Scheduler
 
-The scheduler manages periodic tasks using cron expressions. It runs entirely in Rust with UTC-based timing.
+JustAPI's scheduler manages periodic tasks using cron expressions and fixed
+intervals. It runs entirely in Rust with UTC-based timing, and jobs are
+dispatched onto the same Rust background-task worker pool as
+`BackgroundTasks` — so they run with the GIL released.
+
+There are two ways to use it: the standalone `Scheduler` class, or the
+convenience methods on `JustAPIApp`.
+
+## Standalone `Scheduler`
 
 ```python
-from justapi import PyScheduler
+from justapi import Scheduler
 
-scheduler = PyScheduler()
+scheduler = Scheduler()
+scheduler.schedule("*/5 * * * *", my_task)  # cron expression
+scheduler.every(30, poll_upstream)          # fixed interval
+scheduler.start()
 ```
 
 | Method | Description |
 |---|---|
-| `scheduler.cron(expression, callback)` | Schedule task with cron expression |
-| `scheduler.interval(seconds, callback)` | Schedule task at fixed interval |
-| `scheduler.once(delay_seconds, callback)` | Schedule one-time delayed task |
+| `schedule(cron_expr, func, *args, **kwargs)` | Schedule a job with a standard 5-field cron expression |
+| `every(seconds, func, *args, **kwargs)` | Schedule a job at a fixed interval |
+| `remove(job)` | Remove a scheduled job |
+| `jobs` | List registered jobs |
+| `stats` | Job run statistics |
+| `start()` | Start the scheduler (jobs run for the process lifetime) |
+| `stop()` | Stop the scheduler |
 
-### `scheduler.cron()`
+### `schedule()` — cron jobs
 
 ```python
 # Run every hour at minute 0
-scheduler.cron("0 * * * *", my_task)
+scheduler.schedule("0 * * * *", my_task)
+
+# With arguments
+scheduler.schedule("0 0 * * *", daily_report, "team@example.com")
 ```
 
 | Parameter | Type | Description |
 |---|---|---|
-| `expression` | `str` | Standard 5-field cron expression (min hour day month weekday) |
-| `callback` | callable | Function to execute |
+| `cron_expr` | `str` | Standard 5-field cron expression (min hour day month weekday), evaluated in UTC |
+| `func` | callable | Function to execute |
+| `*args` / `**kwargs` | — | Passed through to `func` |
 
-### `scheduler.interval()`
+### `every()` — interval jobs
 
 ```python
-# Run every 30 seconds
-scheduler.interval(30, my_task)
+# Run every 30 seconds (first fire one interval after registration)
+scheduler.every(30, my_task)
 ```
 
 | Parameter | Type | Description |
 |---|---|---|
-| `seconds` | `int` | Interval in seconds |
-| `callback` | callable | Function to execute |
+| `seconds` | int | Interval in seconds |
+| `func` | callable | Function to execute |
+| `*args` / `**kwargs` | — | Passed through to `func` |
 
-### `scheduler.once()`
-
-```python
-# Run once after 60 seconds
-scheduler.once(60, my_task)
-```
-
-| Parameter | Type | Description |
-|---|---|---|
-| `delay_seconds` | `int` | Delay before execution |
-| `callback` | callable | Function to execute |
+> **Note:** jobs are in-memory (not persisted) in the current version. The
+> scheduler runs for the lifetime of the process.
 
 ## Integration with App
 
+The `JustAPIApp` methods `schedule()` and `every()` register jobs directly and
+start the scheduler automatically when the server starts:
+
 ```python
-from justapi import JustAPIApp, PyScheduler
+from justapi import JustAPIApp
 
 app = JustAPIApp()
-scheduler = PyScheduler()
 
 def cleanup_expired_sessions():
-    app.db.execute("DELETE FROM sessions WHERE expires_at < NOW()")
+    app.db.execute("DELETE FROM sessions WHERE expires_at < ?", ["now"])
 
-scheduler.cron("0 */6 * * *", cleanup_expired_sessions)  # Every 6 hours
+app.schedule("0 */6 * * *", cleanup_expired_sessions)  # Every 6 hours
+app.every(30, poll_upstream)                           # Every 30 seconds
+
+app.run("127.0.0.1:8000")
 ```
 
 ## See Also

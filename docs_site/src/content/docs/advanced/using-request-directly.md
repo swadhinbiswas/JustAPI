@@ -1,6 +1,6 @@
 ---
 title: Using the Request Directly
-description: Access the raw Starlette Request object for headers, body, and client info in JustAPI.
+description: Access the native JustAPI Request object for headers, body, and client info.
 keywords: [JustAPI, request object, raw request, headers, body, client]
 ---
 
@@ -9,7 +9,7 @@ keywords: [JustAPI, request object, raw request, headers, body, client]
 Any handler can receive the raw `Request` object as a parameter:
 
 ```python
-from starlette.requests import Request
+from justapi import Request
 from justapi import JustAPIApp
 
 app = JustAPIApp()
@@ -19,7 +19,7 @@ def get_info(request: Request):
     return {
         "method": request.method,
         "url": str(request.url),
-        "client": request.client.host if request.client else None,
+        "client": request.client,  # (host, port) tuple or None
     }
 ```
 

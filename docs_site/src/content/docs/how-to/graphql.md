@@ -72,7 +72,7 @@ query {
 JustAPI supports global dependencies that apply to all routes including GraphQL:
 
 ```python
-from justapi import Depends, Security
+from justapi import Depends
 
 def get_current_user(request):
     token = request.headers.get("Authorization", "").replace("Bearer ", "")

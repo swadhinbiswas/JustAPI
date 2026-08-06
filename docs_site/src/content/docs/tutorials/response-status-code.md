@@ -6,20 +6,26 @@ keywords: [JustAPI, status code, HTTP status, response, error handling]
 
 ## Default Status Code
 
-JustAPI returns `200 OK` by default for successful responses.
+JustAPI returns `200 OK` by default for successful responses that don't use a
+`Response` object.
 
-## Custom Status Code
+## Explicit Status Code
 
-Use `status_code` in the decorator:
+The `status_code=` route decorator kwarg (e.g. `@app.post("/items", status_code=201)`)
+is **OpenAPI documentation metadata only** — it documents the expected success
+code in the generated schema but does **not** alter the actual HTTP status of a
+plain dict/JSON return (which is still `200`).
+
+To actually set the response status, return a `Response` object:
 
 ```python
-from justapi import JustAPIApp
+from justapi import JustAPIApp, JSONResponse
 
 app = JustAPIApp()
 
-@app.post("/items", status_code=201)
+@app.post("/items")
 def create_item():
-    return {"message": "created"}
+    return JSONResponse(content={"message": "created"}, status_code=201)
 ```
 
 ## Common Status Codes
@@ -41,7 +47,7 @@ def create_item():
 For full control, return a `Response` object:
 
 ```python
-from starlette.responses import JSONResponse
+from justapi import JSONResponse
 
 @app.get("/custom")
 def custom_response():

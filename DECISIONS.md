@@ -2949,3 +2949,241 @@ healthy 117 RPS, confirming the collapse is concurrency-induced).
 
 **Evidence:** `cargo check -p justapi-py --features orjson` passes; `cargo check` (default/no-orjson) passes; pytest 159 passed / 1 skipped; `cargo test --workspace` all pass.
 
+
+## ADR-077 — 2026-08-06 — Drop ASGI compatibility; fully native Rust pipeline
+
+**Context:** PROMPT.md Section 2 and ADR-007/013 mandated a Tier A ASGI
+compatibility shim (run unmodified FastAPI/Starlette apps on JustAPI's Rust
+runtime). That shim was never shipped in the maintained codebase. The public
+docs (README, docs_site) still claimed "an ASGI shim for compatibility with the
+Starlette middleware ecosystem", `app.mount()` accepting arbitrary ASGI apps,
+`httpx.ASGITransport(app=app)` test clients, and an `asgi_app=` kwarg on
+`app.run()`. Investigation confirmed these are **not implemented**:
+- `mount()` raises `ValueError` for anything that isn't a `str` or `APIRouter`.
+- `run()` has no `asgi_app` kwarg.
+- No ASGI receiver/sender/scope shim exists anywhere in `justapi-py`/`justapi-core` Rust sources.
+- `dependency_overrides` (documented) does not exist.
+
+**Options considered:**
+1. Implement a real ASGI layer (Tier A) — rejected. ASGI is a dict-based,
+   dynamically-typed protocol that would drag the typed zero-copy Rust pipeline
+   (route → schema validation → Rust serialization → wire) back through a
+   Python interface on every request. It taxes the fastest path for the benefit
+   of running legacy Starlette apps — the wrong target audience. We already
+   ship the native equivalents of every middleware ASGI would import (CORS,
+   JWT, rate-limit, security headers, compression, WS, SSE).
+2. Keep the ASGI claims but defer the work — rejected. The docs are a false
+   promise; claims without substance erode trust faster than a missing feature.
+3. Remove ASGI compatibility entirely and own the native stack — **selected.**
+
+**Decision:**
+- JustAPI is a fully native runtime. No ASGI/Starlette dependency, no ASGI shim.
+- Removed the false claims from README, docs_site (advanced-middleware,
+  async-tests, sub-applications, static-files, migration-guide, glossary,
+  external-links), AGENTS.md architecture diagram, and PLAN.md (marked Phase 10
+  Tier A as historical/deprecated; updated the phase-table row and the
+  "native-for-performance, ASGI-for-compatibility" principle).
+- Corrected the real APIs in docs: native middleware is `@app.middleware("http")`
+  + `(request, call_next)` callables and the `enable_secure_headers` /
+  `add_cors` / `set_jwt_auth` / `enable_request_coalescing` native bridges;
+  testing uses `justapi.testing.AsyncTestClient`, not `httpx.ASGITransport`;
+  sub-apps use `APIRouter` + `mount()`; static files use `app.frontend()`.
+- Integration with legacy ASGI apps is delegated to a path-routing reverse proxy.
+
+**Evidence:** `rg -l ASGI` inventory across repo; reads of `app.py` (`mount`,
+`add_middleware`, `run`, `dependency_overrides`), `testing.py`,
+`test_client.rs`; factual ASGI references (Granian/uvicorn comparisons in
+README/HANDBOOK/BENCHMARKS, historical DECISIONS ADRs, benchmark harness) are
+kept — they describe the stack JustAPI intentionally does NOT use.
+
+## ADR-078 — 2026-08-06 — QUERY method (RFC 10008) testability + honest CRUD benchmark re-run
+
+**Context:** Two items from the "make JustAPI production-grade" drive:
+
+1. The HTTP QUERY method (RFC 10008) had a complete route chain (Python
+   `app.query()` → PyO3 `native::JustAPIApp::query` → Rust router keyed on
+   `justapi_core::query_method()`) and correct RFC enforcement (QUERY MUST carry
+   a Content-Type, rejected with 400), but there was **no way to test it**: the
+   test clients only exposed GET/POST/PUT/PATCH/DELETE.
+2. The DB-backed CRUD benchmark ledger (2026-07-26) needed re-verification on
+   current code before trusting its "beat FastAPI" claims.
+
+**Decision:**
+- Added `TestClient::query`/`query_with` (core), `JustAPITestClient.query`/
+  `query_with` (PyO3), and `AsyncTestClient.query` (defaults to
+  `Content-Type: application/json`, since RFC 10008 requires it). Tests: 3
+  Python (roundtrip, wrong-route 405, missing-Content-Type 400) + 1 Rust.
+- Re-ran `benchmarks/run_crud_bench.sh` with a **release wheel** and appended
+  the results to BENCHMARKS.md. JustAPI native SELECT = 181k RPS (×125 vs
+  FastAPI, up from ×108). UPDATE 31.9k / DELETE 37.7k still lead.
+- **Honest finding (recorded, not hidden):** the Python-handler path now
+  measures 16.5k SELECT and concurrent writes collapse to ~6 RPS at `-c 20`
+  (147 at `-c 1`). Root cause: the GIL-pool backpressure fix (2026-07-25)
+  throttles the single Python worker instead of dropping requests when its
+  bounded channel is full. This is a correctness/throughput tradeoff — all
+  writes commit; it is not a durability bug. The Rust-native path is unaffected.
+  The 2026-07-26 107k Python-handler SELECT predates that fix and is not
+  reproducible on current code.
+- Methodology rule added: benchmarks MUST use the release wheel; a debug
+  `maturin develop` build measures ~4× slower and is not comparable.
+
+**Evidence:** `benchmarks/run_crud_bench.sh` output (2026-08-06), BENCHMARKS.md
+append, `testing.rs`/`test_client.rs`/`testing.py` QUERY additions, tests in
+`test_testing.py` and `crates/justapi-core/src/testing.rs`.
+
+## ADR-079 — 2026-08-06 — HTTP/3 (QUIC) transport: feature-gated module, not a TCP-path rewrite
+
+**Context:** "Make JustAPI better than any existing Python framework" — HTTP/3
+is the one transport no Python web framework ships (all are TCP-based
+HTTP/1.1/2). QUIC gives connection multiplexing without head-of-line blocking,
+0-RTT resumption, and built-in TLS 1.3.
+
+**Options considered:**
+1. `quiche` (Cloudflare) — fastest per interop-runner, but BoringSSL-only,
+   low-level event loop, no hyper compatibility. Rejected.
+2. `s2n-quic` + `s2n-quic-h3` (AWS) — production-grade, but `s2n-quic-h3` is
+   a separate lower-level integration and MSRV 1.88 (project is on 1.97, OK).
+3. `h3` + `h3-quinn` (hyperium) — **selected.** hyper's own HTTP/3 layer;
+   tokio-native (matches the project's tokio+hyper+rustls stack); h3-quinn
+   reuses quinn 0.11 + rustls 0.23 (already in the tree); `h3` is 0.0.x but
+   hyperium-owned and used by reqwest/salvo.
+
+**Decision:**
+- New `http3` feature flag on `justapi-core` (`h3`, `h3-quinn`, `quinn`
+  optional deps; pulls in `tls`).
+- New `crates/justapi-core/src/http3.rs`: `Http3Config` (PEM cert/key),
+  `Http3Handler` bridge type (maps `hyper::Request<Full<Bytes>>` →
+  `(status, headers, body)`), `quic_server_config()`, `serve_http3()`
+  (UDP bind → quinn endpoint → h3 server connection loop → per-request
+  task), `collect_body()`, `bridge_request()`, `chain_to_http3_handler()`.
+- End-to-end test `tests/http3_test.rs`: self-signed cert via rcgen, real
+  QUIC handshake, request round-trip through h3-quinn client. **Passes.**
+- **Seam documented, not hidden:** the core `make_handler`/`execute_handler`
+  and `Handler::Custom` are typed to `hyper::body::Incoming`, so the full
+  Python-native pipeline (GIL pool, native fast path, schema validation) is
+  NOT yet wired to HTTP/3 — `chain_to_http3_handler` takes a
+  `MiddlewareChain<Full<Bytes>>`, and `make_test_handler<B>` in justapi-py is
+  already body-generic, so the wiring is a mechanical follow-up (make core
+  handler generic over `B`). Follow-up phase "HTTP/3 native pipeline".
+
+**Evidence:** `http3.rs` (module), `tests/http3_test.rs` (passing e2e),
+`http3` feature in Cargo.toml, `serve_http3` log line "HTTP/3 listening on
+udp://…".
+
+## ADR-080 — 2026-08-06 — Remove request-scoped auto-transaction: write-path pool-saturation collapse
+
+**Context:** The honest re-benchmark (2026-08-06) surfaced a real defect: the
+Python-handler DB write path measured **150 RPS at `-c 10` but collapsed to
+~3 RPS at `-c 11`** (with 503/500 "pool timed out while waiting for an open
+connection" at exactly `request_acquire_timeout`). Root-caused by
+measurement, not theory:
+
+- `make_native_handler`/`make_test_handler` began a request-scoped
+  `pool.begin_request()` transaction on the **async runtime** for every
+  POST/PUT/DELETE (handlers.rs), *before* dispatching to the single GIL
+  worker.
+- The transaction held a pool connection while the request waited in the
+  GIL queue; the handler's own `app.db.query` then acquired a **second**
+  connection (`run_blocking` → pool acquire). The tx was never passed to the
+  handler — it provided zero atomicity for handler work.
+- Result: N concurrent write requests need 2N connections on an
+  N-connection pool → immediate saturation at N+1 concurrency. Verified:
+  raising `request_acquire_timeout` to 30s did NOT fix it (still ~3 RPS);
+  reads (SELECT) at c=16 stayed at 21k RPS — the collapse was write-specific.
+
+**Options considered:**
+1. Thread the transaction into the handler's `app.db` so the handler's queries
+   run inside it (one connection per request) — correct but a large refactor
+   (tx plumbed through the `DbPool` pyclass + `Request`).
+2. Remove the auto-transaction — **selected.** The pool's own
+   `request_acquire_timeout` already produces the fast-503 backpressure the
+   tx provided; multi-statement atomicity is explicit via
+   `app.db.transaction()`. The tx was dead weight that doubled connection
+   usage per write.
+
+**Decision:**
+- Removed the auto-transaction begin/commit/rollback from both
+  `make_native_handler` and `make_test_handler` (handlers.rs). Writes now use
+  exactly one pool connection (the handler's own `app.db.query`).
+- Extended `db_error_response` (justapi-core/lib.rs): SQLITE_BUSY/LOCKED
+  (codes 5/6/517/518/261) now map to **503 Retry-After** instead of a generic
+  500 — a concurrent write crunch surfaces as retryable backpressure, not a
+  5s stall + 500.
+- Reworked `test_db_saturated.py` to saturate via an external SQLite write
+  lock (the old premise — a Python handler sleeping while holding a pool
+  connection — is architecturally impossible now: the GIL worker serializes
+  handlers so they never race for the pool). Added
+  `test_concurrent_writes_small_pool_no_saturation_collapse` (2-conn pool,
+  50 concurrent writers, all must 200 + persist).
+
+**Measured after fix (release wheel, same fixture):** Python-handler INSERT
+flat at **142–162 RPS from c=1 through c=50, 100% success, zero timeouts**
+(before: 160 RPS at c=10 → 2.8 RPS at c=11). SELECT unchanged (19.5k @ c=20).
+Writes durable: 604 rows persisted from a 4s burst @ c=20.
+
+**Evidence:** BENCHMARKS.md 2026-08-06 re-run section (pre-fix numbers),
+handlers.rs diff, lib.rs `db_error_response`, test_db_saturated.py +
+test_db_concurrent.py, live oha measurements above.
+
+## ADR-081 — 2026-08-06 — Fork-safe GIL pool (fixes test_circuit_breaker flake + prefork hangs)
+
+**Context:** The full pytest suite had exactly one persistent flake:
+`test_circuit_breaker.py` failed with 504 timeouts when run after any test that
+initialized the GIL pool (passes in isolation). Root cause, proven by
+reproduction: the pool was a `OnceLock<GilPool>`; `fork(2)` copies the
+parent's address space, so a forked child inherited an initialized pool whose
+worker *threads do not exist in the child*. Every `run_python` send went into
+a channel no one read → the child's server blocked forever → 504s. This is not
+a test-only issue: any user app that forks after the pool is warm (prefork
+servers, `multiprocessing`, Celery-style workers) would hang every
+Python-handler request in the child.
+
+**Decision:**
+- `POOL` changed from `OnceLock<GilPool>` to `Mutex<Option<GilPool>>` plus a
+  `POOL_PID: AtomicU32`. `run_python` (and `init_pool`) checks
+  `POOL_PID != current_pid`; on mismatch (forked child or fresh process) the
+  pool is rebuilt on the child's own threads. Same-process calls pay one
+  atomic load + one short mutex lock per request (dispatch already held the
+  lock only to clone senders; the atomic is uncontended in the common path).
+- `GilPool.next` is now `Arc<AtomicUsize>` (cloneable counter for round-robin).
+- Regression guards: `test_dependency_injection.py::test_gil_pool_survives_fork`
+  (warm parent pool → fork → child serves 200) and the previously-flaky
+  `test_circuit_breaker.py` now passes in the full suite.
+
+**Measured:** full pytest suite **169 passed / 1 skipped / 0 failed** (was 167
++ 1 flake). No GIL-path throughput change (uncontended atomic + lock in the
+same-process fast path).
+
+**Evidence:** gil_pool.rs diff, the two regression tests, full-suite run.
+
+## ADR-082 — 2026-08-06 — HTTP/3 native pipeline: Python handlers serve over QUIC
+
+**Context:** ADR-079 shipped the HTTP/3 transport (quinn + h3) with a bridge
+handler but noted a seam: the core `make_handler`/`execute_handler` were typed
+to `hyper::body::Incoming`, so the Python-native pipeline (GIL pool, native
+fast path, schema validation, DI) could not serve over QUIC. This closes that
+seam.
+
+**Decision:**
+- The Python binding's `make_native_handler<B>` was already body-generic
+  (`B: Body`), so no core refactor was needed. `JustAPIApp::run()` now builds
+  a second `MiddlewareChain<Full<Bytes>>` from the same app state (same route
+  table, handlers, schemas, batchers, DB pool) when HTTP/3 is enabled, wraps
+  it with `chain_to_http3_handler`, and spawns `serve_http3` on the same
+  address over UDP alongside the TCP server.
+- New public API: `app.enable_http3(cert_path, key_path)` (PEM TLS files,
+  required — QUIC uses TLS 1.3). Raises `NotImplementedError` on builds
+  without the `http3` feature. `justapi-py` gained an `http3` feature
+  passthrough to `justapi-core/http3`.
+- Sharing: the TCP and QUIC chains share the same `Arc` state and the same
+  Python `Request.app` handle; per-transport handler closures are built once
+  at startup.
+
+**Verified end-to-end** (`tests/http3_test.rs::http3_python_native_pipeline`,
+real QUIC client): a Python app with `enable_http3` serves a `@app.get`
+handler over HTTP/3 through the full native pipeline — response body
+`{"handler":"python","route":"/native"}`. TCP and UDP listeners both bind the
+same port.
+
+**Evidence:** app.rs diff (http3 bridge + spawn), `enable_http3` in app.py,
+passing e2e test, dual-listener smoke (TCP 200 + UDP bound, both logged).

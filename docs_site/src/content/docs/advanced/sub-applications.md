@@ -42,16 +42,34 @@ All routes in `users_router` now start with `/api/v1/users/`.
 
 ## Mounting Sub-Applications
 
-Mount an entire ASGI app at a sub-path:
+Mount an `APIRouter` at a path prefix:
 
 ```python
-from justapi import JustAPIApp
-from starlette.applications import Starlette
+from justapi import APIRouter, JustAPIApp
 
 app = JustAPIApp()
-sub_app = Starlette()
-app.mount("/api/v2", sub_app)
+users_router = APIRouter(prefix="/users")
+
+@users_router.get("/{user_id}")
+def get_user(user_id: int):
+    return {"user_id": user_id}
+
+app.mount("/api/v2", users_router)
 ```
+
+`mount()` accepts either an `APIRouter` (or any object exposing `.routes`) or a
+static directory path:
+
+```python
+# Mount a static directory
+app.mount("/static", "static", name="static")
+```
+
+> **Note:** JustAPI does not mount third-party ASGI/Starlette applications —
+> the runtime is a native Rust pipeline with its own routing and middleware.
+> For sub-app structure use `APIRouter` + `mount()` (or `include_router`).
+> Run existing Starlette/FastAPI apps unchanged by placing JustAPI behind a
+> proxy that routes by path (see [Behind a Proxy](/advanced/behind-a-proxy/)).
 
 ## See Also
 

@@ -19,8 +19,7 @@
 //! branch. The runtime mode is detected **once** at startup (see [`init`]).
 
 use pyo3::prelude::*;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use tokio::sync::mpsc as tokio_mpsc;
 use tokio::sync::oneshot;
 
@@ -58,10 +57,16 @@ struct GilPool {
     senders: Vec<tokio_mpsc::Sender<Job>>,
     mode: RuntimeMode,
     /// Round-robin dispatch counter.
-    next: AtomicUsize,
+    next: std::sync::Arc<AtomicUsize>,
 }
 
-static POOL: OnceLock<GilPool> = OnceLock::new();
+/// Process ID that owns the current pool. `fork(2)` copies the parent's
+/// address space, so the child would inherit a `GilPool` whose worker threads
+/// do not exist in the child — every `send` would block forever (observed as
+/// 504 timeouts in the child). Any PID change means we are in a forked child
+/// (or a new process) and the pool must be rebuilt on its own threads.
+static POOL_PID: AtomicU32 = AtomicU32::new(0);
+static POOL: std::sync::Mutex<Option<GilPool>> = std::sync::Mutex::new(None);
 
 const CHANNEL_CAP_PER_WORKER: usize = 16;
 
@@ -140,15 +145,24 @@ fn build_pool(num_threads: usize, mode: RuntimeMode) -> GilPool {
             .expect("failed to spawn justapi GIL pool worker");
         senders.push(tx);
     }
-    GilPool { senders, mode, next: AtomicUsize::new(0) }
+    GilPool { senders, mode, next: std::sync::Arc::new(AtomicUsize::new(0)) }
 }
 
 /// Initialize the GIL pool with a warmup (must hold the GIL). Safe to call
-/// multiple times; does nothing if the pool is already initialized.
+/// multiple times; does nothing if the pool is already initialized for this
+/// process. If called after `fork(2)` (PID changed), rebuilds the pool.
 fn init_pool(num_threads: Option<usize>, py: Python<'_>) {
     let mode = detect_mode(py);
     let n = num_threads.unwrap_or_else(|| default_pool_size(mode));
-    POOL.get_or_init(|| build_pool(n, mode));
+    let pid = std::process::id();
+    {
+        let mut guard = POOL.lock().unwrap_or_else(|e| e.into_inner());
+        let needs_rebuild = guard.is_none() || POOL_PID.load(Ordering::Acquire) != pid;
+        if needs_rebuild {
+            *guard = Some(build_pool(n, mode));
+            POOL_PID.store(pid, Ordering::Release);
+        }
+    }
     // Warm up OnceLock-backed helpers on the calling thread while we hold the
     // GIL, so GIL-pool workers never race on them. See `init()` docstring.
     let _ = get_helper(py);
@@ -188,27 +202,27 @@ where
     T: Send + 'static,
 {
     let _t0 = std::time::Instant::now();
-    let pool = POOL.get_or_init(|| {
-        // Lazy init path: build pool with default (GIL-based) mode. The warmup
-        // that prevents the `OnceLock` deadlock on `get_helper`/`fast_dumps`
-        // cannot happen here because we don't have a `Python` token. This is
-        // safe because:
-        //   1. `get_helper` and `fast_dumps` are themselves lazy (`OnceLock`),
-        //      and the first GIL-pool worker to reach them will initialise them
-        //      single-threadedly (the OnceLock handles mutual exclusion).
-        //   2. The GIL-free variant of `py.import("sys")` inside `detect_mode`
-        //      can only deadlock if two workers race a different OnceLock —
-        //      but on the lazy path, only one thread reaches this code (the
-        //      first request). Subsequent requests see the already-initialized
-        //      pool.
-        // Users are still encouraged to call `init()` at startup so warmup
-        // happens on the main thread rather than on a hot request path.
-        let mode = RuntimeMode::GilBased;
-        let n = default_pool_size(mode);
-        build_pool(n, mode)
-    });
-    let n = pool.senders.len();
-    let idx = if n == 1 { 0usize } else { pool.next.fetch_add(1, Ordering::Relaxed) % n };
+    let pid = std::process::id();
+    let pool = {
+        let mut guard = POOL.lock().unwrap_or_else(|e| e.into_inner());
+        let same_process = guard.is_some() && POOL_PID.load(Ordering::Acquire) == pid;
+        if !same_process {
+            // Forked child (or first call without init): rebuild the pool with
+            // default (GIL-based) mode. Warmup cannot run here (no `Python`
+            // token); `get_helper`/`fast_dumps` are themselves lazy and safe to
+            // initialize on the first worker that reaches them (their `OnceLock`
+            // provides mutual exclusion).
+            let mode = RuntimeMode::GilBased;
+            let n = default_pool_size(mode);
+            *guard = Some(build_pool(n, mode));
+            POOL_PID.store(pid, Ordering::Release);
+        }
+        let p = guard.as_ref().expect("pool present");
+        (p.senders.clone(), p.next.clone())
+    };
+    let (senders, next) = pool;
+    let n = senders.len();
+    let idx = if n == 1 { 0usize } else { next.fetch_add(1, Ordering::Relaxed) % n };
     let (resp_tx, resp_rx) = oneshot::channel::<T>();
     let job: Job = Box::new(move |py| {
         // SAFETY / panic policy: a genuine Rust panic inside `f` (e.g. an
@@ -226,7 +240,16 @@ where
         let resp = f(py);
         let _ = resp_tx.send(resp);
     });
-    pool.senders[idx].try_send(job).map_err(|e| anyhow::anyhow!("gil pool send failed: {}", e))?;
+    // Backpressure, not drop: `try_send` would reject a job whenever a worker's
+    // bounded queue is momentarily full (single GIL worker => cap = 16), and
+    // `handle_request` masks ANY handler `Err` as an RFC 9457 404. Under a burst
+    // of concurrent/pipelined requests that produced spurious 404s with no log.
+    // `send` awaits until the worker drains a slot, so load is throttled to the
+    // pool's real capacity instead of surfacing as an error (ADR-049 dispatch).
+    senders[idx]
+        .send(job)
+        .await
+        .map_err(|_| anyhow::anyhow!("gil pool worker dropped (channel closed)"))?;
     let resp = resp_rx.await.map_err(|_| anyhow::anyhow!("gil pool worker dropped"))?;
     profile_gil_pool(_t0.elapsed().as_nanos() as u64);
     Ok(resp)
@@ -235,5 +258,6 @@ where
 /// The detected runtime mode (GIL-based or free-threaded), if the pool has been
 /// initialized.
 pub fn mode() -> Option<RuntimeMode> {
-    POOL.get().map(|p| p.mode)
+    let guard = POOL.lock().unwrap_or_else(|e| e.into_inner());
+    guard.as_ref().map(|p| p.mode)
 }

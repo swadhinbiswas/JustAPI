@@ -8,7 +8,7 @@ keywords: [JustAPI, WebSocket, advanced, broadcasting, connection management]
 
 ```python
 from justapi import JustAPIApp
-from starlette.websockets import WebSocket, WebSocketDisconnect
+from justapi import WebSocket, WebSocketDisconnect
 
 app = JustAPIApp()
 
