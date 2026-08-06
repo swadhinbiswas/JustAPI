@@ -94,17 +94,27 @@ fn default_pool_size(mode: RuntimeMode) -> usize {
     }
 }
 
-/// Detect the interpreter's GIL mode ONCE. Free-threaded Python exposes
-/// `sys._is_gil_enabled == False`; standard CPython exposes `True` (or lacks the
-/// attribute, in which case we assume GIL-based — the safe default).
+/// Detect the interpreter's GIL mode. Free-threaded builds of CPython
+/// (3.13t/3.14t) set the compile-time `Py_GIL_DISABLED` cfg (via
+/// pyo3-build-config) — the authoritative signal. The runtime
+/// `sys._is_gil_enabled` read is NOT reliable through pyo3's import on
+/// free-threaded interpreters (reads true), so it is only a fallback for
+/// builds where the cfg is unavailable.
 fn detect_mode(py: Python<'_>) -> RuntimeMode {
-    let gil_enabled = py
-        .import("sys")
-        .ok()
-        .and_then(|sys| sys.getattr("_is_gil_enabled").ok())
-        .and_then(|v| v.extract::<bool>().ok())
-        .unwrap_or(true);
-    RuntimeMode::from_gil_enabled(gil_enabled)
+    #[cfg(Py_GIL_DISABLED)]
+    {
+        return RuntimeMode::GilFree;
+    }
+    #[cfg(not(Py_GIL_DISABLED))]
+    {
+        let gil_enabled = py
+            .import("sys")
+            .ok()
+            .and_then(|sys| sys.getattr("_is_gil_enabled").ok())
+            .and_then(|v| v.extract::<bool>().ok())
+            .unwrap_or(true);
+        RuntimeMode::from_gil_enabled(gil_enabled)
+    }
 }
 
 /// Initialize the dedicated GIL pool. Safe to call multiple times; only the
@@ -207,11 +217,15 @@ where
         let mut guard = POOL.lock().unwrap_or_else(|e| e.into_inner());
         let same_process = guard.is_some() && POOL_PID.load(Ordering::Acquire) == pid;
         if !same_process {
-            // Forked child (or first call without init): rebuild the pool with
-            // default (GIL-based) mode. Warmup cannot run here (no `Python`
-            // token); `get_helper`/`fast_dumps` are themselves lazy and safe to
-            // initialize on the first worker that reaches them (their `OnceLock`
-            // provides mutual exclusion).
+            // Forked child (or first call without init): rebuild the pool.
+            // Mode detection uses the compile-time Py_GIL_DISABLED cfg — no
+            // `Python` token needed (the runtime sys._is_gil_enabled read is
+            // unreliable on free-threaded interpreters). get_helper/fast_dumps
+            // are themselves lazy and safe to initialize on the first worker
+            // that reaches them (their OnceLock provides mutual exclusion).
+            #[cfg(Py_GIL_DISABLED)]
+            let mode = RuntimeMode::GilFree;
+            #[cfg(not(Py_GIL_DISABLED))]
             let mode = RuntimeMode::GilBased;
             let n = default_pool_size(mode);
             *guard = Some(build_pool(n, mode));

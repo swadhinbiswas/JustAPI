@@ -1835,7 +1835,24 @@ impl JustAPIApp {
         // the process alive until shutdown. Handler threads call back into
         // Python via `Python::attach`.
         let result = py.detach(move || -> Result<(), anyhow::Error> {
-            let rt = tokio::runtime::Runtime::new()?;
+            // Multi-threaded runtime: the HTTP server (accept loop, per-
+            // connection tasks, TLS, response streaming) must not run on a
+            // single thread. `Runtime::new()` is current-thread — one thread
+            // handles ALL I/O, capping throughput and making the server
+            // fragile under load spikes. Match the DB pool's 4-worker
+            // multi-threaded runtime (ADR-068).
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .worker_threads(
+                    std::env::var("JUSTAPI_SERVER_THREADS")
+                        .ok()
+                        .and_then(|v| v.parse::<usize>().ok())
+                        .filter(|n| *n > 0)
+                        .unwrap_or_else(|| {
+                            std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4)
+                        }),
+                )
+                .build()?;
             rt.block_on(async {
                 // `db_pool` is the resolved `DbPool` (already connected), ready
                 // for handlers and exposed to Python.

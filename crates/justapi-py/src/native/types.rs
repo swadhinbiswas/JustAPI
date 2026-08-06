@@ -8,6 +8,13 @@ use super::NATIVE_HELPER;
 pub enum NativeBody {
     Bytes(Vec<u8>),
     Stream(tokio::sync::mpsc::UnboundedReceiver<Result<Bytes, anyhow::Error>>),
+    /// An asyncio `concurrent.futures.Future` produced by an async Python
+    /// handler (via `run_coroutine_threadsafe`). The coroutine runs on the
+    /// dedicated asyncio loop thread and **releases the GIL during `await`**;
+    /// the GIL-pool worker must NOT block on `.result()` here or every async
+    /// request would serialize through the single worker. Instead the caller
+    /// awaits the future on a `spawn_blocking` thread.
+    Async(Py<PyAny>),
 }
 
 pub struct NativeResponse {

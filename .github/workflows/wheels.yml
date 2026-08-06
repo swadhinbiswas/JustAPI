@@ -69,12 +69,20 @@ jobs:
             target: aarch64
           - os: windows-latest
             target: x64
+          # Free-threaded CPython (3.14t): parallel GIL-free execution. The
+          # limited API (abi3) cannot be free-threaded, so these builds use
+          # --no-default-features (abi3 is the only default feature that must
+          # go; mail/http3/orjson stay).
+          - os: ubuntu-latest
+            target: x86_64
+            python: "3.14t"
+            args: --manylinux 2_28 --no-default-features --features mail,http3,orjson
 
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
         with:
-          python-version: '3.12'
+          python-version: ${{ matrix.python || '3.12' }}
           enable-cache: true
           cache-dependency-glob: crates/justapi-py/pyproject.toml
       - name: Build wheels via Maturin
@@ -83,6 +91,7 @@ jobs:
           target: ${{ matrix.target }}
           args: --release --out dist ${{ matrix.args }}
           manifest-path: crates/justapi-py/Cargo.toml
+          interpreter: ${{ matrix.python || '' }}
       - name: Install wheel & test
         shell: bash
         run: |

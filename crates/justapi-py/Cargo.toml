@@ -8,11 +8,12 @@ license.workspace = true
 crate-type = ["cdylib", "lib"]
 
 [features]
-default = ["mail"]
+default = ["mail", "abi3"]
 mail = ["justapi-core/mail"]
 orjson = ["justapi-core/orjson"]
 redis-rate-limit = ["justapi-core/redis-rate-limit"]
 http3 = ["justapi-core/http3"]
+abi3 = ["pyo3/abi3-py311"]
 
 [dependencies]
 pyo3.workspace = true

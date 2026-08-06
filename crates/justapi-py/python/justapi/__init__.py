@@ -27,6 +27,11 @@ Usage:
 
 __version__ = "2.0.8"
 
+# The compiled core MUST be imported first: submodules (auth, testing, ...)
+# do `from ._justapi import ...`, and on free-threaded builds a submodule
+# import that precedes the core import can resolve `_justapi` differently.
+from ._justapi import serve, TokenStreamResponse, ValidatedStreamResponse, Dag, DagNode, Request, HTTPConnection, Headers, QueryParams, URL, State, RequestStream, UploadFile  # type: ignore[import-untyped]
+
 from . import auth as auth
 from .auth import (  # noqa: F401 — top-level re-export (FastAPI parity, used by docs)
     JwtAuth,
@@ -37,8 +42,6 @@ from .auth import (  # noqa: F401 — top-level re-export (FastAPI parity, used 
 from . import testing as testing
 from . import tracing as tracing
 from . import status as status
-
-from ._justapi import serve, TokenStreamResponse, ValidatedStreamResponse, Dag, DagNode, Request, HTTPConnection, Headers, QueryParams, URL, State, RequestStream, UploadFile  # type: ignore[import-untyped]
 
 # RateLimiter is behind the redis-rate-limit feature flag
 try:

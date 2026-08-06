@@ -54,6 +54,56 @@ fn profile_gil_path(build_ns: u64, handler_ns: u64) {
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Turn a successful Python handler result into a `NativeResponse`: streaming
+/// responses are pumped into an mpsc stream; everything else goes through the
+/// Rust-side fast serializer. Shared by the sync path and the async resolution
+/// path (`resolve_async_response`).
+fn handle_ok_result(
+    py: Python<'_>,
+    res: Bound<'_, PyAny>,
+    helper: &HelperFunctions,
+) -> NativeResponse {
+    if let Ok(vs_res) = res.extract::<pyo3::PyRef<'_, super::app::ValidatedStreamResponse>>() {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let sender = StreamSender { tx };
+        let pump = helper.pump_validated_stream.bind(py);
+        if let Err(e) = pump.call1((
+            vs_res.generator.clone_ref(py),
+            vs_res.schema_json.clone(),
+            sender,
+            vs_res.mode.clone(),
+        )) {
+            tracing::error!("Failed to pump validated stream: {}", e);
+        }
+        return NativeResponse {
+            status: vs_res.status,
+            headers: vs_res.headers.clone(),
+            body: NativeBody::Stream(rx),
+        };
+    }
+    if let Ok(ts_res) = res.extract::<pyo3::PyRef<'_, TokenStreamResponse>>() {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let sender = StreamSender { tx };
+        let pump = helper.pump_stream.bind(py);
+        if let Err(e) = pump.call1((ts_res.generator.clone_ref(py), sender)) {
+            tracing::error!("Failed to pump stream: {}", e);
+        }
+        return NativeResponse {
+            status: ts_res.status,
+            headers: ts_res.headers.clone(),
+            body: NativeBody::Stream(rx),
+        };
+    }
+
+    // Streaming responses are serialized by pumping the generator.
+    // Everything else goes through the Rust-side fast serializer,
+    // which mirrors Robyn's `extract_response_type_fast` (orjson
+    // directly from Rust for dict/list/scalars, downcast for
+    // `Response`, Python `wrap_result` only as a last resort).
+    serialize_response(py, res, helper)
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn call_python_handler(
     py: Python<'_>,
     handler: &Py<PyAny>,
@@ -186,7 +236,19 @@ pub(crate) fn call_python_handler(
             let is_future = res.hasattr("result").unwrap_or(false)
                 && !res.is_instance_of::<pyo3::types::PyDict>();
             if is_future {
-                res.call_method0("result")
+                // Async handler: the coroutine is scheduled on the dedicated
+                // asyncio loop thread (GIL released during `await`). Do NOT
+                // block the GIL worker on `.result()` here — that would
+                // serialize every async request through the single worker
+                // (measured: 1ms-sleep handler → ~800 RPS ceiling regardless
+                // of concurrency). Return the future; the caller awaits it on
+                // a spawn_blocking thread instead.
+                let fut = res.clone().into_any().unbind();
+                return NativeResponse {
+                    status: 200,
+                    headers: vec![(b"content-type".to_vec(), b"application/json".to_vec())],
+                    body: NativeBody::Async(fut),
+                };
             } else {
                 Ok(res)
             }
@@ -195,95 +257,53 @@ pub(crate) fn call_python_handler(
     };
 
     match final_res {
-        Ok(res) => {
-            if let Ok(vs_res) =
-                res.extract::<pyo3::PyRef<'_, super::app::ValidatedStreamResponse>>()
-            {
-                let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-                let sender = StreamSender { tx };
-                let pump = helper.pump_validated_stream.bind(py);
-                if let Err(e) = pump.call1((
-                    vs_res.generator.clone_ref(py),
-                    vs_res.schema_json.clone(),
-                    sender,
-                    vs_res.mode.clone(),
-                )) {
-                    tracing::error!("Failed to pump validated stream: {}", e);
-                }
-                return NativeResponse {
-                    status: vs_res.status,
-                    headers: vs_res.headers.clone(),
-                    body: NativeBody::Stream(rx),
-                };
-            }
-            if let Ok(ts_res) = res.extract::<pyo3::PyRef<'_, TokenStreamResponse>>() {
-                let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-                let sender = StreamSender { tx };
-                let pump = helper.pump_stream.bind(py);
-                if let Err(e) = pump.call1((ts_res.generator.clone_ref(py), sender)) {
-                    tracing::error!("Failed to pump stream: {}", e);
-                }
-                return NativeResponse {
-                    status: ts_res.status,
-                    headers: ts_res.headers.clone(),
-                    body: NativeBody::Stream(rx),
-                };
-            }
+        Ok(res) => handle_ok_result(py, res, helper),
+        Err(e) => handle_py_error(py, e),
+    }
+}
 
-            // Streaming responses are serialized by pumping the generator.
-            // Everything else goes through the Rust-side fast serializer,
-            // which mirrors Robyn's `extract_response_type_fast` (orjson
-            // directly from Rust for dict/list/scalars, downcast for
-            // `Response`, Python `wrap_result` only as a last resort).
-            serialize_response(py, res, helper)
+/// Convert a Python exception raised by a handler (or its call wrapper) into
+/// the proper `NativeResponse`: HTTPException → its status, RequestValidationError
+/// → 422, everything else → generic 500 (never leak details). Shared by the
+/// sync path and the async resolution path.
+fn handle_py_error(py: Python<'_>, e: pyo3::PyErr) -> NativeResponse {
+    // FastAPI-style exceptions: render as proper JSON error responses
+    // instead of a generic 500.
+    let justapi = py.import("justapi").ok();
+    let val = e.value(py);
+    if let Some(exc_cls) = justapi.as_ref().and_then(|m| m.getattr("HTTPException").ok()) {
+        if val.is_instance(&exc_cls).unwrap_or(false) {
+            let status: u16 =
+                val.getattr("status_code").ok().and_then(|v| v.extract().ok()).unwrap_or(500);
+            let detail = exception_detail(py, val);
+            let user_headers: Vec<(Vec<u8>, Vec<u8>)> = val
+                .getattr("headers")
+                .ok()
+                .and_then(|v| v.extract::<Option<HashMap<String, String>>>().ok())
+                .flatten()
+                .map(|m| m.into_iter().map(|(k, v)| (k.into_bytes(), v.into_bytes())).collect())
+                .unwrap_or_default();
+            let mut headers = user_headers;
+            headers.push((b"content-type".to_vec(), b"application/json".to_vec()));
+            let body = serde_json::json!({ "detail": detail }).to_string().into_bytes();
+            return NativeResponse { status, headers, body: NativeBody::Bytes(body) };
         }
-        Err(e) => {
-            // FastAPI-style exceptions: render as proper JSON error responses
-            // instead of a generic 500.
-            let justapi = py.import("justapi").ok();
-            let val = e.value(py);
-            if let Some(exc_cls) = justapi.as_ref().and_then(|m| m.getattr("HTTPException").ok()) {
-                if val.is_instance(&exc_cls).unwrap_or(false) {
-                    let status: u16 = val
-                        .getattr("status_code")
-                        .ok()
-                        .and_then(|v| v.extract().ok())
-                        .unwrap_or(500);
-                    let detail = exception_detail(py, val);
-                    let user_headers: Vec<(Vec<u8>, Vec<u8>)> = val
-                        .getattr("headers")
-                        .ok()
-                        .and_then(|v| v.extract::<Option<HashMap<String, String>>>().ok())
-                        .flatten()
-                        .map(|m| {
-                            m.into_iter().map(|(k, v)| (k.into_bytes(), v.into_bytes())).collect()
-                        })
-                        .unwrap_or_default();
-                    let mut headers = user_headers;
-                    headers.push((b"content-type".to_vec(), b"application/json".to_vec()));
-                    let body = serde_json::json!({ "detail": detail }).to_string().into_bytes();
-                    return NativeResponse { status, headers, body: NativeBody::Bytes(body) };
-                }
-            }
-            if let Some(exc_cls) =
-                justapi.as_ref().and_then(|m| m.getattr("RequestValidationError").ok())
-            {
-                if val.is_instance(&exc_cls).unwrap_or(false) {
-                    let detail = exception_detail(py, val);
-                    let headers = vec![(b"content-type".to_vec(), b"application/json".to_vec())];
-                    let body = serde_json::json!({ "detail": detail }).to_string().into_bytes();
-                    return NativeResponse { status: 422, headers, body: NativeBody::Bytes(body) };
-                }
-            }
-            // Exception surfaced from the Python handler (or the call wrapper).
-            // Log the detail server-side only; never leak it to the client.
-            tracing::error!("Native handler error: {}", e);
-            NativeResponse {
-                status: 500,
-                headers: vec![(b"content-type".to_vec(), b"application/json".to_vec())],
-                body: NativeBody::Bytes(b"{\"detail\":\"Internal Server Error\"}".to_vec()),
-            }
+    }
+    if let Some(exc_cls) = justapi.as_ref().and_then(|m| m.getattr("RequestValidationError").ok()) {
+        if val.is_instance(&exc_cls).unwrap_or(false) {
+            let detail = exception_detail(py, val);
+            let headers = vec![(b"content-type".to_vec(), b"application/json".to_vec())];
+            let body = serde_json::json!({ "detail": detail }).to_string().into_bytes();
+            return NativeResponse { status: 422, headers, body: NativeBody::Bytes(body) };
         }
+    }
+    // Exception surfaced from the Python handler (or the call wrapper).
+    // Log the detail server-side only; never leak it to the client.
+    tracing::error!("Native handler error: {}", e);
+    NativeResponse {
+        status: 500,
+        headers: vec![(b"content-type".to_vec(), b"application/json".to_vec())],
+        body: NativeBody::Bytes(b"{\"detail\":\"Internal Server Error\"}".to_vec()),
     }
 }
 
@@ -492,8 +512,50 @@ pub(crate) fn serialize_response(
     }
 }
 
+/// Resolve a `NativeBody::Async` future (from an async Python handler) into a
+/// concrete body, WITHOUT holding the GIL-pool worker.
+///
+/// The coroutine runs on the dedicated asyncio loop thread; `await` inside it
+/// releases the GIL, so many coroutines can interleave. We just wait for the
+/// `concurrent.futures.Future` (its internal wait releases the GIL), then
+/// serialize the resolved value with the same fast serializer the sync path
+/// uses. Runs on a `spawn_blocking` thread so no worker thread is tied up.
+async fn resolve_async_response(py_future: Py<PyAny>) -> Result<NativeResponse, anyhow::Error> {
+    // Block on the future's .result(). If the coroutine raised (HTTPException,
+    // RequestValidationError, ...), the exception surfaces as a PyErr from
+    // .result() — convert it with the same logic as the sync Err path.
+    let outcome: Result<Py<PyAny>, pyo3::PyErr> = tokio::task::spawn_blocking(move || {
+        Python::attach(|py| py_future.bind(py).call_method0("result").map(|v| v.unbind()))
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("async handler join error: {}", e))?;
+
+    let nr = Python::attach(|py| match outcome {
+        Ok(res) => {
+            let helper = get_helper(py);
+            handle_ok_result(py, res.bind(py).into(), helper)
+        }
+        Err(e) => handle_py_error(py, e),
+    });
+    Ok(nr)
+}
+
 pub(crate) fn nr_to_response(nr: NativeResponse) -> hyper::Response<ResponseBody> {
     let mut resp = match nr.body {
+        // Async futures are always resolved before nr_to_response is called
+        // (see resolve_async_response); this arm is unreachable but required
+        // for exhaustiveness.
+        NativeBody::Async(_) => {
+            return hyper::Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(ResponseBody::new(
+                    http_body_util::Full::new(Bytes::from_static(
+                        b"{\"detail\":\"async handler not resolved\"}",
+                    ))
+                    .map_err(|e: std::convert::Infallible| -> anyhow::Error { match e {} }),
+                ))
+                .expect("valid error response");
+        }
         NativeBody::Bytes(b) => {
             let mut r = Response::new(ResponseBody::new(
                 http_body_util::Full::new(Bytes::from(b))
@@ -987,6 +1049,14 @@ where
             .await
             .map_err(|e| anyhow::anyhow!("GIL pool error: {}", e))?;
 
+            // Async handlers: the GIL worker returned the future without
+            // blocking. Await it here (spawn_blocking, GIL released while
+            // waiting) so concurrent async requests interleave.
+            let nr = match nr.body {
+                NativeBody::Async(fut) => resolve_async_response(fut).await?,
+                _ => nr,
+            };
+
             Ok(nr_to_response(nr))
         })
     })
@@ -1230,6 +1300,13 @@ where
             })
             .await
             .map_err(|e| anyhow::anyhow!("GIL pool error: {}", e))?;
+
+            // Async handlers: await the future here (GIL released while
+            // waiting), mirroring make_native_handler.
+            let nr = match nr.body {
+                NativeBody::Async(fut) => resolve_async_response(fut).await?,
+                _ => nr,
+            };
 
             Ok(nr_to_response(nr))
         })

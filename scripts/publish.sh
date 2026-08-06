@@ -28,12 +28,18 @@ PLATFORMS=(
     "aarch64-unknown-linux-musl"
 )
 
-echo "[publish] building wheels for: ${PLATFORMS[*]}"
+echo "[publish] building wheels for: ${PLATFORMS[*]} + free-threaded 3.14t"
 mkdir -p "$WHEELS_DIR"
 for target in "${PLATFORMS[@]}"; do
     echo "[publish] building $target..."
     (cd "$ROOT/crates/justapi-py" && maturin build --release --target "$target" --zig --out "$WHEELS_DIR")
 done
+
+# Free-threaded CPython 3.14t: no abi3 (limited API can't be free-threaded).
+echo "[publish] building free-threaded x86_64 (3.14t, no abi3)..."
+(cd "$ROOT/crates/justapi-py" && maturin build --release --target x86_64-unknown-linux-gnu \
+    --interpreter python3.14t --no-default-features --features mail,http3,orjson \
+    --zig --out "$WHEELS_DIR") || echo "[publish] WARN: free-threaded wheel skipped (needs python3.14t)"
 
 echo "[publish] wheels:"
 ls -la "$WHEELS_DIR"/*.whl

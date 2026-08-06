@@ -7,7 +7,7 @@ name = "justapi"
 version = "2.0.8"
 description = "JustAPI Runtime — a Rust-powered, FastAPI-class web framework for Python. Blazing-fast routing, native JSON validation, dependency injection, OpenAPI, WebSockets, SSE, background tasks, and an embedded DAG engine — all from a single pip install."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 license = { file = "LICENSE" }
 authors = [{ name = "JustAPI contributors" }]
 keywords = [
@@ -27,10 +27,11 @@ classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.13 :: Only",
+    "Programming Language :: Python :: 3.14 :: Only",
     "Programming Language :: Rust",
     "Topic :: Internet :: WWW/HTTP",
     "Topic :: Internet :: WWW/HTTP :: HTTP Servers",
@@ -67,5 +68,7 @@ module-name = "justapi._justapi"
 python-source = "python"
 manifest-path = "Cargo.toml"
 strip = true
-abi3-py311 = true
+# abi3 is enabled by the `abi3` Cargo feature (on by default for GIL-locked
+# CPython wheels). Free-threaded builds (3.13t/3.14t) must disable it — the
+# limited API cannot be free-threaded — via `--no-default-features`.
 include = ["README.md", "LICENSE"]

@@ -95,3 +95,38 @@ def test_background_stats():
     assert isinstance(stats["completed"], int)
 
 
+
+
+@pytest.mark.asyncio
+async def test_async_handler_interleaves_concurrent_requests():
+    """Regression: async handlers must not serialize through the GIL worker.
+
+    Before the fix, the GIL worker blocked on `future.result()`, so N
+    concurrent async requests each waiting `await asyncio.sleep(x)` completed
+    one-at-a-time (1ms-sleep handler ~= 800 RPS ceiling). Now the future is
+    awaited on a spawn_blocking thread while the worker dispatches others.
+    """
+    import asyncio
+    import time
+    from justapi import JustAPIApp
+    from justapi.testing import AsyncTestClient
+
+    app = JustAPIApp()
+
+    @app.get("/slow")
+    async def slow(req):
+        await asyncio.sleep(0.05)
+        return {"ok": True}
+
+    async with AsyncTestClient(app) as client:
+        start = time.monotonic()
+        results = await asyncio.gather(
+            *(client.get("/slow") for _ in range(20)), return_exceptions=True
+        )
+        elapsed = time.monotonic() - start
+
+        errors = [r for r in results if isinstance(r, Exception) or r.get("status") != 200]
+        assert not errors, f"{len(errors)} requests failed: {errors[:2]}"
+        # 20 requests × 50ms serialized would take >= 1.0s. Interleaved, they
+        # should finish well under that (allow generous CI margin).
+        assert elapsed < 0.8, f"async handlers serialized: 20×50ms took {elapsed:.2f}s"

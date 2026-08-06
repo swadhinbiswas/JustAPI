@@ -3187,3 +3187,100 @@ same port.
 
 **Evidence:** app.rs diff (http3 bridge + spawn), `enable_http3` in app.py,
 passing e2e test, dual-listener smoke (TCP 200 + UDP bound, both logged).
+
+## ADR-083 — 2026-08-06 — Async handlers no longer block the GIL worker (14× async throughput)
+
+**Context:** Benchmarked async Python handlers against the sync path and found
+a hard ceiling: a handler doing `await asyncio.sleep(0.001)` served **~800 RPS
+regardless of concurrency** (c=8 and c=100 both ~808 RPS). Root cause: the
+single GIL worker called `future.result()` on the
+`run_coroutine_threadsafe` future, blocking the worker for the coroutine's
+full duration. With one worker, async requests serialized one-at-a-time —
+while Granian (which runs async handlers directly on its event loop where
+`await` yields) interleaved thousands. This is the main reason Granian's
+async-handler throughput beat ours.
+
+**Decision:**
+- New `NativeBody::Async(Py<PyAny>)` variant. `call_python_handler` detects an
+  awaitable result and returns the future WITHOUT calling `.result()`,
+  freeing the GIL worker immediately.
+- New `resolve_async_response()` awaits the future on a
+  `tokio::task::spawn_blocking` thread (the future's internal wait releases
+  the GIL), then converts the result with the same `handle_ok_result` /
+  `handle_py_error` logic the sync path uses (streaming responses included).
+- Extracted `handle_ok_result()` and `handle_py_error()` from
+  `call_python_handler` so both sync and async paths share one
+  response-handling pipeline.
+- Both `make_native_handler` and `make_test_handler` resolve `Async` bodies.
+
+**Measured (release wheel, same fixture):** async 1ms-sleep handler @ c=100:
+**820 → 11,758 RPS (14×)**. Regression test
+`test_async_handler_interleaves_concurrent_requests`: 20×50ms requests finish
+in 0.08s (serialized would be 1.0s). Full pytest suite 170 passed.
+
+**Remaining gap (documented, not hidden):** the async path still has 3 thread
+hops (GIL worker → loop thread → spawn_blocking resolution) vs Granian's
+direct event-loop dispatch, capping light async handlers at ~12k RPS on this
+fixture. Closing that requires running async handlers directly on the loop
+(identified at registration via `is_async`) — a follow-up.
+
+**Evidence:** handlers.rs diff (NativeBody::Async, resolve_async_response,
+handle_ok_result/handle_py_error), the regression test, live oha measurements.
+
+## ADR-084 — 2026-08-06 — Free-threaded CPython support (3.13t/3.14t)
+
+**Context:** The framework's throughput ceiling on GIL-locked CPython is the
+GIL itself (~119k RPS trivial handlers; CPU-bound handlers serialize to ~190
+RPS). Free-threaded CPython (3.13t/3.14t, `Py_GIL_DISABLED`) removes the GIL;
+the GIL pool already had a `GilFree` mode but it was never reachable — the
+runtime `sys._is_gil_enabled` read through pyo3's import returned `true` on
+free-threaded interpreters (limited-API artifact), so the pool always ran
+`GilBased, workers=1`.
+
+**Decision:**
+- Mode detection now uses the **compile-time `Py_GIL_DISABLED` cfg** (set by
+  pyo3-build-config / emitted by a new `justapi-py/build.rs` that probes
+  `$PYO3_PYTHON`), not the unreliable runtime read. GIL-locked builds keep the
+  runtime fallback.
+- Free-threaded wheels build WITHOUT abi3 (`--no-default-features` — the
+  limited API cannot be free-threaded): `maturin build --interpreter
+  python3.14t --no-default-features --features mail,http3,orjson`.
+- `requires-python` raised to `>=3.12` (per the free-threaded target).
+- `__init__.py` imports the compiled `_justapi` core FIRST — submodules that
+  `from ._justapi import ...` resolved inconsistently when imported before the
+  core on free-threaded builds.
+- CI wheels matrix + `scripts/publish.sh` build the 3.14t wheel.
+
+**Measured (release wheels, same fixture):**
+- Trivial handler: GIL-locked 3.13 = ~119k RPS; 3.14t = ~12-23k RPS
+  (per-object atomics cost more on trivial Python work — expected).
+- **CPU-bound handler: GIL-locked = 191 RPS; 3.14t = 2,372 RPS at c=20 —
+  12× faster and scales with cores** (the GIL ceiling is gone).
+- 168/170 pytest pass on the 3.14t wheel (2 env-only failures: fixture path,
+  multiprocessing spawn).
+
+**Evidence:** gil_pool.rs cfg detection, build.rs, pyproject requires-python,
+wheels.yml matrix, live benchmarks (ft9/ft11/ft_cpu logs).
+
+## ADR-085 — 2026-08-06 — Server runs on a multi-threaded tokio runtime (was single-threaded)
+
+**Context:** Release-stability audit found the HTTP server was running on
+`tokio::runtime::Runtime::new()` — a **current-thread** runtime — so the
+entire server (accept loop, every connection, TLS, streaming) ran on ONE
+thread. Confirmed empirically: `ls /proc/<pid>/task | wc -l` = 1 during load.
+Throughput survived (119k trivial handlers) but the server had no I/O
+parallelism — fragile under load spikes and a hard ceiling for connection-
+heavy workloads.
+
+**Decision:** `app.rs run()` now builds a **multi-threaded runtime**
+(`Builder::new_multi_thread().enable_all()`), worker count =
+`available_parallelism()` (override: `JUSTAPI_SERVER_THREADS`), matching the
+DB pool's multi-threaded runtime (ADR-068). No API change.
+
+**Measured (release wheel, same fixture):** server now runs on **24 threads**
+(20 cores + extras). Sync handler: 118-119k RPS (unchanged). High-concurrency
+stability: **c=500 sync = 117k RPS, 100% success, zero errors/panics**;
+c=200 async = 4.9k, 100% success. Full gates green (fmt/clippy/workspace
+15 suites/pytest 171).
+
+**Evidence:** app.rs run() diff, thread-count probe, c=500 load run, gate runs.

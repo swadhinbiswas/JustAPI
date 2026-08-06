@@ -39,7 +39,7 @@ hyper-util = { version = "0.1", features = ["tokio", "http1", "http2", "server"]
 http-body-util = "0.1"
 
 # Python bindings
-pyo3 = { version = "0.29", features = ["extension-module", "experimental-async", "abi3-py311"] }
+pyo3 = { version = "0.29", features = ["extension-module", "experimental-async"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

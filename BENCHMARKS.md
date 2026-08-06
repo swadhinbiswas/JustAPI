@@ -1916,3 +1916,53 @@ lock contention, bounded) + `test_db_concurrent.py::test_concurrent_writes_small
 
 
 
+
+## Async-handler throughput — FOUND + FIXED (recorded 2026-08-06, ADR-083)
+
+Before the fix, async Python handlers were the worst path in the framework: a
+handler doing `await asyncio.sleep(0.001)` served **~808 RPS at c=8 AND c=100**
+— a hard ceiling, not contention. The single GIL worker blocked on
+`future.result()` for each coroutine's full duration, serializing every async
+request (while Granian's event-loop dispatch interleaved them).
+
+**Before fix (release wheel, same fixture):**
+
+| Handler | Concurrency | RPS |
+|---|---|---:|
+| async + 1ms sleep | c=8 | 808 |
+| async + 1ms sleep | c=100 | 803 |
+| async (no sleep) | c=100 | ~600 |
+
+**After fix (ADR-083 — future awaited on spawn_blocking, worker freed):**
+
+| Handler | Concurrency | RPS | Δ |
+|---|---:|---:|---|
+| async + 1ms sleep | c=100 | **11,758** | **14×** |
+| async (no sleep) | c=100 | 6,070 | ~10× |
+| sync handler | c=100 | 118,834 | baseline |
+
+**Honest remaining gap:** the async path still crosses 3 thread hops (GIL
+worker → asyncio loop thread → spawn_blocking resolution) versus Granian's
+direct event-loop dispatch, capping light async handlers at ~12k RPS on this
+fixture. Fully closing it = dispatching async handlers directly onto the loop
+(identifiable at registration). Tracked as a follow-up.
+
+## Free-threaded CPython (3.14t) — auto-detected, parallel (recorded 2026-08-06, ADR-084)
+
+Free-threaded builds are now auto-detected via the compile-time
+`Py_GIL_DISABLED` cfg (the runtime `sys._is_gil_enabled` read through pyo3 is
+unreliable on `t` interpreters). GIL-locked builds are unaffected.
+
+| Workload | GIL-locked 3.13 | Free-threaded 3.14t | Δ |
+|---|---:|---:|---|
+| Trivial handler (c=200) | ~119,000 | 11,952 | slower (per-object atomics on trivial work) |
+| **CPU-bound handler (c=20)** | **191** | **2,372** | **12.4× faster, scales with cores** |
+
+**Read:** free-threaded is not a trivial-handler win — atomic refcounts make
+simple Python cost more per op. The win is CPU-bound Python: the GIL ceiling
+disappears and throughput scales with worker count (4 workers = 23.4k, 20 =
+18.8k on trivial; CPU-bound keeps scaling). For maximal trivial-handler
+throughput, stay on GIL-locked CPython with the native fast path (~700k).
+
+Wheel: `justapi-2.0.8-cp314-cp314t-...whl` (no abi3). 168/170 pytest pass on
+3.14t.
