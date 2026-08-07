@@ -139,3 +139,10 @@ crates/justapi-core/file:*
 *.db
 *.db-wal
 *.db-shm
+
+# Build artifacts (published to PyPI/GitHub Releases by CI, not git)
+wheels/
+*.whl
+
+# Debugging artifacts
+benchmarks/gdb_out.txt
