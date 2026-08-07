@@ -108,7 +108,11 @@ jobs:
           uv tool install maturin
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Install Zig (for cross-compilation)
-        if: matrix.zig == 'true'
+        # matrix.zig is a YAML boolean, which GitHub's == does not coerce
+        # against the string 'true' — accept both forms so the step always
+        # runs when zig is needed (the bash build step compares the
+        # interpolated value, which is always the string "true").
+        if: matrix.zig == true || matrix.zig == 'true'
         uses: mlugg/setup-zig@v1
         with:
           # Matches the zig version verified locally (all 5 wheels built with
