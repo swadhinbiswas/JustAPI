@@ -130,3 +130,36 @@ async def test_async_handler_interleaves_concurrent_requests():
         # 20 requests × 50ms serialized would take >= 1.0s. Interleaved, they
         # should finish well under that (allow generous CI margin).
         assert elapsed < 0.8, f"async handlers serialized: 20×50ms took {elapsed:.2f}s"
+
+
+@pytest.mark.asyncio
+async def test_async_callback_path_concurrent_correctness():
+    """Stress the callback-driven async resolution: many concurrent async
+    handlers (mix of success and exception) must all complete correctly.
+    Guards the `_DoneNotifier` add_done_callback path (ADR-086)."""
+    import asyncio
+    from justapi import JustAPIApp, HTTPException
+    from justapi.testing import AsyncTestClient
+
+    app = JustAPIApp()
+
+    @app.get("/ok")
+    async def ok(req):
+        await asyncio.sleep(0.01)
+        return {"ok": True}
+
+    @app.get("/err")
+    async def err(req):
+        await asyncio.sleep(0.01)
+        raise HTTPException(status_code=404, detail="gone")
+
+    async with AsyncTestClient(app) as client:
+        results = await asyncio.gather(
+            *(client.get("/ok") for _ in range(30)),
+            *(client.get("/err") for _ in range(30)),
+            return_exceptions=True,
+        )
+        oks = [r for r in results if isinstance(r, dict) and r.get("status") == 200]
+        errs = [r for r in results if isinstance(r, dict) and r.get("status") == 404]
+        assert len(oks) == 30, f"expected 30 success, got {len(oks)}"
+        assert len(errs) == 30, f"expected 30 errors, got {len(errs)}"

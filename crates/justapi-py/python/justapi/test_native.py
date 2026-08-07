@@ -171,3 +171,25 @@ def test_justapp_alias_is_justapiapp():
 
     resp = JustAPITestClient(app).get("/")
     assert resp["status"] == 200
+
+
+def test_native_async_marker():
+    """@native_async marks a handler; it works like any async handler but is
+    flagged for the fastest dispatch (parallel on free-threaded builds, ADR-089)."""
+    import asyncio
+    from justapi import JustAPIApp, native_async, JustAPITestClient
+
+    app = JustAPIApp()
+
+    @app.get("/x")
+    @native_async
+    async def handler(request):
+        await asyncio.sleep(0.001)
+        return {"ok": True, "path": request.get("path")}
+
+    r = JustAPITestClient(app).get("/x")
+    assert r["status"] == 200
+    assert b"ok" in bytes(r["body"])
+    # The decorator marks the raw function; the wrapper propagation is
+    # verified by the Rust dispatch using the marker (integration-tested).
+    assert getattr(handler, "__native_async__", False) is True
