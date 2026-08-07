@@ -906,7 +906,7 @@ def root(request):
 
 Database backend: {db_kind} (URL: {db_url})
 """
-from justapi import JustAPIApp, Schema, HTTPException
+from justapi import JustAPIApp, Schema, HTTPException, native_async
 from pydantic import Field
 
 app = JustAPIApp(title="{name}", version="0.1.0")
@@ -958,6 +958,37 @@ def create_item(request):
         [name, qty],
     )
     return {{"message": "Item created successfully", "name": name, "qty": qty}}
+
+
+@app.get("/items/{{item_id}}/async")
+async def get_item_async(request, item_id: int):
+    """Async handler with a NATIVE async DB query (ADR-093).
+
+    `query_async` runs the SQL on the DB's own tokio runtime with the GIL
+    released — the asyncio loop is never blocked, so slow queries (Postgres,
+    network DBs) do not serialize other requests.
+    """
+    rows = await app.db.query_async("SELECT * FROM items WHERE id = ?", [item_id])
+    if not rows:
+        raise HTTPException(status_code=404, detail=f"Item {{item_id}} not found")
+    return rows[0]
+
+
+@app.post("/items/{{item_id}}/restock", body_schema=ItemCreate)
+@native_async
+async def restock(request, item_id: int):
+    """native_async handler: framework ops (DB) run in Rust (ADR-089)."""
+    data = request.json()
+    affected = await app.db.execute_async(
+        "UPDATE items SET qty = qty + ? WHERE id = ?",
+        [data.get("qty", 1), item_id],
+    )
+    return {{"message": f"Item {{item_id}} restocked", "affected": affected}}
+
+
+# Rust-native SSE stream: events generated entirely in Rust, no Python per
+# event (ADR-088). `curl -N http://localhost:8080/events` streams 100 events.
+app.sse_native("/events", count=100, interval_ms=50)
 
 
 @app.delete("/items/{{item_id}}")
