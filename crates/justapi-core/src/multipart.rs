@@ -8,7 +8,7 @@ use multer::Multipart;
 use std::path::PathBuf;
 
 /// A file uploaded via `multipart/form-data`.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct UploadFile {
     pub field_name: String,
     pub filename: Option<String>,
@@ -21,7 +21,7 @@ pub struct UploadFile {
 }
 
 /// Parsed multipart form data containing both text fields and uploaded files.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct MultipartForm {
     pub fields: HashMap<String, String>,
     pub files: Vec<UploadFile>,

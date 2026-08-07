@@ -95,7 +95,7 @@ async fn test_loopback_sse() {
     assert_eq!(status, StatusCode::OK);
     let body_str = String::from_utf8(body).unwrap();
     assert!(body_str.contains("data:"));
-    assert!(body_str.contains("\"count\":10"));
+    assert!(body_str.contains("\"n\":10"));
 }
 
 // --- Phase 9: Compression tests ---

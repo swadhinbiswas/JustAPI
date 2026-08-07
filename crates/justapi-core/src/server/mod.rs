@@ -47,7 +47,7 @@ pub use ws::{default_ws_echo, WsConnInfo, WsHandler, WsRead, WsWrite};
 mod sse_ws;
 #[cfg(feature = "ws")]
 pub use sse_ws::dispatch_ws;
-pub use sse_ws::sse_response;
+pub use sse_ws::{sse_response, sse_stream_response};
 
 mod handler_exec;
 use handler_exec::execute_handler;
