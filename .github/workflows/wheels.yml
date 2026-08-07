@@ -112,12 +112,24 @@ jobs:
         # against the string 'true' — accept both forms so the step always
         # runs when zig is needed (the bash build step compares the
         # interpolated value, which is always the string "true").
+        #
+        # Download directly from ziglang.org (official tarballs) instead of
+        # mlugg/setup-zig — its mirrors were down (503/502/404) and it is a
+        # Node 20 action (deprecated). Matches the zig version verified
+        # locally (maturin 1.14.1 + zig 0.16.0, 2026-08-07).
         if: matrix.zig == true || matrix.zig == 'true'
-        uses: mlugg/setup-zig@v1
-        with:
-          # Matches the zig version verified locally (all 5 wheels built with
-          # maturin 1.14.1 + zig 0.16.0 on 2026-08-07).
-          version: 0.16.0
+        shell: bash
+        run: |
+          VER="0.16.0"
+          OS="$(uname -s | tr '[:upper:]' '[:lower:]')"   # linux / darwin
+          [ "$OS" = "darwin" ] && OS="macos"
+          HOST_ARCH="$(uname -m)"                          # host arch of the runner
+          [ "$HOST_ARCH" = "arm64" ] && HOST_ARCH="aarch64"
+          curl -fsSL --retry 5 --retry-all-errors \
+            "https://ziglang.org/download/${VER}/zig-${HOST_ARCH}-${OS}-${VER}.tar.xz" \
+            -o /tmp/zig.tar.xz
+          tar -xJf /tmp/zig.tar.xz -C /tmp
+          echo "/tmp/zig-${HOST_ARCH}-${OS}-${VER}" >> "$GITHUB_PATH"
       - name: Resolve free-threaded interpreter
         if: matrix.python == '3.14t'
         shell: bash
