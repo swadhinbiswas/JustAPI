@@ -1966,3 +1966,36 @@ throughput, stay on GIL-locked CPython with the native fast path (~700k).
 
 Wheel: `justapi-2.0.8-cp314-cp314t-...whl` (no abi3). 168/170 pytest pass on
 3.14t.
+
+## Multi-worker prefork scaling — VERIFIED (recorded 2026-08-07, item #2)
+
+`justapi serve --static-dir <dir> --workers N` prefork scaling, keep-alive
+raw-socket client, 4KB static file, this machine (2×Xeon-class, 8 cores).
+
+| Workers | c=8 | c=32 | c=64 | Δ vs 1 worker |
+|---|---:|---:|---:|---:|
+| 1 | 53,010 | 43,041 | — | baseline |
+| 4 | 99,711 | 97,254 | — | **1.88×** @c=8 |
+| 8 | — | 102,835 | 94,025 | **1.93×** @c=32 |
+
+- Prefork machinery verified end-to-end: shared listener fd handed to N child
+  processes, ~2× scaling on 2× worker count (cores saturate at 4 on this box).
+- Auto-scale smoke (`--scale --min-workers 1 --max-workers 4`): supervisor
+  spawns workers under load and serves requests (36.5k RPS c=32 during the
+  scaling transient; steady-state equals the 4-worker line).
+- **Honest scope note:** the CLI serves Rust-side workloads (static, middleware,
+  compression, inference) — `justapi-cli → justapi-core` only per architecture.
+  Python apps scale via `app.run()` in-process (threads) or N OS processes
+  behind a shared socket (documented; not benchmarked here).
+
+## Native async DB awaits — query_async (recorded 2026-08-07, ADR-093)
+
+HTTP, sqlite, slow query (2M-row recursive CTE ≈ 200ms), c=16:
+
+| Path | RPS | Notes |
+|---|---:|---|
+| `await app.db.query_async(...)` | **320** | parallel on DB tokio runtime, loop never blocked |
+| `app.db.query(...)` from async handler | **6** | blocks the asyncio loop thread — serialized |
+
+**53× faster on slow queries.** Fast sqlite queries (~sub-ms): parity (~4-4.7k
+RPS both, loop-dispatch bound). The async path is the safe choice for real DBs.

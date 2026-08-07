@@ -3602,3 +3602,40 @@ recorded: Rust-native operation types (sse_native, native CRUD, native_async),
 never a coroutine driver (ADR-090/091) nor multi-loop (this ADR).
 
 **Evidence:** A/B runs above, identical wheel, JUSTAPI_ASYNC_LOOPS=1 vs default.
+
+## ADR-093 — 2026-08-07 — Native async DB awaits: query_async / execute_async
+
+**Decision:** Add `DbPool.query_async(sql, params)` / `DbPool.execute_async(...)`
+— Python-awaitable DB operations that run on the DB's own multi-threaded tokio
+runtime with the GIL released for the whole execution. This is the "native
+operation type" the async experiments (ADR-090/091) said is the only async win:
+the coroutine suspends on the asyncio loop and resumes when sqlx completes; zero
+Python stepping during the query.
+
+**Why this wins (and the blocking path loses):** the pre-existing `query()` /
+`execute()` are synchronous PyO3 methods using `run_blocking` (GIL released but
+the CALLING THREAD blocks). Called from an async handler, that thread is the
+asyncio loop thread — one slow query freezes the entire loop and serializes all
+async handlers. `query_async` never blocks the loop; concurrent queries run in
+parallel on the DB runtime.
+
+**Measured (HTTP, sqlite, 2M-row recursive CTE ≈ 200ms/query, c=16):**
+
+| Path | RPS | Behavior |
+|---|---:|---|
+| `query_async` (steady state) | 320 | parallel on DB runtime, loop free |
+| `query()` blocking from async handler | 6 | loop frozen, fully serialized |
+
+→ **53× faster on slow queries.** On fast (sub-ms) sqlite queries the two are
+~parity (the `future_into_py` bridge adds ~µs; the blocking path's serialization
+is harmless when queries are instant) — but the async path is the only one that
+is *safe* for real-world DBs (Postgres/MySQL, network latency, slow queries).
+
+**Implementation notes:** the async future is `rt.spawn`'d onto the DB runtime
+handle (not pyo3-async-runtimes' own runtime) so pool affinity is preserved;
+result is converted via `Python::attach` + `.unbind()` to a Send `Py<PyAny>`.
+In-memory SQLite is per-connection (each pooled connection has its own DB), so
+tests must use file-based SQLite — documented in the test.
+
+**Evidence:** `test_native_async_db_query_and_execute` + `test_native_async_db_concurrent_through_http`
+(pass), HTTP benchmarks above.
