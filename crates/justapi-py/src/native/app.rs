@@ -53,6 +53,10 @@ pub struct JustAPIApp {
     /// `crud_dispatch_bytes`, with no GIL hop. The operation is inferred from
     /// the request method at runtime. Indexed by handler id.
     pub crud: Vec<Option<(String, Vec<String>, String)>>,
+    /// Rust-native SSE stream spec per route: `Some((count, interval_ms))`
+    /// means the route serves a Rust-generated SSE stream with no Python
+    /// involvement (ADR-088). Indexed by handler id.
+    pub sse_specs: Vec<Option<(u64, u64)>>,
     pub schemas: Vec<Option<Py<PyAny>>>,
     pub schema_jsons: Vec<Option<String>>,
     /// JSON Schemas (resolved at registration) used by the native fast path to
@@ -466,6 +470,7 @@ impl JustAPIApp {
             handlers: Vec::new(),
             native: Vec::new(),
             crud: Vec::new(),
+            sse_specs: Vec::new(),
             schemas: Vec::new(),
             schema_jsons: Vec::new(),
             query_schema_jsons: Vec::new(),
@@ -942,6 +947,7 @@ impl JustAPIApp {
             self.handlers.push(handler);
             self.native.push(is_native);
             self.crud.push(crud_spec);
+            self.sse_specs.push(None);
             self.schemas.push(None);
             self.schema_jsons.push(None);
             self.query_schema_jsons.push(query_json);
@@ -1004,6 +1010,7 @@ impl JustAPIApp {
         self.handlers.push(handler);
         self.native.push(native.unwrap_or(false));
         self.crud.push(make_crud_spec(crud_table, crud_columns)?);
+        self.sse_specs.push(None);
         self.schemas.push(body_schema.as_ref().map(|b| b.clone_ref(py)));
         self.schema_jsons.push(resolve_schema_json(py, schema)?);
         self.query_schema_jsons.push(resolve_schema_json(py, query_schema)?);
@@ -1063,6 +1070,7 @@ impl JustAPIApp {
         self.handlers.push(handler);
         self.native.push(native.unwrap_or(false));
         self.crud.push(make_crud_spec(crud_table, crud_columns)?);
+        self.sse_specs.push(None);
         self.schemas.push(body_schema.as_ref().map(|b| b.clone_ref(py)));
         self.schema_jsons.push(resolve_schema_json(py, schema)?);
         self.query_schema_jsons.push(resolve_schema_json(py, query_schema)?);
@@ -1122,6 +1130,7 @@ impl JustAPIApp {
         self.handlers.push(handler);
         self.native.push(native.unwrap_or(false));
         self.crud.push(make_crud_spec(crud_table, crud_columns)?);
+        self.sse_specs.push(None);
         self.schemas.push(body_schema.as_ref().map(|b| b.clone_ref(py)));
         self.schema_jsons.push(resolve_schema_json(py, schema)?);
         self.query_schema_jsons.push(resolve_schema_json(py, query_schema)?);
@@ -1177,6 +1186,7 @@ impl JustAPIApp {
         self.handlers.push(handler);
         self.native.push(native.unwrap_or(false));
         self.crud.push(make_crud_spec(crud_table, crud_columns)?);
+        self.sse_specs.push(None);
         self.schemas.push(None);
         self.schema_jsons.push(None);
         self.query_schema_jsons.push(resolve_schema_json(py, query_schema)?);
@@ -1239,6 +1249,7 @@ impl JustAPIApp {
         self.handlers.push(handler);
         self.native.push(native.unwrap_or(false));
         self.crud.push(make_crud_spec(crud_table, crud_columns)?);
+        self.sse_specs.push(None);
         self.schemas.push(body_schema.as_ref().map(|b| b.clone_ref(py)));
         self.schema_jsons.push(resolve_schema_json(py, schema)?);
         self.query_schema_jsons.push(resolve_schema_json(py, query_schema)?);
@@ -1268,6 +1279,70 @@ impl JustAPIApp {
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
     }
 
+    /// Register a Rust-native SSE stream route (ADR-088): the server streams
+    /// `count` events at `interval_ms` spacing, generated entirely in Rust
+    /// (tokio + mpsc + streaming_response). No Python handler, no GIL, no
+    /// pump — the streaming runs at native speed.
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (path, count=10, interval_ms=100, tags=None, summary=None, description=None, deprecated=None, name=None, include_in_schema=None))]
+    fn sse_native(
+        &mut self,
+        py: Python<'_>,
+        path: &str,
+        count: u64,
+        interval_ms: u64,
+        tags: Option<Vec<String>>,
+        summary: Option<String>,
+        description: Option<String>,
+        deprecated: Option<bool>,
+        name: Option<String>,
+        include_in_schema: Option<bool>,
+    ) -> PyResult<()> {
+        let key = (Method::GET, path.to_string());
+        if let Some(ref n) = name {
+            self.named_routes.insert(n.clone(), path.to_string());
+        }
+        // Placeholder handler — never invoked; the dispatch recognizes the
+        // sse_spec and serves the Rust stream directly.
+        let handler = py.None();
+        if let Some(&id) = self.route_indices.get(&key) {
+            self.handlers[id] = handler;
+            self.sse_specs[id] = Some((count, interval_ms));
+        } else {
+            let id = self.handlers.len();
+            self.handlers.push(handler);
+            self.native.push(false);
+            self.crud.push(None);
+            self.sse_specs.push(Some((count, interval_ms)));
+            self.schemas.push(None);
+            self.schema_jsons.push(None);
+            self.query_schema_jsons.push(None);
+            self.batch_configs.push(None);
+            self.route_indices.insert(key, id);
+            self.router
+                .insert(Method::GET, path, id)
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        }
+        self.store_meta(
+            py,
+            "GET".to_string(),
+            path.to_string(),
+            None,
+            None,
+            tags,
+            summary,
+            description,
+            deprecated,
+            None,
+            None,
+            None,
+            None,
+            false,
+            Some(include_in_schema.unwrap_or(true)),
+        );
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (path, handler, query_schema=None, tags=None, summary=None, description=None, deprecated=None, status_code=None, responses=None, operation_id=None, openapi_extra=None, include_in_schema=None, name=None, native=None, crud_table=None, crud_columns=None))]
     fn head(
@@ -1294,6 +1369,7 @@ impl JustAPIApp {
         self.handlers.push(handler);
         self.native.push(native.unwrap_or(false));
         self.crud.push(make_crud_spec(crud_table, crud_columns)?);
+        self.sse_specs.push(None);
         self.schemas.push(None);
         self.schema_jsons.push(None);
         self.query_schema_jsons.push(resolve_schema_json(py, query_schema)?);
@@ -1349,6 +1425,7 @@ impl JustAPIApp {
         self.handlers.push(handler);
         self.native.push(native.unwrap_or(false));
         self.crud.push(make_crud_spec(crud_table, crud_columns)?);
+        self.sse_specs.push(None);
         self.schemas.push(None);
         self.schema_jsons.push(None);
         self.query_schema_jsons.push(resolve_schema_json(py, query_schema)?);
@@ -1404,6 +1481,7 @@ impl JustAPIApp {
         self.handlers.push(handler);
         self.native.push(native.unwrap_or(false));
         self.crud.push(make_crud_spec(crud_table, crud_columns)?);
+        self.sse_specs.push(None);
         self.schemas.push(None);
         self.schema_jsons.push(None);
         self.query_schema_jsons.push(resolve_schema_json(py, query_schema)?);
@@ -1749,6 +1827,18 @@ impl JustAPIApp {
             })
             .collect();
         let needs_request = Arc::new(needs_request);
+        // Per-handler flag: `@native_async` — async handler whose framework
+        // ops run in Rust; dispatch via the fastest async path (ADR-089).
+        let native_async: Vec<bool> = handlers
+            .iter()
+            .map(|h| {
+                h.bind(py)
+                    .getattr("_is_native_async")
+                    .and_then(|v| v.extract::<bool>())
+                    .unwrap_or(false)
+            })
+            .collect();
+        let native_async = Arc::new(native_async);
         // Per-handler flag: is this route served by the native Rust fast path
         // (schema-backed, response = validated request body, no Python call)?
         let native: Vec<bool> = std::mem::take(&mut app.native);
@@ -1759,6 +1849,7 @@ impl JustAPIApp {
         // resolved at request time from `db_pool`.
         let crud_specs: crate::native::handlers::CrudConfig =
             Arc::new(std::mem::take(&mut app.crud));
+        let sse_specs: Arc<Vec<Option<(u64, u64)>>> = Arc::new(std::mem::take(&mut app.sse_specs));
         let schemas = Arc::new(std::mem::take(&mut app.schemas));
         let schema_jsons = Arc::new(std::mem::take(&mut app.schema_jsons));
         let query_schema_jsons = Arc::new(std::mem::take(&mut app.query_schema_jsons));
@@ -1984,7 +2075,9 @@ impl JustAPIApp {
                     app_py_http1,
                     needs_request.clone(),
                     native.clone(),
+                    native_async.clone(),
                     crud_specs.clone(),
+                    sse_specs.clone(),
                     schema_validators.clone(),
                     max_body_size,
                 );
@@ -2008,7 +2101,9 @@ impl JustAPIApp {
                         Python::attach(|py| app_py_http3.as_ref().as_ref().map(|a| a.clone_ref(py)));
                     let h3_needs = needs_request.clone();
                     let h3_native = native.clone();
+                    let h3_native_async = native_async.clone();
                     let h3_crud = crud_specs.clone();
+                    let h3_sse = sse_specs.clone();
                     let h3_validators = schema_validators.clone();
                     let h3_handler: justapi_core::middleware::HandlerFn<
                         http_body_util::Full<bytes::Bytes>,
@@ -2025,7 +2120,9 @@ impl JustAPIApp {
                         h3_app,
                         h3_needs,
                         h3_native,
+                        h3_native_async,
                         h3_crud,
+                        h3_sse,
                         h3_validators,
                         max_body_size,
                     );
