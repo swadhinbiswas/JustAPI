@@ -76,7 +76,7 @@ cloud-native readiness.
 | 37 | OTel Distributed Tracing | ✅ verified | OTLP, contextvars, 225 tests |
 | 38 | Hardware-Accelerated JWT & Security | ✅ verified | RS256/ES256, CORS builder, IpRateLimiter |
 | 39 | SAST, Fuzzing & Memory Safety | ✅ verified | 6 fuzz targets, miri, SAFETY comments |
-| 40 | The JustAPI 2.0 "Singularity" Release | 🟡 in progress | **PyPI upload still blocked (no token)** — see Next actions |
+| 40 | The JustAPI 2.0 Release | 🟡 in progress | **PyPI upload still blocked (no token)** — see Next actions. AI/inference phases 41-52 are 🟡/🔴 (no real GPU run, ADR-067): the release narrative is the **fastest, most complete web framework** (2.4x Granian hello-world, 5.4x JSON echo, native SSE/CRUD/DB-awaits, HTTP/3, free-threaded wheels) — NOT unproven LLM-serving claims. |
 | 41 | Native Inference Engine Foundation | 🟡 implemented / unverified | Candle CPU; `Engine`/`Model` traits, 24 tests. **No real-weights run (MockModel only)** |
 | 42 | KV-Cache Manager (PagedAttention, Rust) | 🟡 implemented / unverified | `KvBlockPool`, `PrefixCache`; unit tests only, no real model |
 | 43 | Continuous-Batching Scheduler | 🟡 implemented / unverified | `Scheduler` prefill/decode interleave; **CPU MockModel only, 0.4% of naive on instant-forward (scheduler sleep dominates)** |
@@ -612,6 +612,8 @@ See `DECISIONS.md` for the reasoning behind any deviation from plan.
 Don't duplicate that reasoning here — just reference the entry.
 
 ## Next actions
+
+0. **[DONE — 2026-08-07] Honesty cleanup (item #5):** AI phases 41-52 remain 🟡/🔴 (no real GPU). The release narrative is the web-framework story (benchmarked); LLM claims stay unverified and are NOT part of the v2.0.8 public claims. New verified wins recorded: multi-worker prefork scaling (1.88x at 4 workers), native async DB awaits query_async/execute_async (53x on slow queries, ADR-093), mypy-clean type stubs (py.typed), scaffold demos the differentiators.
 
 1. **Framework Release:**
    - Package all crates and Python distributions for PyPI/crates.io.
