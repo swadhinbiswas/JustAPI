@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# scripts/publish.sh — build + verify + publish the justapi PyPI wheels.
+# scripts/publish.sh — local build + verify (the RELEASE path is CI).
 #
-# The only missing piece for a real release is the PyPI token
-# (MATURIN_PYPI_TOKEN / TWINE_PASSWORD). Everything else — portable
-# manylinux + musllinux builds for x86_64 + aarch64 (via maturin --zig),
-# twine check, fresh-venv install smoke — is done here so
-# `bash scripts/publish.sh` is the single release command.
+# PRIMARY RELEASE PATH (no token): push a `v*` tag → .github/workflows/wheels.yml
+# builds the 7-platform matrix and publishes to PyPI via OIDC trusted
+# publishing (see the setup note at the bottom of wheels.yml). This script is
+# the local pre-release verification: portable manylinux + musllinux builds
+# (maturin --zig), twine check, fresh-venv install smoke.
+#
+# Legacy token path (kept for emergencies): MATURIN_PYPI_TOKEN=... bash scripts/publish.sh --upload
 #
 # Prereqs: maturin (with --zig; requires zig on PATH), rustup with the
 # target stds installed (aarch64-unknown-linux-gnu, aarch64-unknown-linux-musl,
@@ -73,5 +75,6 @@ if [[ "$UPLOAD" == "--upload" ]]; then
     echo "[publish] DONE — justapi is on PyPI (4 platforms)"
 else
     echo "[publish] build + verify OK. To release:"
-    echo "    MATURIN_PYPI_TOKEN=... bash scripts/publish.sh --upload"
+    echo "    (preferred) git tag v2.0.8 && git push origin v2.0.8   # CI publishes via OIDC"
+    echo "    (emergency) MATURIN_PYPI_TOKEN=... bash scripts/publish.sh --upload"
 fi

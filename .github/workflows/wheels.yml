@@ -6,6 +6,7 @@ on:
     tags: [ 'v*' ]
   pull_request:
     branches: [ main, master ]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -95,8 +96,9 @@ jobs:
       - name: Install wheel & test
         shell: bash
         run: |
+          uv venv
           uv pip install dist/*.whl pytest
-          python -m pytest crates/justapi-py/tests/ -v --tb=short
+          uv run python -m pytest crates/justapi-py/tests/ -v --tb=short
       - name: Upload Wheels
         uses: actions/upload-artifact@v4
         with:
@@ -104,13 +106,18 @@ jobs:
           path: dist/*.whl
 
   publish:
-    name: Publish to PyPI
+    name: Publish to PyPI + GitHub Release
     runs-on: ubuntu-latest
     needs: build-wheels
     if: startsWith(github.ref, 'refs/tags/v')
+    # OIDC trusted publishing — NO token needed. Requires the PyPI project's
+    # trusted publisher to be configured once at pypi.org (see setup note at
+    # the bottom of this file). The `pypi` environment is auto-created by
+    # GitHub on first run.
     environment: pypi
     permissions:
       id-token: write
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -121,5 +128,28 @@ jobs:
           pattern: wheels-*
           merge-multiple: true
           path: dist
-      - name: Publish
-        run: uv publish --package-dir crates/justapi-py --trusted-publishing always --verbose
+      - name: Publish to PyPI (trusted publishing)
+        # `uv publish` defaults to dist/*.whl; `--trusted-publishing always`
+        # uses the OIDC token from the `pypi` environment — no API token.
+        run: uv publish --trusted-publishing always
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.whl
+          generate_release_notes: true
+
+# --- One-time setup (required once, then publishing is fully automated) ---
+#
+# 1. At pypi.org → Account → Publishing → "Add a new pending publisher":
+#      • Publisher:  GitHub
+#      • Owner:      swadhinbiswas
+#      • Repository: JustAPI
+#      • Environment: pypi          (must match the job's `environment:`)
+#      • Workflow name: wheels.yml
+#    (Trusted publishing auto-creates the `justapi` project on first upload.)
+#
+# 2. Push a tag: `git tag v2.0.8 && git push origin v2.0.8`
+#
+# That's it — no MATURIN_PYPI_TOKEN, no secrets. The wheels.yml `publish` job
+# then builds the 7-platform matrix, uploads to PyPI via OIDC, and creates the
+# GitHub Release with the wheels attached.
