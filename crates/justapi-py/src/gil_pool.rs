@@ -100,13 +100,14 @@ fn default_pool_size(mode: RuntimeMode) -> usize {
 /// `sys._is_gil_enabled` read is NOT reliable through pyo3's import on
 /// free-threaded interpreters (reads true), so it is only a fallback for
 /// builds where the cfg is unavailable.
-fn detect_mode(py: Python<'_>) -> RuntimeMode {
+fn detect_mode(_py: Python<'_>) -> RuntimeMode {
     #[cfg(Py_GIL_DISABLED)]
     {
-        return RuntimeMode::GilFree;
+        RuntimeMode::GilFree
     }
     #[cfg(not(Py_GIL_DISABLED))]
     {
+        let py = _py;
         let gil_enabled = py
             .import("sys")
             .ok()

@@ -405,7 +405,8 @@ mod tests {
         println!("500-route table: {} lookups, avg {}ns", total_lookups, avg_ns,);
 
         // Benchmark gate: average lookup should be under 2us (release) / 5us (debug)
-        // Skip threshold check in Miri interpreter mode
+        // Skip threshold check in Miri interpreter mode (sanitizer runs filter
+        // bench tests out via scripts/sanitize.sh — see below).
         if !cfg!(miri) {
             let target = if cfg!(debug_assertions) { 5000 } else { 2000 };
             assert!(avg_ns < target, "Route lookup too slow: {}ns (target < {}ns)", avg_ns, target);

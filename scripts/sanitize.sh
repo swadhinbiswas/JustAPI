@@ -49,12 +49,16 @@ run_step() {
 }
 
 if [[ "$MODE" == "all" || "$MODE" == "--asan" ]]; then
+    # Exclude benchmark-gate tests: they assert on wall-clock timing and fail
+    # under sanitizer instrumentation (~2x slowdown). Benchmarks are for
+    # release builds; sanitizers are for memory safety.
     run_step "AddressSanitizer on justapi-core (lib, features=db)" "$ASAN_LOG" \
         env PATH="$HOME/.cargo/bin:$PATH" \
         CARGO_TARGET_DIR="$ASAN_TARGET_DIR" \
         RUSTFLAGS="-Zsanitizer=address" \
         rustup run nightly cargo test -p justapi-core --lib --features db \
-            -Zbuild-std --target x86_64-unknown-linux-gnu
+            -Zbuild-std --target x86_64-unknown-linux-gnu \
+            -- --skip bench_
 fi
 
 if [[ "$MODE" == "all" || "$MODE" == "--miri" ]]; then
