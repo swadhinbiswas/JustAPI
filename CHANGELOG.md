@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.0.8] - 2026-08-06
 
+### Added (2026-08-07)
+- **Native async DB awaits** — `app.db.query_async(sql, params)` / `app.db.execute_async(...)`: awaitable DB ops on the DB's own tokio runtime, GIL released, loop never blocked. **53× faster than the blocking path on slow queries** (320 vs 6 RPS, ADR-093)
+- **Multi-worker prefork verified** — `justapi serve --workers N --scale`: 4 workers = 1.88× throughput (99.7k RPS), auto-scale respawns (benchmarked 2026-08-07)
+- **Type-checked DX** — `py.typed` marker + mypy-clean `.pyi` stubs (routes, `app.db`, `native_async`, `sse_native` all typed)
+- **Scaffold demos differentiators** — `justapi create` generates a CRUD app exercising `query_async`, `@native_async`, and Rust-native SSE
+- **Rust-native SSE streaming** — `app.sse_native(path, count, interval_ms)`: events generated entirely in Rust, zero Python per event (ADR-088)
+- **`@native_async` decorator** — marks async handlers for the fastest dispatch; true parallel dispatch on free-threaded CPython (ADR-089)
+- **Callback-driven async resolution** — `_DoneNotifier` fires on coroutine completion; no blocking wait, no thread hop (ADR-086)
+
 ### Security Fixes
 - **CRITICAL:** Fixed global panic hook race condition in `panic.rs` (P0-1)
 - **CRITICAL:** Fixed RwLock poisoning panics in `PerRouteCircuitBreakerMiddleware` (P0-2)

@@ -92,6 +92,14 @@ The Python path is used for general routes. For schema-backed routes with `nativ
 
 2. **Agent-native serving.** Beyond REST, JustAPI exposes routes as MCP tools, streams validated structured output per-token, and carries multi-turn session state — without external SDKs. See [`ROADMAP.md`](ROADMAP.md) for the full agent roadmap.
 
+3. **Native async DB awaits.** `await app.db.query_async(sql)` / `execute_async(sql)` run SQL on the DB's own multi-threaded tokio runtime with the GIL released — the asyncio loop is never blocked, so slow queries (Postgres, network DBs) do not serialize other requests. Measured **53× faster than the blocking path on slow queries** (320 RPS vs 6 RPS, 2M-row CTE).
+
+4. **Multi-worker prefork scaling.** `justapi serve --workers N --scale` spawns N worker processes sharing one bound socket. Verified: 4 workers = **1.88× throughput** (99.7k RPS vs 53k), auto-scale respawns under load.
+
+5. **Type-checked DX.** Ships `py.typed` + complete `.pyi` stubs — mypy-clean on user code (routes, `app.db`, `native_async`, `sse_native`). `justapi create` scaffolds a full CRUD project demonstrating every differentiator.
+
+6. **Free-threaded CPython support.** 3.14t wheels (Py_GIL_DISABLED auto-detected): CPU-bound Python handlers scale with cores (12.4× measured).
+
 ## Competitors, named honestly
 
 JustAPI is not the first Rust-backed Python web framework. The following table compares the closest alternatives on raw throughput (Python handler path, same hardware):
@@ -118,7 +126,8 @@ For routes registered with `native=True` and a schema, JustAPI serves entirely i
 
 - **Native fast path requires a schema.** Routes without a `Schema` registered fall back to the Python handler path (~60k rps). The 724k rps number only applies to routes with `native=True` + `Schema`.
 - **Python handler throughput is GIL-bound.** On CPython, the Python dispatch path is capped at ~100-120k rps on this hardware regardless of framework — that is the GIL, not a framework limitation. Free-threaded Python (3.13t/3.14t) removes this ceiling.
-- **Agent-native workloads are the differentiator.** The benchmarks that matter most for JustAPI are structured-LLM streaming, MCP tool dispatch, and durable agent sessions — not hello-world req/s. These workloads are impossible or awkward in every alternative listed above.
+- **Light async handlers are loop-bound.** Async Python handlers that only sleep/echo (~4-12k rps) are capped by the asyncio loop + thread hop — Granian's direct loop dispatch is ~44k there (ADR-090/091/092 proved no coroutine-driver or multi-loop approach beats asyncio's stepping). We win on real async workloads (1ms-sleep handlers: 3.9k vs Granian 2.9k RPS) and on anything DB/SSE-heavy via native ops.
+- **Native fast path requires a schema.** Routes without a `Schema` registered fall back to the Python handler path (~60k rps). The 724k rps number only applies to routes with `native=True` + `Schema`.
 
 ## Non-goals & not-yet-built
 
