@@ -3,6 +3,7 @@ import inspect
 import json
 import contextvars
 import concurrent.futures
+import os
 import threading
 import traceback
 
@@ -42,26 +43,41 @@ def get_trace_context():
         "span_id": _span_id_var.get(),
     }
 
-_loop = None
-_loop_thread = None
+_loops = []
+_loop_threads = []
 _loop_lock = None
+_loop_rr = 0
 
 def _start_loop(loop):
     asyncio.set_event_loop(loop)
     loop.run_forever()
 
+def _loop_count():
+    """Number of asyncio loops (ADR-092). A/B-tested: multi-loop does NOT
+    help — the GIL worker is the single dispatch point, so the loop's lock
+    is never contended; extra loops only add GIL contention. Default 1.
+    JUSTAPI_ASYNC_LOOPS overrides for experimentation."""
+    if "JUSTAPI_ASYNC_LOOPS" in os.environ:
+        return max(int(os.environ["JUSTAPI_ASYNC_LOOPS"]), 1)
+    return 1
+
 def _get_loop():
-    global _loop, _loop_thread, _loop_lock
+    global _loops, _loop_threads, _loop_lock, _loop_rr
     if _loop_lock is None:
-        # This itself is a slight race but much safer than creating loops
         _loop_lock = threading.Lock()
 
     with _loop_lock:
-        if _loop is None:
-            _loop = asyncio.new_event_loop()
-            _loop_thread = threading.Thread(target=_start_loop, args=(_loop,), daemon=True)
-            _loop_thread.start()
-    return _loop
+        if not _loops:
+            count = _loop_count()
+            for _ in range(count):
+                loop = asyncio.new_event_loop()
+                thread = threading.Thread(target=_start_loop, args=(loop,), daemon=True)
+                thread.start()
+                _loops.append(loop)
+                _loop_threads.append(thread)
+        loop = _loops[_loop_rr % len(_loops)]
+        _loop_rr += 1
+    return loop
 
 def wrap_result(result):
     # Streaming responses are returned unwrapped so the Rust side can pump the

@@ -3564,3 +3564,41 @@ coroutine.
 **Evidence:** `native_gather`/`native_sleep`/`NativeTimer` experiment build +
 microbenchmarks above (50-1000 iterations). Experiment code reverted after
 recording.
+
+## ADR-092 — 2026-08-07 — Multi-loop async dispatch: A/B-tested, does not help, reverted
+
+**Decision:** Keep the single-asyncio-loop + callback-driven dispatch (ADR-086).
+Multi-loop round-robin was built, A/B-tested on identical fixtures, and does not
+help — it is neutral-to-slightly-worse. Reverted to 1 loop by default (the
+`JUSTAPI_ASYNC_LOOPS` env override stays for experimentation).
+
+**Motivation:** Phase 1 of the "beat Granian on light async" plan was multi-loop
+dispatch: N asyncio loops with round-robin coroutine assignment, to reduce
+`call_soon_threadsafe` lock contention and spread timer wheels. Implemented in
+`_native_helper.py` (N loop threads, round-robin `_get_loop()`, env override).
+
+**A/B results (identical fixture, same wheel, loop count the only variable):**
+
+| Workload | 1 loop | 12 loops |
+|---|---|---|
+| async + 1ms sleep, c=16 | 3,752 RPS | 3,135 RPS |
+| async + 1ms sleep, c=32 | 4,403 RPS | 3,651 RPS |
+| async + 1ms sleep, c=64 | 4,443 RPS | 3,257 RPS |
+| 20× 1ms sleep per req, c=16 | 543 RPS | 593 RPS |
+| 20× 1ms sleep per req, c=32 | 971 RPS | 928 RPS |
+
+**Why it fails:** the GIL worker is the single dispatch point — only one thread
+ever calls `run_coroutine_threadsafe`, so the loop's lock is never contended
+(no multi-thread `call_soon` traffic). The per-request cost is the loop's own
+stepping + the thread hop, both independent of loop count. Extra loops add
+GIL contention (more stepping threads). Consistent with ADR-087's finding that
+an 8-worker async pool regressed.
+
+**Conclusion for the async story:** the current single-loop callback-driven
+dispatch is already the right architecture; light-async (~4.4k RPS c=32 on this
+fixture, ~44k theoretical ceiling for loop-only dispatch) is capped by the
+thread-hop, not by the loop. The path to beat Granian on async stays as
+recorded: Rust-native operation types (sse_native, native CRUD, native_async),
+never a coroutine driver (ADR-090/091) nor multi-loop (this ADR).
+
+**Evidence:** A/B runs above, identical wheel, JUSTAPI_ASYNC_LOOPS=1 vs default.
