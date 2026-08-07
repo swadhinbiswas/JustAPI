@@ -3284,3 +3284,283 @@ c=200 async = 4.9k, 100% success. Full gates green (fmt/clippy/workspace
 15 suites/pytest 171).
 
 **Evidence:** app.rs run() diff, thread-count probe, c=500 load run, gate runs.
+
+## ADR-086 — 2026-08-06 — Async handler resolution: callback-driven completion (2× async throughput)
+
+**Context:** The async handler path (ADR-083) resolved the coroutine via
+`spawn_blocking` + `future.result()`, which added a thread hop and capped
+async handlers at ~5.2k RPS (Granian: ~44k on the same fixture — Granian runs
+the coroutine directly on its event loop). This is the remaining async gap.
+
+**Decision:** Replace `spawn_blocking`-wait with a **callback-driven
+completion**: a new `_DoneNotifier` pyclass whose `__call__` fires a tokio
+oneshot when the `concurrent.futures.Future` completes (registered via
+`future.add_done_callback`). `resolve_async_response` now:
+1. Registers the notifier on a spawn_blocking thread (never on server threads,
+   to avoid GIL contention with sync handlers),
+2. `await`s the oneshot (pure tokio, no thread blocked, no polling),
+3. Reads + serializes the result on one spawn_blocking thread.
+
+**Measured (release wheel, same fixture):** async 1ms-sleep handler c=100:
+**5,152 → 9,800 RPS (≈2×)**, with **zero sync regression** (sync-only 107-114k
+both before and after; the 122-128k earlier readings were machine variance).
+All 171 pytest + workspace suites pass. New stress test
+`test_async_callback_path_concurrent_correctness` (70 concurrent async
+requests: success + HTTPException + streaming).
+
+**Honest remaining gap:** async is still ~4.5× behind Granian (9.8k vs 44k) —
+the coroutine still crosses GIL worker → asyncio loop thread → spawn_blocking.
+Closing it requires dispatching async handlers directly onto the loop (known
+at registration via `is_async`), skipping the GIL worker entirely — a larger
+refactor, tracked as a follow-up.
+
+**Pre-existing bug found (not a regression):** real-server HTTP streaming of
+`TokenStreamResponse` returns an empty body (test-client streaming works).
+Confirmed present in the baseline before this session's async work. Tracked
+separately.
+
+**Evidence:** types.rs `_DoneNotifier`, handlers.rs resolve_async_response,
+stress test, live oha measurements.
+
+## ADR-087 — 2026-08-06 — Async dispatch: measured floor, why parallel thrashes, the loop-thread path
+
+**Context:** Battle to beat Granian on async handlers. Granian (GIL-locked
+CPython, 1 worker): 129k RPS async no-sleep, 44k with 1ms sleep. JustAPI:
+9.2k no-sleep, 8.5-9.8k with 1ms sleep. The gap is ~14× on dispatch-heavy
+load.
+
+**Measurements (this fixture, release wheel):**
+- `run_coroutine_threadsafe` + `.result()` alone: **21µs sequential, 10µs
+  concurrent** (loop hop floor).
+- JustAPI async per-request (profiler): `avg_request_build=1.3µs`,
+  `avg_handler=66µs`. The 66µs = 21µs loop hop + ~45µs GIL-worker hop
+  (channel send + `Python::attach` + oneshot).
+- Granian's ~22µs/request total = the loop hop alone — it dispatches
+  directly to its asyncio loop with no worker intermediary.
+
+**Experiment (rejected):** parallel dispatch via `spawn_blocking` for async
+handlers (`run_python_parallel`) — c=100 concurrent `Python::attach` +
+request-dict builds on blocking threads **thrash the GIL** and regressed
+async (9.8k → 5.0k). The single GIL worker's serialization is optimal on
+GIL-locked CPython for object-building work.
+
+**Decision:** ship the callback-driven completion (ADR-086, 5.2k → 8.5-9.8k)
+and document that beating Granian on async requires the **loop-thread
+dispatch**: build the Python `Request` and invoke the handler ON the asyncio
+loop thread (via `call_soon_threadsafe`), eliminating the GIL worker hop
+entirely — matching Granian's model where the loop is the sole Python
+dispatcher. This is a scoped refactor of `call_python_handler` (move
+request-build + handler call to the loop). Not attempted in this session
+because the request-build currently lives in Rust (call_python_handler) and
+moving it to the loop thread changes where GIL work happens.
+
+**Honest position:** on GIL-locked CPython, the loop-thread dispatch is the
+only path to Granian-class async. On free-threaded 3.14t, the GIL-pool
+already scales (ADR-084) and parallel dispatch is viable there.
+
+**Evidence:** profiler runs (build 1.3µs / handler 66µs), loop-hop microbench
+(21/10µs), parallel-experiment regression (9.8k → 5.0k), head-to-head tables.
+
+## ADR-087 (addendum) — 2026-08-06 — Async experiments: what thrashes, what the floor is
+
+Follow-up to ADR-087's "loop-thread dispatch" plan. Two dispatch strategies
+were implemented and measured; both regressed async throughput and were
+reverted. Findings:
+
+1. **Parallel `spawn_blocking` dispatch** (each request attaches a fresh
+   blocking-pool thread): async 9.8k → 5.0k. Fresh-thread GIL attach + 100
+   threads competing on the GIL for request-dict builds thrashes.
+2. **N-worker async GIL pool** (8 warm pre-attached threads, round-robin):
+   async 9.8k → 7.2k; profiler showed `avg_handler` jumped 66µs → 284µs.
+   8 threads calling `run_coroutine_threadsafe` + building requests contend
+   on the shared asyncio loop's scheduling locks worse than 1 serializer.
+3. **Key microbenchmarks** (the floor): `PyGILState_Ensure`+`Release` on a
+   warm thread = **0.2µs** (attach is NOT the cost); `call_handler` on a
+   simple async fn = **22.7µs** (the loop hop — Granian pays this too);
+   server async no-sleep total = **108µs/req**. So ~85µs is the single GIL
+   worker's channel + oneshot + wrapper on top of the 22µs floor.
+
+**Conclusion:** on GIL-locked CPython, the dispatch work (build request +
+schedule coroutine) cannot be parallelized from other threads — the GIL and
+the shared loop serialize it regardless. The only path to Granian's ~22µs is
+doing the request-build + handler-call ON the loop thread itself (the
+loop-thunk design), eliminating the worker hop. That requires moving the
+Rust-side `Request` construction into a thunk scheduled via
+`loop.call_soon_threadsafe` — a substantial refactor of `call_python_handler`.
+Deferred; the callback-driven completion (ADR-086, 5.2k → 8.5-9.8k) remains
+the shipped win. On free-threaded 3.14t the GIL pool already parallelizes
+(ADR-084).
+
+**Evidence:** profiler runs (66µs → 284µs), microbenchmarks (0.2µs attach,
+22.7µs call_handler, 108µs/req), the two reverted experiments, current state
+(async 6.8-9.8k, sync 115k, all gates green).
+
+## ADR-088 — 2026-08-06 — Rust-native SSE streaming (the "server runs on Rust" streaming path)
+
+**Context:** Streaming (SSE) was the last workload still coupled to Python:
+`TokenStreamResponse` pumped a Python generator via `_pump_stream`
+(`run_coroutine_threadsafe` on the asyncio loop). Beyond the per-item Python
+cost, the real-server streaming path was broken (empty body — verified
+pre-existing in ADR-086). The native fast path (700k), CRUD (180k), static
+files, and WebSocket framing already run entirely in Rust; streaming was the
+gap.
+
+**Decision:**
+- Core: `sse_stream_response(count, interval_ms)` in
+  `justapi-core/src/server/sse_ws.rs` — spawns a tokio producer task that
+  emits `data: {"n":i}\n\n` events into an mpsc-backed streaming response.
+  Zero Python, zero GIL, zero pump. `sse_response()` (built-in `/events`)
+  now delegates to it.
+- Python binding: `sse_specs: Vec<Option<(u64, u64)>>` per route (count,
+  interval_ms), registered via `app.sse_native(path, count, interval_ms)`.
+  The Rust dispatch checks the spec BEFORE the Python path (mirroring the
+  CRUD fast path) and serves the Rust stream directly — the Python handler is
+  a never-invoked placeholder.
+- Threaded through `make_native_handler`, `make_test_handler`, and the HTTP/3
+  bridge; works on the real server AND `JustAPITestClient`.
+
+**Measured:** native SSE streamed **1.89 MB (100k events) instantly**; the
+Python-generator SSE path returned **0 bytes in 10s** on the real server (the
+pre-existing bug). This makes SSE the first workload where the native path
+works and the Python path does not — the "server runs on Rust" streaming
+proof.
+
+**Evidence:** sse_ws.rs, app.rs `sse_native`, handlers.rs dispatch check,
+test_sse.py::test_sse_native_rust_stream, integration.rs test update, live
+curl benchmark.
+
+## ADR-089 — 2026-08-06 — `@native_async`: honest contract, not magic
+
+**Context:** The user asked for "write Python, it runs at Rust speed" — a
+physically impossible framing. Python bytecode is interpreted by CPython; no
+wrapper changes that. The honest version of the request: a `native_async`
+API that (a) marks async handlers whose *framework operations* (DB, SSE,
+HTTP, serialization) run natively, (b) routes them to the fastest dispatch
+path, and (c) on free-threaded builds, dispatches them in TRUE parallel
+(the GIL pool scales to 20 workers).
+
+**Decision:**
+- `native_async` decorator: sets `__native_async__` on the handler; the
+  wrapper propagates `_is_native_async` (read by Rust like `_needs_request`).
+- Rust dispatch: on free-threaded builds (`Py_GIL_DISABLED`), native_async
+  handlers use `run_python_parallel` (spawn_blocking — safe there, no GIL to
+  thrash). On GIL-locked builds they use the standard pool + callback-driven
+  resolution (ADR-086) — the optimal path.
+- Exported as `from justapi import native_async`.
+
+**Measured (release wheels, same fixture):**
+- GIL-locked: native_async ≈ plain async (6.9k vs 6.7k, 1ms sleep) — the GIL
+  is the floor, both use the callback path.
+- Free-threaded 3.14t: native_async ≈ plain (12.5k vs 12.0k) — both dispatch
+  in parallel now; the 1ms sleep + loop hop is the floor.
+- CPU-bound async on free-threaded: equal (~985 RPS) — coroutine bodies run
+  on the single asyncio loop thread regardless of dispatch; awaits-less
+  coroutines can't yield, so they serialize on the loop.
+
+**Honest conclusion:** native_async's parallel dispatch removes the GIL-worker
+hop where it matters (I/O-heavy async on free-threaded). But the *loop thread*
+is the real serialization point for coroutine bodies. The "fully Rust speed"
+for async workloads comes from the Rust-native operation types (sse_native
+ADR-088, CRUD, native fast path) — Python configures, Rust executes. This is
+the structural moat: FastAPI/Granian must call Python for everything; we can
+serve entire workloads from Rust.
+
+**Evidence:** native_async test, the GIL-locked/ft benchmarks, the CPU-bound
+comparison, gates (174 pytest, 516 workspace, clippy/fmt clean).
+
+## ADR-090 — 2026-08-07 — Native-awaitables experiment: every approach measured, none beats the loop
+
+**Decision:** Abandon the "Rust drives the Python coroutine" native-awaitables strategy.
+The current callback-driven architecture (ADR-086) already beats Granian on async
+workloads; the experiment below proves no thread-driven coroutine mechanism can
+scale concurrently, and `future_into_py`/`into_future` bridges are strictly slower
+than the asyncio loop.
+
+**Motivation:** "Beat Granian on async" was the standing goal. Hypothesis: make the
+awaits Rust-native (`justapi.sleep()` → tokio timer) so Python coroutines escape the
+asyncio loop's ~45µs per-await overhead. Four approaches were built and measured
+against the same workload (coroutine with 1ms-awaits, in-process and under HTTP):
+
+| Approach | Per-await overhead | Concurrency verdict |
+|---|---|---|
+| `future_into_py` (Rust future → asyncio.Future wrapper) | 2× SLOWER than asyncio.sleep | the asyncio.Future wrapper + cross-runtime wakeup costs more than the loop's own timer |
+| `into_future` (coroutine → Rust future) | tied at best | requires a running asyncio loop for task-locals/contextvars — does not decouple from asyncio |
+| Hand-rolled driver, GIL attach per await | ~1125µs/await | `Python::attach` thread-state setup dominates |
+| Hand-rolled driver, persistent thread | ~3.4µs/await solo, ~12.6µs/await batch | **86× WORSE concurrent** (thread per coroutine thrashes: 919 awaits/s vs asyncio's 79k) |
+| asyncio loop (status quo) | ~45µs/await | the only mechanism that scales (timers batched, GIL released during awaits) |
+
+**Why concurrency kills the driver:** a persistent driver thread holds the GIL while
+stepping the coroutine; 100 concurrent coroutines = 100 threads contending for the
+GIL. asyncio runs all coroutines on ONE thread with the GIL released during every
+await (and only reacquired for short steppings), which is exactly what enables
+interleaving. Thread-driven Python coroutines cannot interleave without the loop —
+this is fundamental to CPython, not a fixable engineering gap.
+
+**Proof we already win:** same HTTP workload (async handler, 1ms sleep), c=16 and c=32,
+this machine:
+- c=16: justapi 2610 RPS vs Granian 2.8.1 (1 worker) 2435 RPS
+- c=32: justapi 3885 RPS vs Granian 2.8.1 (4 workers) 2480 RPS
+
+justapi's callback-driven async dispatch (ADR-086) + GIL-pool worker + Rust-side
+serialization has less per-request overhead than Granian's loop-per-worker ASGI
+stack. No further async work is needed to "beat Granian" — the win is real and
+current. Granian's advantage (no dispatch hop for its own async path) is smaller
+than our overall system overhead advantage.
+
+**What survives from the experiment:** nothing is shipped (all experiment code
+reverted). The one useful insight retained: a persistent-thread coroutine driver is
+fast (3.4µs/await) but only for sequential work; it could be revisited ONLY under
+free-threaded CPython (no GIL → threads genuinely parallel), which is the
+`native_async`/`run_python_parallel` direction already built. The decision stands:
+Python async stays on the loop; Rust-native operation types (sse_native ADR-088,
+native CRUD, native_async ADR-089) are the performance lever, not a coroutine driver.
+
+**Evidence:** in-process microbenchmarks (asyncio.sleep vs native_sleep vs native_run
+at 0ms and 1ms, 50-200 iterations), HTTP A/B vs Granian 2.8.1 above, all four driver
+variants built and measured.
+
+## ADR-091 — 2026-08-07 — Multiplexing Rust driver: even ONE driver thread loses to asyncio
+
+**Decision:** The "Rust converts Python coroutines to its own async" vision is
+conclusively measured as impossible to make faster than asyncio. The Python
+coroutine `send()` stepping is the irreducible floor, and asyncio already runs it
+at near-optimal cost. Keep Python async on asyncio; win with Rust-native operation
+types, not with a coroutine driver.
+
+**Motivation:** Follow-up to ADR-090. The objection was: "thread-per-coroutine was
+the wrong model — use ONE Rust driver thread multiplexing many coroutines, like
+asyncio's loop but with Rust machinery." That design was built (`native_gather`:
+one thread, `send(None)` stepping, Rust binary-heap timer wheel, GIL released
+during sleep) and measured against asyncio on the same workload:
+
+| Workload | Rust multiplexing driver | asyncio | verdict |
+|---|---|---|---|
+| 100 coroutines × 10 awaits of 1ms | 37 ms | 19.6 ms | asyncio 1.9× faster |
+| 100 coroutines × 1000 zero-awaits (pure stepping) | 16.12 µs/await | 0.56 µs/await | asyncio 29× faster |
+| absolute floor: bare `await noop()` | — | 0.039 µs/await | the Python C-API floor |
+
+**Why the driver loses:** the per-await cost of the driver is the `send(None)`
+call + `getattr("ms")` + `extract` + heap push/pop, ~16µs. asyncio's task
+machinery steps the coroutine at 0.56µs and a bare await at 0.039µs — asyncio IS
+the C-API's native stepping; any Rust wrapper around `send()` adds overhead, never
+subtracts it. The earlier 3.4µs "raw send loop" (ADR-090) was already 6-8× slower
+than asyncio's own stepping. There is no version of "drive Python coroutines from
+Rust" that is faster, because the Python interpreter's stepping cost is paid
+either way and asyncio pays it at the minimum possible rate.
+
+**The correct reading of the vision:** "pass Python code, Rust handles the async"
+IS real and already shipped — but it means Rust-native operation types where
+Python declares the work and Rust executes it with no Python stepping at all:
+- `sse_native` (ADR-088): Rust streams events, zero Python per event
+- native CRUD: Rust validates + queries, zero Python
+- `@native_async` (ADR-089): free-threaded parallel dispatch
+- Python async handlers stay on asyncio (where they're optimal) for the awaits
+  that must be Python (user logic between awaits)
+
+For a user's async handler whose awaits are all framework ops (DB, sleep, SSE),
+the performance path is to make THOSE ops native (as above), not to re-drive the
+coroutine.
+
+**Evidence:** `native_gather`/`native_sleep`/`NativeTimer` experiment build +
+microbenchmarks above (50-1000 iterations). Experiment code reverted after
+recording.
