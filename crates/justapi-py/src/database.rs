@@ -296,6 +296,87 @@ impl DbPool {
         Ok(affected.into_pyobject(py)?.into_any())
     }
 
+    /// NATIVE ASYNC query (ADR-093): `await`-able from async handlers.
+    /// The query runs on the DB's own multi-threaded tokio runtime with the
+    /// GIL RELEASED for the whole execution — zero Python stepping during the
+    /// query (a native operation type, the one async win our experiments
+    /// proved, ADR-090/091). The coroutine suspends on the asyncio loop and
+    /// resumes when sqlx completes.
+    ///
+    /// Usage: `rows = await app.db.query_async("SELECT * FROM users WHERE id = ?", [id])`
+    ///
+    /// Unlike the blocking `query()` (which must not be called from the loop
+    /// thread), `query_async` is safe on the asyncio loop thread and does not
+    /// block it.
+    #[pyo3(signature = (sql, params=None))]
+    fn query_async<'py>(
+        &self,
+        py: Python<'py>,
+        sql: String,
+        params: Option<Vec<Py<PyAny>>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let params_json: Vec<serde_json::Value> = match params {
+            Some(ps) => {
+                ps.iter().map(|p| python_to_json(py, p.bind(py))).collect::<PyResult<Vec<_>>>()?
+            }
+            None => Vec::new(),
+        };
+        let inner = self.inner.clone();
+        let rt = self.rt.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let rows: serde_json::Value = rt
+                .spawn(async move {
+                    inner
+                        .query_with_params(&sql, &params_json)
+                        .await
+                        .map_err(|e| anyhow::anyhow!(e.to_string()))
+                })
+                .await
+                .map_err(|e| {
+                    pyo3::exceptions::PyRuntimeError::new_err(format!("db task join error: {e}"))
+                })?
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            // Convert to Python with the GIL (re-attached by the runtime);
+            // `.unbind()` yields a Send `Py<PyAny>`.
+            pyo3::Python::attach(|py| json_to_python(py, &rows).map(|b| b.unbind()))
+        })
+    }
+
+    /// NATIVE ASYNC write (ADR-093): `await`-able INSERT/UPDATE/DELETE/DDL.
+    /// Returns the number of rows affected. Same semantics as `query_async`:
+    /// runs on the DB tokio runtime, GIL released during execution.
+    #[pyo3(signature = (sql, params=None))]
+    fn execute_async<'py>(
+        &self,
+        py: Python<'py>,
+        sql: String,
+        params: Option<Vec<Py<PyAny>>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let params_json: Vec<serde_json::Value> = match params {
+            Some(ps) => {
+                ps.iter().map(|p| python_to_json(py, p.bind(py))).collect::<PyResult<Vec<_>>>()?
+            }
+            None => Vec::new(),
+        };
+        let inner = self.inner.clone();
+        let rt = self.rt.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let affected: u64 = rt
+                .spawn(async move {
+                    inner
+                        .execute_with_params(&sql, &params_json)
+                        .await
+                        .map_err(|e| anyhow::anyhow!(e.to_string()))
+                })
+                .await
+                .map_err(|e| {
+                    pyo3::exceptions::PyRuntimeError::new_err(format!("db task join error: {e}"))
+                })?
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            Ok(affected)
+        })
+    }
+
     /// Run many `(sql, params)` statements atomically in one transaction and
     /// commit. `stmts` is a list of `[sql, params]` pairs (params optional).
     /// Returns the rows of the final statement if it was a query, else

@@ -193,3 +193,70 @@ def test_native_async_marker():
     # The decorator marks the raw function; the wrapper propagation is
     # verified by the Rust dispatch using the marker (integration-tested).
     assert getattr(handler, "__native_async__", False) is True
+
+
+def test_native_async_db_query_and_execute():
+    """query_async / execute_async: awaitable native DB ops (ADR-093).
+
+    Runs on a file-based SQLite (in-memory gives each pooled connection its
+    own database, which is a test artifact, not a framework bug). Verifies
+    both the async query and async write paths return correct results."""
+    import os
+    import tempfile
+    import asyncio
+    from justapi import JustAPIApp, JustAPITestClient
+
+    db_path = os.path.join(tempfile.mkdtemp(), "native_async.db")
+    app = JustAPIApp()
+    app.set_database(f"sqlite://{db_path}")
+    app.connect_database()
+    app.db.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+    app.db.execute("INSERT INTO users (name) VALUES ('alice'), ('bob')")
+
+    @app.get("/q")
+    async def q(req):
+        return await app.db.query_async("SELECT * FROM users ORDER BY id")
+
+    @app.get("/w")
+    async def w(req):
+        n = await app.db.execute_async("INSERT INTO users (name) VALUES ('carol')")
+        return {"affected": n}
+
+    c = JustAPITestClient(app)
+    r1 = c.get("/q")
+    r2 = c.get("/w")
+    assert r1["status"] == 200, r1
+    assert r2["status"] == 200, r2
+    rows = json.loads(r1["body"])
+    assert [row["name"] for row in rows] == ["alice", "bob"]
+    assert json.loads(r2["body"]) == {"affected": 1}
+
+    # The write actually persisted (read back through the async path).
+    r3 = c.get("/q")
+    rows3 = json.loads(r3["body"])
+    assert [row["name"] for row in rows3] == ["alice", "bob", "carol"]
+
+
+def test_native_async_db_concurrent_through_http():
+    """Many concurrent query_async requests all succeed (parallel DB ops)."""
+    import os
+    import tempfile
+    import concurrent.futures
+    from justapi import JustAPIApp, JustAPITestClient
+
+    db_path = os.path.join(tempfile.mkdtemp(), "native_async_conc.db")
+    app = JustAPIApp()
+    app.set_database(f"sqlite://{db_path}")
+    app.connect_database()
+    app.db.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)")
+    app.db.execute("INSERT INTO t (v) VALUES ('x')")
+
+    @app.get("/native")
+    async def native(req):
+        return await app.db.query_async("SELECT count(*) AS c FROM t")
+
+    c = JustAPITestClient(app)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=16) as ex:
+        futs = [ex.submit(c.get, "/native") for _ in range(40)]
+        results = [f.result() for f in futs]
+    assert all(r["status"] == 200 for r in results), results
