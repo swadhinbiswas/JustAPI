@@ -276,3 +276,19 @@ pub fn mode() -> Option<RuntimeMode> {
     let guard = POOL.lock().unwrap_or_else(|e| e.into_inner());
     guard.as_ref().map(|p| p.mode)
 }
+
+/// Run a Python closure on the tokio blocking pool (PARALLEL).
+///
+/// Correct ONLY on free-threaded CPython (Py_GIL_DISABLED): there is no GIL
+/// to thrash, so `@native_async` handlers dispatch in true parallel
+/// (available_parallelism workers). On GIL-locked builds this thrashes and
+/// must not be used (measured regression, ADR-087).
+pub async fn run_python_parallel<F, T>(f: F) -> anyhow::Result<T>
+where
+    F: FnOnce(Python<'_>) -> T + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(move || Python::attach(f))
+        .await
+        .map_err(|e| anyhow::anyhow!("python blocking task error: {}", e))
+}
