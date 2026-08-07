@@ -28,6 +28,27 @@ pub struct StreamSender {
     pub(crate) tx: tokio::sync::mpsc::UnboundedSender<Result<Bytes, anyhow::Error>>,
 }
 
+/// Signals a tokio oneshot when a Python `concurrent.futures.Future`
+/// completes. Registered via `future.add_done_callback(notifier)` so the Rust
+/// side can `await` completion WITHOUT blocking a thread (no spawn_blocking,
+/// no polling). The callback runs on the asyncio loop thread the moment the
+/// coroutine finishes.
+#[pyclass(name = "_DoneNotifier")]
+pub struct DoneNotifier {
+    pub(crate) tx: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+}
+
+#[pymethods]
+impl DoneNotifier {
+    fn __call__(&self, _future: Py<PyAny>) {
+        if let Ok(mut guard) = self.tx.lock() {
+            if let Some(tx) = guard.take() {
+                let _ = tx.send(());
+            }
+        }
+    }
+}
+
 #[pymethods]
 impl StreamSender {
     fn send(&self, data: &[u8]) {
