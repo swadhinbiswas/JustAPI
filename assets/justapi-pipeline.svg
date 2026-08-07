@@ -1,0 +1,150 @@
+<svg width="1200" height="420" viewBox="0 0 1200 420" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg2" x1="0" y1="0" x2="1200" y2="420" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0b0e1a"/>
+      <stop offset="1" stop-color="#111631"/>
+    </linearGradient>
+    <linearGradient id="boxRust" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#e6522c"/>
+      <stop offset="1" stop-color="#b03a1c"/>
+    </linearGradient>
+    <linearGradient id="boxPy" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#22d3ee"/>
+      <stop offset="1" stop-color="#0e7490"/>
+    </linearGradient>
+    <filter id="glow2" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="0" stdDeviation="6" flood-color="#22d3ee" flood-opacity="0.5"/>
+    </filter>
+  </defs>
+
+  <rect width="1200" height="420" fill="url(#bg2)"/>
+
+  <text x="600" y="40" text-anchor="middle" font-family="'Segoe UI', Arial, sans-serif" font-size="24" font-weight="700" fill="#e2e8f0" letter-spacing="1">One request, end to end</text>
+
+  <!-- ============ ROW 1: Rust pipeline ============ -->
+  <g font-family="'Segoe UI', Arial, sans-serif">
+    <!-- boxes: x positions -->
+    <!-- Kernel -->
+    <rect x="20" y="80" width="150" height="62" rx="10" fill="#1e293b" stroke="#334155"/>
+    <text x="95" y="105" text-anchor="middle" font-size="14" font-weight="700" fill="#22d3ee">Kernel</text>
+    <text x="95" y="125" text-anchor="middle" font-size="11" fill="#94a3b8">epoll / io_uring</text>
+
+    <!-- tokio -->
+    <rect x="220" y="80" width="150" height="62" rx="10" fill="#1e293b" stroke="#334155"/>
+    <text x="295" y="105" text-anchor="middle" font-size="14" font-weight="700" fill="#22d3ee">tokio</text>
+    <text x="295" y="125" text-anchor="middle" font-size="11" fill="#94a3b8">async runtime</text>
+
+    <!-- TLS -->
+    <rect x="420" y="80" width="150" height="62" rx="10" fill="#1e293b" stroke="#334155"/>
+    <text x="495" y="105" text-anchor="middle" font-size="14" font-weight="700" fill="#22d3ee">TLS</text>
+    <text x="495" y="125" text-anchor="middle" font-size="11" fill="#94a3b8">rustls</text>
+
+    <!-- HTTP -->
+    <rect x="620" y="80" width="150" height="62" rx="10" fill="#1e293b" stroke="#334155"/>
+    <text x="695" y="105" text-anchor="middle" font-size="14" font-weight="700" fill="#22d3ee">HTTP/1.1 · 2</text>
+    <text x="695" y="125" text-anchor="middle" font-size="11" fill="#94a3b8">hyper</text>
+
+    <!-- Router -->
+    <rect x="820" y="80" width="150" height="62" rx="10" fill="#1e293b" stroke="#334155"/>
+    <text x="895" y="105" text-anchor="middle" font-size="14" font-weight="700" fill="#22d3ee">Router</text>
+    <text x="895" y="125" text-anchor="middle" font-size="11" fill="#94a3b8">matchit · 51ns</text>
+
+    <!-- Middleware -->
+    <rect x="1020" y="80" width="160" height="62" rx="10" fill="#1e293b" stroke="#334155"/>
+    <text x="1100" y="105" text-anchor="middle" font-size="14" font-weight="700" fill="#22d3ee">Middleware</text>
+    <text x="1100" y="125" text-anchor="middle" font-size="11" fill="#94a3b8">auth · CORS · rate-limit</text>
+
+    <!-- arrows row 1 -->
+    <line x1="170" y1="111" x2="218" y2="111" stroke="#22d3ee" stroke-width="2" marker-end="url(#arr)">
+      <animate attributeName="stroke-opacity" values="0.2;1;0.2" dur="2s" repeatCount="indefinite"/>
+    </line>
+    <line x1="370" y1="111" x2="418" y2="111" stroke="#22d3ee" stroke-width="2">
+      <animate attributeName="stroke-opacity" values="0.2;1;0.2" dur="2.3s" repeatCount="indefinite"/>
+    </line>
+    <line x1="570" y1="111" x2="618" y2="111" stroke="#22d3ee" stroke-width="2">
+      <animate attributeName="stroke-opacity" values="0.2;1;0.2" dur="2.6s" repeatCount="indefinite"/>
+    </line>
+    <line x1="770" y1="111" x2="818" y2="111" stroke="#22d3ee" stroke-width="2">
+      <animate attributeName="stroke-opacity" values="0.2;1;0.2" dur="2.9s" repeatCount="indefinite"/>
+    </line>
+    <line x1="970" y1="111" x2="1018" y2="111" stroke="#22d3ee" stroke-width="2">
+      <animate attributeName="stroke-opacity" values="0.2;1;0.2" dur="3.2s" repeatCount="indefinite"/>
+    </line>
+    <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#22d3ee"/>
+    </marker>
+
+    <!-- moving packet dots -->
+    <circle r="4" fill="#22d3ee" filter="url(#glow2)">
+      <animateMotion dur="2s" repeatCount="indefinite" path="M170,111 L218,111"/>
+    </circle>
+    <circle r="4" fill="#22d3ee" filter="url(#glow2)">
+      <animateMotion dur="2.3s" repeatCount="indefinite" path="M370,111 L418,111"/>
+    </circle>
+    <circle r="4" fill="#22d3ee" filter="url(#glow2)">
+      <animateMotion dur="2.6s" repeatCount="indefinite" path="M570,111 L618,111"/>
+    </circle>
+    <circle r="4" fill="#22d3ee" filter="url(#glow2)">
+      <animateMotion dur="2.9s" repeatCount="indefinite" path="M770,111 L818,111"/>
+    </circle>
+    <circle r="4" fill="#22d3ee" filter="url(#glow2)">
+      <animateMotion dur="3.2s" repeatCount="indefinite" path="M970,111 L1018,111"/>
+    </circle>
+  </g>
+
+  <!-- down arrow from middleware -->
+  <path d="M1100,142 L1100,170 L1000,170 L1000,195" stroke="#8b5cf6" stroke-width="2.5" fill="none" stroke-dasharray="6 5">
+    <animate attributeName="stroke-dashoffset" values="0;-22" dur="1.5s" repeatCount="indefinite"/>
+  </path>
+
+  <!-- ============ PYTHON BOUNDARY (glowing) ============ -->
+  <g font-family="'Segoe UI', Arial, sans-serif">
+    <rect x="820" y="200" width="360" height="72" rx="12" fill="url(#boxPy)" filter="url(#glow2)">
+      <animate attributeName="opacity" values="0.85;1;0.85" dur="3s" repeatCount="indefinite"/>
+    </rect>
+    <text x="1000" y="228" text-anchor="middle" font-size="16" font-weight="700" fill="#03141f">Python boundary</text>
+    <text x="1000" y="250" text-anchor="middle" font-size="12" fill="#0b3a4d">zero-copy PyO3 · GIL pool · free-threaded ready</text>
+  </g>
+
+  <!-- down to handler -->
+  <path d="M1000,272 L1000,300 L700,300 L700,323" stroke="#8b5cf6" stroke-width="2.5" fill="none" stroke-dasharray="6 5">
+    <animate attributeName="stroke-dashoffset" values="0;-22" dur="1.8s" repeatCount="indefinite"/>
+  </path>
+
+  <!-- ============ YOUR CODE (highlighted) ============ -->
+  <g font-family="'Segoe UI', Arial, sans-serif">
+    <rect x="560" y="325" width="280" height="72" rx="12" fill="#ffffff" fill-opacity="0.05" stroke="#f5a524" stroke-width="2">
+      <animate attributeName="stroke-opacity" values="0.5;1;0.5" dur="2.2s" repeatCount="indefinite"/>
+    </rect>
+    <text x="700" y="350" text-anchor="middle" font-size="15" font-weight="700" fill="#f5a524">Your Python code</text>
+    <text x="700" y="372" text-anchor="middle" font-size="12" fill="#94a3b8">the only part that is yours</text>
+  </g>
+
+  <!-- path from handler to serializer -->
+  <path d="M700,325 L700,300 L300,300 L300,272" stroke="#e6522c" stroke-width="2.5" fill="none" stroke-dasharray="6 5">
+    <animate attributeName="stroke-dashoffset" values="0;-22" dur="1.6s" repeatCount="indefinite"/>
+  </path>
+
+  <!-- ============ ROW 2: response path ============ -->
+  <g font-family="'Segoe UI', Arial, sans-serif">
+    <rect x="20" y="200" width="240" height="62" rx="10" fill="#1e293b" stroke="#334155"/>
+    <text x="140" y="225" text-anchor="middle" font-size="14" font-weight="700" fill="#e6522c">Serializer</text>
+    <text x="140" y="245" text-anchor="middle" font-size="11" fill="#94a3b8">serde_json · simd-json</text>
+
+    <rect x="20" y="325" width="240" height="62" rx="10" fill="#1e293b" stroke="#334155"/>
+    <text x="140" y="350" text-anchor="middle" font-size="14" font-weight="700" fill="#22d3ee">Response write</text>
+    <text x="140" y="370" text-anchor="middle" font-size="11" fill="#94a3b8">back to the socket</text>
+
+    <line x1="140" y1="262" x2="140" y2="323" stroke="#e6522c" stroke-width="2" stroke-dasharray="6 5">
+      <animate attributeName="stroke-dashoffset" values="0;-22" dur="1.4s" repeatCount="indefinite"/>
+    </line>
+  </g>
+
+  <!-- side legend -->
+  <g font-family="'Segoe UI', Arial, sans-serif" font-size="12">
+    <rect x="420" y="225" width="16" height="16" rx="4" fill="#22d3ee"/>
+    <text x="445" y="238" fill="#94a3b8">Rust (everything except your code)</text>
+    <rect x="420" y="252" width="16" height="16" rx="4" fill="#f5a524"/>
+    <text x="445" y="265" fill="#94a3b8">Python (just your logic)</text>
+  </g>
+</svg>
