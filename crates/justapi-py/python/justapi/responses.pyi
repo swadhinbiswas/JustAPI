@@ -1,3 +1,4 @@
+from ._justapi import TokenStreamResponse
 """Type stubs for justapi.responses (auto-generated from runtime introspection)."""
 from _typeshed import Incomplete
 from typing import Any, Optional, Iterator, Mapping, List, Dict, Callable
