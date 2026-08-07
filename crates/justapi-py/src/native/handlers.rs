@@ -103,6 +103,79 @@ fn handle_ok_result(
     serialize_response(py, res, helper)
 }
 
+/// Build the Python `Request` + multipart form dict and invoke the handler.
+/// Shared by the sync (GIL-pool) and async (parallel pool) dispatch paths
+/// (ADR-087).
+#[allow(clippy::too_many_arguments)]
+fn dispatch_python_handler(
+    py: Python<'_>,
+    handlers: &Arc<Vec<Py<PyAny>>>,
+    schemas: &Arc<Vec<Option<Py<PyAny>>>>,
+    handler_id: usize,
+    path_params: &[(String, String)],
+    query_string: &[u8],
+    headers: &[(Vec<u8>, Vec<u8>)],
+    body: &[u8],
+    db_url: Option<&str>,
+    trace_ctx: Option<(String, String)>,
+    multipart_form_res: Option<justapi_core::multipart::MultipartForm>,
+    method: &str,
+    path: &str,
+    scheme: String,
+    client: Option<(String, u16)>,
+    app: Option<Py<PyAny>>,
+    needs_request: bool,
+    http_version: String,
+    auth_claims: Option<String>,
+) -> NativeResponse {
+    let mut form_dict_py: Option<pyo3::Py<pyo3::types::PyDict>> = None;
+    if let Some(form) = multipart_form_res {
+        let d = pyo3::types::PyDict::new(py);
+        for (k, v) in form.fields.iter() {
+            d.set_item(k, v).ok();
+        }
+        for f in form.files.iter() {
+            let headers_dict = pyo3::types::PyDict::new(py);
+            for (k, v) in f.headers.iter() {
+                headers_dict.set_item(k, v).ok();
+            }
+            let upload_file = crate::multipart::UploadFile::new(
+                f.filename.clone().unwrap_or_default(),
+                f.content_type.clone().unwrap_or_default(),
+                f.size,
+                headers_dict.into(),
+                f.temp_path.clone(),
+            );
+            let Ok(p) = pyo3::Bound::new(py, upload_file) else {
+                continue;
+            };
+            d.set_item(&f.field_name, p).ok();
+        }
+        form_dict_py = Some(d.into());
+    }
+
+    call_python_handler(
+        py,
+        &handlers[handler_id],
+        schemas[handler_id].as_ref(),
+        path_params,
+        query_string,
+        headers,
+        body,
+        db_url,
+        trace_ctx,
+        form_dict_py,
+        method,
+        path,
+        scheme,
+        client,
+        app,
+        needs_request,
+        http_version,
+        auth_claims,
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn call_python_handler(
     py: Python<'_>,
@@ -521,23 +594,52 @@ pub(crate) fn serialize_response(
 /// serialize the resolved value with the same fast serializer the sync path
 /// uses. Runs on a `spawn_blocking` thread so no worker thread is tied up.
 async fn resolve_async_response(py_future: Py<PyAny>) -> Result<NativeResponse, anyhow::Error> {
-    // Block on the future's .result(). If the coroutine raised (HTTPException,
-    // RequestValidationError, ...), the exception surfaces as a PyErr from
-    // .result() — convert it with the same logic as the sync Err path.
-    let outcome: Result<Py<PyAny>, pyo3::PyErr> = tokio::task::spawn_blocking(move || {
-        Python::attach(|py| py_future.bind(py).call_method0("result").map(|v| v.unbind()))
+    // Callback-driven completion: register a `_DoneNotifier` on the
+    // concurrent.futures.Future so we can await completion on the tokio
+    // runtime without blocking a thread (no spawn_blocking) or polling.
+    // The callback fires on the asyncio loop thread the instant the coroutine
+    // finishes. This removes one thread hop vs the old spawn_blocking path.
+    let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
+    // Register the callback on a spawn_blocking thread so no GIL attach ever
+    // happens on the server threads (which would contend with sync handlers).
+    // Returns the future so the result-read closure can use it.
+    let register = tokio::task::spawn_blocking(move || {
+        Python::attach(|py| -> Result<Py<PyAny>, anyhow::Error> {
+            let notifier = pyo3::Bound::new(
+                py,
+                crate::native::types::DoneNotifier { tx: std::sync::Mutex::new(Some(done_tx)) },
+            )
+            .map_err(|e| anyhow::anyhow!("failed to create done notifier: {}", e))?;
+            let fut = py_future.bind(py);
+            fut.call_method1("add_done_callback", (notifier,))
+                .map_err(|e| anyhow::anyhow!("async handler callback error: {}", e))?;
+            Ok(py_future)
+        })
+    });
+    let py_future =
+        register.await.map_err(|e| anyhow::anyhow!("async callback join error: {}", e))??;
+
+    // Wait for the coroutine to finish (pure tokio await, no thread blocked).
+    done_rx.await.map_err(|_| anyhow::anyhow!("async handler dropped"))?;
+
+    // Read + serialize the result on spawn_blocking so the GIL attaches never
+    // contend with sync handlers on the server threads (the coroutine is
+    // already done, so .result() returns instantly).
+    tokio::task::spawn_blocking(move || {
+        Python::attach(|py| {
+            let outcome: Result<Py<PyAny>, pyo3::PyErr> =
+                py_future.bind(py).call_method0("result").map(|v| v.unbind());
+            match outcome {
+                Ok(res) => {
+                    let helper = get_helper(py);
+                    handle_ok_result(py, res.bind(py).into(), helper)
+                }
+                Err(e) => handle_py_error(py, e),
+            }
+        })
     })
     .await
-    .map_err(|e| anyhow::anyhow!("async handler join error: {}", e))?;
-
-    let nr = Python::attach(|py| match outcome {
-        Ok(res) => {
-            let helper = get_helper(py);
-            handle_ok_result(py, res.bind(py).into(), helper)
-        }
-        Err(e) => handle_py_error(py, e),
-    });
-    Ok(nr)
+    .map_err(|e| anyhow::anyhow!("async handler join error: {}", e))
 }
 
 pub(crate) fn nr_to_response(nr: NativeResponse) -> hyper::Response<ResponseBody> {
@@ -748,7 +850,9 @@ pub(crate) fn make_native_handler<B>(
     app: Option<Py<PyAny>>,
     needs_request: Arc<Vec<bool>>,
     native: Arc<Vec<bool>>,
+    _native_async: Arc<Vec<bool>>,
     crud_specs: CrudConfig,
+    sse_specs: Arc<Vec<Option<(u64, u64)>>>,
     schema_validators: Arc<Vec<Option<justapi_core::validate::CompiledValidator>>>,
     max_body_size: usize,
 ) -> justapi_core::middleware::HandlerFn<B>
@@ -782,7 +886,10 @@ where
         .to_string();
         let needs_request_clone = needs_request.clone();
         let native_clone = native.clone();
+        #[cfg(Py_GIL_DISABLED)]
+        let native_async_clone = _native_async.clone();
         let crud_specs_clone = crud_specs.clone();
+        let sse_specs_clone = sse_specs.clone();
         let schema_validators_clone = schema_validators.clone();
         Box::pin(async move {
             let method = req.method().clone();
@@ -824,7 +931,7 @@ where
             let (body_bytes, multipart_form_res) = if is_multipart {
                 let ct = content_type.unwrap();
                 match justapi_core::multipart::parse_multipart(req_body, &ct).await {
-                    Ok(form) => (Bytes::new(), Some(Ok::<_, anyhow::Error>(form))),
+                    Ok(form) => (Bytes::new(), Some(form)),
                     Err(e) => {
                         let msg = e.to_string();
                         if msg.contains("exceeds maximum size") {
@@ -904,6 +1011,12 @@ where
                 };
                 let res = batcher.execute(breq).await.map_err(|e| anyhow::anyhow!("{}", e))?;
                 return Ok(nr_to_response(res));
+            }
+
+            // Rust-native SSE stream (ADR-088): serve events generated
+            // entirely in Rust — no Python handler, no GIL, no pump.
+            if let Some(Some((count, interval_ms))) = sse_specs_clone.get(handler_id) {
+                return Ok(justapi_core::server::sse_stream_response(*count, *interval_ms));
             }
 
             // Rust-native CRUD (ADR-056 Step C): validate body + run INSERT /
@@ -998,60 +1111,72 @@ where
             let db_url_str = db_url.clone();
             let trace_ctx = justapi_core::trace_context::get_current_trace_context();
 
-            let nr = crate::gil_pool::run_python(move |py| {
-                let mut form_dict_py: Option<pyo3::Py<pyo3::types::PyDict>> = None;
-                if let Some(Ok(form)) = multipart_form_res {
-                    let d = pyo3::types::PyDict::new(py);
-                    for (k, v) in form.fields.iter() {
-                        d.set_item(k, v).ok();
-                    }
-                    for f in form.files.iter() {
-                        let headers_dict = pyo3::types::PyDict::new(py);
-                        for (k, v) in f.headers.iter() {
-                            headers_dict.set_item(k, v).ok();
-                        }
-                        let upload_file = crate::multipart::UploadFile::new(
-                            f.filename.clone().unwrap_or_default(),
-                            f.content_type.clone().unwrap_or_default(),
-                            f.size,
-                            headers_dict.into(),
-                            f.temp_path.clone(),
-                        );
-                        let Ok(p) = pyo3::Bound::new(py, upload_file) else {
-                            continue;
-                        };
-                        d.set_item(&f.field_name, p).ok();
-                    }
-                    form_dict_py = Some(d.into());
-                }
+            // `@native_async` + free-threaded CPython: dispatch in TRUE
+            // parallel (no GIL to thrash) — the GIL pool scales to the
+            // hardware. On GIL-locked builds, native_async uses the standard
+            // pool + callback resolution (the optimal path there).
+            #[cfg(Py_GIL_DISABLED)]
+            let is_parallel = native_async_clone.get(handler_id).copied().unwrap_or(false);
+            #[cfg(not(Py_GIL_DISABLED))]
+            let is_parallel = false;
 
-                call_python_handler(
-                    py,
-                    &handlers_clone[handler_id],
-                    schemas_clone[handler_id].as_ref(),
-                    &path_params,
-                    &query_string,
-                    &headers,
-                    &body_bytes,
-                    db_url_str.as_deref(),
-                    trace_ctx,
-                    form_dict_py,
-                    method.as_str(),
-                    &path,
-                    req_scheme.clone(),
-                    req_client.clone(),
-                    app.as_ref().as_ref().map(|a| a.clone_ref(py)),
-                    needs_request_clone[handler_id],
-                    http_version.clone(),
-                    auth_claims,
-                )
-            })
-            .await
-            .map_err(|e| anyhow::anyhow!("GIL pool error: {}", e))?;
+            let nr = if is_parallel {
+                crate::gil_pool::run_python_parallel(move |py| {
+                    dispatch_python_handler(
+                        py,
+                        &handlers_clone,
+                        &schemas_clone,
+                        handler_id,
+                        &path_params,
+                        &query_string,
+                        &headers,
+                        &body_bytes,
+                        db_url_str.as_deref(),
+                        trace_ctx,
+                        multipart_form_res.clone(),
+                        method.as_str(),
+                        &path,
+                        req_scheme.clone(),
+                        req_client.clone(),
+                        app.as_ref().as_ref().map(|a| a.clone_ref(py)),
+                        needs_request_clone[handler_id],
+                        http_version.clone(),
+                        auth_claims,
+                    )
+                })
+                .await
+                .map_err(|e| anyhow::anyhow!("GIL pool error: {}", e))?
+            } else {
+                crate::gil_pool::run_python(move |py| {
+                    dispatch_python_handler(
+                        py,
+                        &handlers_clone,
+                        &schemas_clone,
+                        handler_id,
+                        &path_params,
+                        &query_string,
+                        &headers,
+                        &body_bytes,
+                        db_url_str.as_deref(),
+                        trace_ctx,
+                        multipart_form_res.clone(),
+                        method.as_str(),
+                        &path,
+                        req_scheme.clone(),
+                        req_client.clone(),
+                        app.as_ref().as_ref().map(|a| a.clone_ref(py)),
+                        needs_request_clone[handler_id],
+                        http_version.clone(),
+                        auth_claims,
+                    )
+                })
+                .await
+                .map_err(|e| anyhow::anyhow!("GIL pool error: {}", e))?
+            };
 
-            // Async handlers: the GIL worker returned the future without
-            // blocking. Await it here (spawn_blocking, GIL released while
-            // waiting) so concurrent async requests interleave.
+            // Async handlers: await the future here via the callback-driven
+            // resolution (GIL released while waiting), so concurrent async
+            // requests interleave.
             let nr = match nr.body {
                 NativeBody::Async(fut) => resolve_async_response(fut).await?,
                 _ => nr,
@@ -1083,6 +1208,8 @@ pub fn make_test_handler<B>(
     app: Option<Py<PyAny>>,
     needs_request: Arc<Vec<bool>>,
     native: Arc<Vec<bool>>,
+    _native_async: Arc<Vec<bool>>,
+    sse_specs: Arc<Vec<Option<(u64, u64)>>>,
     schema_validators: Arc<Vec<Option<justapi_core::validate::CompiledValidator>>>,
     max_body_size: usize,
 ) -> justapi_core::middleware::HandlerFn<B>
@@ -1108,6 +1235,9 @@ where
         let http_version = http_version.clone();
         let needs_request_clone = needs_request.clone();
         let native_clone = native.clone();
+        #[cfg(Py_GIL_DISABLED)]
+        let native_async_clone = _native_async.clone();
+        let sse_specs_clone = sse_specs.clone();
         let schema_validators_clone = schema_validators.clone();
         Box::pin(async move {
             let method = req.method().clone();
@@ -1153,9 +1283,8 @@ where
                 Err(e) => return Err(anyhow::anyhow!("Body error: {}", e)),
             };
 
-            let multipart_form_res: Option<
-                Result<justapi_core::multipart::MultipartForm, anyhow::Error>,
-            > = if is_multipart {
+            let multipart_form_res: Option<justapi_core::multipart::MultipartForm> = if is_multipart
+            {
                 let ct = content_type.unwrap();
                 match justapi_core::multipart::parse_multipart(
                     http_body_util::Full::new(body_bytes.clone()),
@@ -1163,7 +1292,7 @@ where
                 )
                 .await
                 {
-                    Ok(form) => Some(Ok::<_, anyhow::Error>(form)),
+                    Ok(form) => Some(form),
                     Err(e) => {
                         let msg = e.to_string();
                         if msg.contains("exceeds maximum size") {
@@ -1199,6 +1328,11 @@ where
             };
 
             let handler_id = *matched.handler;
+
+            // Rust-native SSE stream (ADR-088): serve events entirely in Rust.
+            if let Some(Some((count, interval_ms))) = sse_specs_clone.get(handler_id) {
+                return Ok(justapi_core::server::sse_stream_response(*count, *interval_ms));
+            }
 
             // Native fast path: validate the body in Rust and echo it back as the
             // response, with no blocking-pool thread hop, no GIL acquisition, and
@@ -1250,56 +1384,64 @@ where
 
             let method_clone = method.to_string();
             let path_clone = path.clone();
-            let nr = crate::gil_pool::run_python(move |py| {
-                let mut form_dict_py: Option<pyo3::Py<pyo3::types::PyDict>> = None;
-                if let Some(Ok(form)) = &multipart_form_res {
-                    let d = pyo3::types::PyDict::new(py);
-                    for (k, v) in form.fields.iter() {
-                        d.set_item(k, v).ok();
-                    }
-                    for f in form.files.iter() {
-                        let headers_dict = pyo3::types::PyDict::new(py);
-                        for (k, v) in f.headers.iter() {
-                            headers_dict.set_item(k, v).ok();
-                        }
-                        let upload_file = crate::multipart::UploadFile::new(
-                            f.filename.clone().unwrap_or_default(),
-                            f.content_type.clone().unwrap_or_default(),
-                            f.size,
-                            headers_dict.into(),
-                            f.temp_path.clone(),
-                        );
-                        let Ok(p) = pyo3::Bound::new(py, upload_file) else {
-                            continue;
-                        };
-                        d.set_item(&f.field_name, p).ok();
-                    }
-                    form_dict_py = Some(d.into());
-                }
+            #[cfg(Py_GIL_DISABLED)]
+            let is_parallel = native_async_clone.get(handler_id).copied().unwrap_or(false);
+            #[cfg(not(Py_GIL_DISABLED))]
+            let is_parallel = false;
 
-                call_python_handler(
-                    py,
-                    &handlers_clone[handler_id],
-                    schemas_clone[handler_id].as_ref(),
-                    &path_params,
-                    &query_string,
-                    &headers,
-                    &body_bytes,
-                    db_url_str.as_deref(),
-                    trace_ctx,
-                    form_dict_py,
-                    method_clone.as_str(),
-                    &path_clone,
-                    req_scheme.clone(),
-                    req_client.clone(),
-                    app.as_ref().as_ref().map(|a| a.clone_ref(py)),
-                    needs_request_clone[handler_id],
-                    http_version.clone(),
-                    None, // auth_claims: test client has no middleware
-                )
-            })
-            .await
-            .map_err(|e| anyhow::anyhow!("GIL pool error: {}", e))?;
+            let nr = if is_parallel {
+                crate::gil_pool::run_python_parallel(move |py| {
+                    dispatch_python_handler(
+                        py,
+                        &handlers_clone,
+                        &schemas_clone,
+                        handler_id,
+                        &path_params,
+                        &query_string,
+                        &headers,
+                        &body_bytes,
+                        db_url_str.as_deref(),
+                        trace_ctx,
+                        multipart_form_res.clone(),
+                        method_clone.as_str(),
+                        &path_clone,
+                        req_scheme.clone(),
+                        req_client.clone(),
+                        app.as_ref().as_ref().map(|a| a.clone_ref(py)),
+                        needs_request_clone[handler_id],
+                        http_version.clone(),
+                        None,
+                    )
+                })
+                .await
+                .map_err(|e| anyhow::anyhow!("GIL pool error: {}", e))?
+            } else {
+                crate::gil_pool::run_python(move |py| {
+                    dispatch_python_handler(
+                        py,
+                        &handlers_clone,
+                        &schemas_clone,
+                        handler_id,
+                        &path_params,
+                        &query_string,
+                        &headers,
+                        &body_bytes,
+                        db_url_str.as_deref(),
+                        trace_ctx,
+                        multipart_form_res.clone(),
+                        method_clone.as_str(),
+                        &path_clone,
+                        req_scheme.clone(),
+                        req_client.clone(),
+                        app.as_ref().as_ref().map(|a| a.clone_ref(py)),
+                        needs_request_clone[handler_id],
+                        http_version.clone(),
+                        None,
+                    )
+                })
+                .await
+                .map_err(|e| anyhow::anyhow!("GIL pool error: {}", e))?
+            };
 
             // Async handlers: await the future here (GIL released while
             // waiting), mirroring make_native_handler.
