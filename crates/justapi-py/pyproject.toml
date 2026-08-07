@@ -58,10 +58,10 @@ test = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/anomalyco/justapi"
-Repository = "https://github.com/anomalyco/justapi"
-Documentation = "https://github.com/anomalyco/justapi#readme"
-"Bug Tracker" = "https://github.com/anomalyco/justapi/issues"
+Homepage = "https://github.com/swadhinbiswas/JustAPI"
+Repository = "https://github.com/swadhinbiswas/JustAPI"
+Documentation = "https://github.com/swadhinbiswas/JustAPI#readme"
+"Bug Tracker" = "https://github.com/swadhinbiswas/JustAPI/issues"
 
 [tool.maturin]
 module-name = "justapi._justapi"

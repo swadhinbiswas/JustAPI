@@ -56,28 +56,41 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            target: x86_64
-            args: --manylinux 2_28
+            target: x86_64-unknown-linux-gnu
+            rust-target: x86_64-unknown-linux-gnu
+            zig: true
           - os: ubuntu-latest
-            target: aarch64
-            args: --manylinux 2_28
+            target: aarch64-unknown-linux-gnu
+            rust-target: aarch64-unknown-linux-gnu
+            zig: true
           - os: ubuntu-latest
-            target: x86_64
-            args: --musllinux 1_2
+            target: x86_64-unknown-linux-musl
+            rust-target: x86_64-unknown-linux-musl
+            zig: true
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            rust-target: aarch64-unknown-linux-musl
+            zig: true
           - os: macos-latest
-            target: x86_64
+            target: aarch64-apple-darwin
+            rust-target: aarch64-apple-darwin
           - os: macos-latest
-            target: aarch64
+            target: x86_64-apple-darwin
+            rust-target: x86_64-apple-darwin
+            zig: true
           - os: windows-latest
-            target: x64
+            target: x86_64-pc-windows-msvc
+            rust-target: x86_64-pc-windows-msvc
           # Free-threaded CPython (3.14t): parallel GIL-free execution. The
-          # limited API (abi3) cannot be free-threaded, so these builds use
+          # limited API (abi3) cannot be free-threaded, so this build passes
           # --no-default-features (abi3 is the only default feature that must
-          # go; mail/http3/orjson stay).
+          # go; mail/http3/orjson stay) and targets the 3.14t interpreter.
           - os: ubuntu-latest
-            target: x86_64
+            target: x86_64-unknown-linux-gnu
+            rust-target: x86_64-unknown-linux-gnu
             python: "3.14t"
-            args: --manylinux 2_28 --no-default-features --features mail,http3,orjson
+            zig: true
+            features: "--no-default-features --features mail,http3,orjson"
 
     steps:
       - uses: actions/checkout@v4
@@ -86,24 +99,47 @@ jobs:
           python-version: ${{ matrix.python || '3.12' }}
           enable-cache: true
           cache-dependency-glob: crates/justapi-py/pyproject.toml
-      - name: Build wheels via Maturin
-        uses: PyO3/maturin-action@v1
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          target: ${{ matrix.target }}
-          args: --release --out dist ${{ matrix.args }}
-          manifest-path: crates/justapi-py/Cargo.toml
-          interpreter: ${{ matrix.python || '' }}
-      - name: Install wheel & test
+          targets: ${{ matrix.rust-target }}
+      - name: Install maturin
         shell: bash
         run: |
-          uv venv
-          uv pip install dist/*.whl pytest
-          uv run python -m pytest crates/justapi-py/tests/ -v --tb=short
+          uv tool install maturin
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Install Zig (for cross-compilation)
+        if: matrix.zig == 'true'
+        uses: mlugg/setup-zig@v1
+        with:
+          # Matches the zig version verified locally (all 5 wheels built with
+          # maturin 1.14.1 + zig 0.16.0 on 2026-08-07).
+          version: 0.16.0
+      - name: Resolve free-threaded interpreter
+        if: matrix.python == '3.14t'
+        shell: bash
+        run: echo "PY314T=$(uv python find 3.14t)" >> "$GITHUB_ENV"
+      - name: Build wheel (maturin + zig cross)
+        shell: bash
+        working-directory: crates/justapi-py
+        run: |
+          INTERP=""
+          if [ -n "${{ matrix.python }}" ]; then INTERP="--interpreter ${{ env.PY314T }}"; fi
+          ZIG=""
+          if [ "${{ matrix.zig }}" = "true" ]; then ZIG="--zig"; fi
+          maturin build --release --out dist $ZIG --target ${{ matrix.target }} \
+            $INTERP ${{ matrix.features || '' }}
+      - name: Install wheel & test
+        shell: bash
+        working-directory: crates/justapi-py
+        run: |
+          uv venv --python ${{ matrix.python || '3.12' }} "$RUNNER_TEMP/wtest"
+          uv pip install --python "$RUNNER_TEMP/wtest/bin/python" "dist/*.whl[test]" requests
+          "$RUNNER_TEMP/wtest/bin/python" -m pytest tests/ -v --tb=short
       - name: Upload Wheels
         uses: actions/upload-artifact@v4
         with:
           name: wheels-${{ matrix.os }}-${{ matrix.target }}-${{ strategy.job-index }}
-          path: dist/*.whl
+          path: crates/justapi-py/dist/*.whl
 
   publish:
     name: Publish to PyPI + GitHub Release
