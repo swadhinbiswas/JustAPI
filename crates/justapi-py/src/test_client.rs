@@ -76,6 +76,18 @@ impl JustAPITestClient {
         let needs_request = Arc::new(needs_request);
         let native: Vec<bool> = app_ref.native.clone();
         let native = Arc::new(native);
+        let native_async: Vec<bool> = app_ref
+            .handlers
+            .iter()
+            .map(|h| {
+                h.bind(py)
+                    .getattr("_is_native_async")
+                    .and_then(|v| v.extract::<bool>())
+                    .unwrap_or(false)
+            })
+            .collect();
+        let native_async = Arc::new(native_async);
+        let sse_specs: Arc<Vec<Option<(u64, u64)>>> = Arc::new(app_ref.sse_specs.clone());
         let schema_validators: Vec<Option<justapi_core::validate::CompiledValidator>> = app_ref
             .schema_jsons
             .iter()
@@ -119,6 +131,8 @@ impl JustAPITestClient {
             app_py,
             needs_request,
             native,
+            native_async,
+            sse_specs,
             schema_validators,
             50 * 1024 * 1024,
         );
