@@ -398,6 +398,36 @@ def adaptive_batch(max_size: int = 32, window_ms: int = 10):
         return func
     return wrapper
 
+
+def native_async(func=None):
+    """Mark a handler as **native-async** — its framework operations (DB
+    queries, SSE streaming, HTTP calls, serialization) run in Rust at native
+    speed, and the async dispatch uses the callback-driven resolution path
+    (no blocking wait, no thread hop). The user's own Python logic still runs
+    at Python speed (that is physics); everything the framework does for the
+    request is Rust (ADR-089).
+
+        from justapi import JustAPIApp, native_async
+
+        app = JustAPIApp()
+
+        @app.get("/users/{id}")
+        @native_async
+        async def get_user(request):
+            row = await app.db.fetch_one("SELECT * FROM users WHERE id = ?",
+                                         [request.path_params["id"]])
+            return row
+
+    Use it on any async route whose heavy lifting is DB / IO / streaming.
+    """
+    def wrapper(f):
+        f.__native_async__ = True
+        return f
+
+    if func is None:
+        return wrapper
+    return wrapper(func)
+
 class _AppState:
     def __setattr__(self, name, value):
         self.__dict__[name] = value
@@ -1034,6 +1064,12 @@ class JustAPIApp:
                 wrapper = sync_wrapper
 
         wrapper._needs_request = needs_request
+        # Per-handler flag: async handler (or async deps). Rust routes async
+        # handlers to the parallel async pool (Granian model, ADR-087).
+        wrapper._is_async = is_async
+        # native_async marker: propagates `__native_async__` to the wrapper so
+        # Rust can route it to the fastest dispatch (ADR-089).
+        wrapper._is_native_async = bool(getattr(handler, "__native_async__", False))
         return wrapper
 
     def _resolve_batch_config(self, func):
@@ -1898,6 +1934,18 @@ class JustAPIApp:
             return decorator
         self._app.get(path, self._wrap_sse_handler(handler))
         return handler
+
+    def sse_native(self, path: str, count: int = 10, interval_ms: int = 100):
+        """Register a **Rust-native** Server-Sent Events route (ADR-088).
+
+        The server streams ``count`` events at ``interval_ms`` spacing, generated
+        entirely in Rust (tokio + mpsc + streaming response). No Python handler,
+        no GIL, no generator pump — the stream runs at native speed.
+
+            app.sse_native("/events", count=1000, interval_ms=0)  # 1000 events, no delay
+        """
+        self._app.sse_native(path, count, interval_ms)
+        return self
 
     def websocket(self, path: str, handler=None):
         """Register a WebSocket route.
