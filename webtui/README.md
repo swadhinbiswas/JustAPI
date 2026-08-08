@@ -8,6 +8,8 @@ A from-scratch documentation site built on **WebTUI** (https://webtui.ironclad.s
 ```
 webtui/
 ├── build.py            # static site generator (markdown → HTML)
+│                       #   · sidebar auto-discovered from content dir (never stale)
+│                       #   · 160 pages = docs_site parity
 ├── css/                # vendored WebTUI (base, components, nf, themes)
 ├── src/
 │   ├── main.css        # terminal design system (navbar, dual sidebar, landing)
