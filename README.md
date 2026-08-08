@@ -153,7 +153,7 @@ body and writes the response. That is the ~700k req/s path.
 ## Feature highlights
 
 <p align="center">
-  <img src="assets/justapi-features.svg" alt="Feature matrix" width="100%">
+  <img src="assets/justapi-features.png" alt="Feature matrix" width="100%">
 </p>
 
 <table>
