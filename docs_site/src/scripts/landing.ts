@@ -1,6 +1,5 @@
-// Landing page: terminal tabs + benchmark bars (no anime.js — WebTUI is pure CSS)
+// Landing page: terminal tabs + benchmark bars
 export function initLanding() {
-  // Terminal tabs
   document.querySelectorAll('.ja-tabs').forEach((tabs) => {
     const btns = tabs.querySelectorAll('[data-tab-btn]');
     const panels = tabs.querySelectorAll('[data-tab-panel]');
@@ -14,7 +13,6 @@ export function initLanding() {
       });
     });
   });
-  // Benchmark bars: animate width on scroll
   const bars = document.querySelectorAll('.ja-bar-fill');
   if (bars.length && 'IntersectionObserver' in window) {
     const io = new IntersectionObserver((entries) => {

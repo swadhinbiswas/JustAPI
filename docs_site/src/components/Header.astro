@@ -1,0 +1,106 @@
+---
+import config from 'virtual:starlight/user-config';
+
+import LanguageSelect from 'virtual:starlight/components/LanguageSelect';
+import Search from 'virtual:starlight/components/Search';
+import SiteTitle from 'virtual:starlight/components/SiteTitle';
+import SocialIcons from 'virtual:starlight/components/SocialIcons';
+import ThemeSelect from 'virtual:starlight/components/ThemeSelect';
+
+const shouldRenderSearch =
+  config.pagefind || config.components.Search !== '@astrojs/starlight/components/Search.astro';
+---
+
+<div class="ja-navbar">
+  <div class="ja-navbar-bar">
+    <span class="ja-terminal-dot"></span>
+    <span class="ja-terminal-dot"></span>
+    <span class="ja-terminal-dot"></span>
+    <span class="ja-navbar-title">justapi</span>
+  </div>
+  <div class="ja-navbar-body">
+    <div class="title-wrapper sl-flex">
+      <SiteTitle />
+    </div>
+    <div class="sl-flex print:hidden ja-navbar-search">
+      {shouldRenderSearch && <Search />}
+    </div>
+    <div class="sl-hidden md:sl-flex print:hidden right-group">
+      <div class="sl-flex social-icons">
+        <SocialIcons />
+      </div>
+      <ThemeSelect />
+      <LanguageSelect />
+    </div>
+  </div>
+</div>
+
+<script>
+  import '../scripts/landing.ts';
+  initLanding();
+</script>
+
+<style is:global>
+  @layer components {
+    .ja-navbar {
+      border-bottom: var(--box-border-width, 2px) solid var(--foreground0);
+      background-color: var(--background1);
+      font-family: var(--font-family);
+    }
+    .ja-navbar-bar {
+      display: flex;
+      align-items: center;
+      gap: 1ch;
+      padding: 0.3rem 1ch;
+      border-bottom: 1px solid var(--background2);
+      background-color: var(--background2);
+      font-size: 0.75rem;
+    }
+    .ja-navbar-title {
+      color: var(--foreground0);
+      font-weight: var(--font-weight-bold);
+    }
+    .ja-navbar-body {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      padding: 0 1.5rem;
+      min-height: 3.5rem;
+    }
+    .ja-navbar-body .site-title a {
+      font-family: var(--font-family);
+      font-weight: var(--font-weight-bold);
+      color: var(--foreground0);
+    }
+    .ja-navbar-body .site-title a::before {
+      content: '\f120';
+      font-family: 'Symbols Nerd Font';
+      margin-right: 0.75ch;
+      color: var(--green, var(--foreground0));
+    }
+    .ja-navbar-body a {
+      font-family: var(--font-family);
+      color: var(--foreground1);
+      text-decoration: none;
+    }
+    .ja-navbar-body a:hover {
+      color: var(--green, var(--foreground0));
+      text-decoration: underline;
+    }
+    .ja-navbar-search .search-input {
+      border: 1px solid var(--foreground0) !important;
+      border-radius: 0 !important;
+      background-color: var(--background0) !important;
+      color: var(--foreground0) !important;
+      font-family: var(--font-family) !important;
+      font-size: 0.85rem !important;
+      padding: 0.35rem 1ch !important;
+      height: auto !important;
+    }
+    @media (max-width: 768px) {
+      .ja-navbar-body { flex-wrap: wrap; padding: 0.5rem 1rem; }
+      .ja-navbar-search { order: 3; width: 100%; }
+    }
+  }
+</style>

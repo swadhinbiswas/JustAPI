@@ -1,16 +1,13 @@
 /* ═══════════════════════════════════════════════════════════════════
-   JustAPI Docs — WebTUI terminal aesthetic
-   WebTUI: pure CSS terminal-UIs-in-the-browser (@webtui/css)
-   Keeps Starlight's dual-sidebar docs layout; restyles content with
-   WebTUI components and themes.
+   JUSTAPI DOCS — TRUE TERMINAL UI (WebTUI)
+   8-bit color palette · Nerd Font icons · Catppuccin/Everforest/Nord
+   Layers: base, utils, components
    ═══════════════════════════════════════════════════════════════════ */
 
-/* WebTUI layer order: base, utils, components */
 @layer base, utils, components;
 
+/* ─── WebTUI core ─── */
 @import './webtui/base.css';
-
-/* Components we use */
 @import './webtui/box.css';
 @import './webtui/components/typography.css';
 @import './webtui/components/button.css';
@@ -25,131 +22,214 @@
 @import './webtui/components/tooltip.css';
 @import './webtui/components/view.css';
 
-/* Themes (Catppuccin for the terminal vibe) */
+/* ─── Themes (import after components) ─── */
 @import './webtui/catppuccin.css';
+@import './webtui/everforest.css';
+@import './webtui/nord.css';
 
-/* ─── Base: terminal typography ─── */
+/* ─── Nerd Font icons ─── */
+@import './webtui/nf.css';
+
+/* ═══════════════════════════════════════════════════════════════════
+   BASE — 8-bit terminal palette
+   ═══════════════════════════════════════════════════════════════════ */
 @layer base {
   :root {
+    /* Classic 8-bit / terminal palette (ANSI-inspired) */
     --font-size: 16px;
-    --line-height: 1.45;
-    --font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', ui-monospace, monospace;
+    --line-height: 1.5;
     --font-weight-normal: 400;
     --font-weight-bold: 700;
+    --font-family:
+      'JetBrains Mono', 'Fira Code', 'Cascadia Code', Menlo, Monaco,
+      ui-monospace, monospace, 'Symbols Nerd Font';
+  }
+
+  /* Default dark = terminal black/green */
+  [data-webtui-theme='dark'],
+  [data-webtui-theme='light'] {
+    /* 8-bit palette */
+    --bit0: #000000; --bit1: #800000; --bit2: #008000; --bit3: #808000;
+    --bit4: #000080; --bit5: #800080; --bit6: #008080; --bit7: #c0c0c0;
+    --bit8: #808080; --bit9: #ff0000; --bit10: #00ff00; --bit11: #ffff00;
+    --bit12: #0000ff; --bit13: #ff00ff; --bit14: #00ffff; --bit15: #ffffff;
+  }
+
+  [data-webtui-theme='dark'] {
+    --background0: #0a0a0a;
+    --background1: #1a1a1a;
+    --background2: #2a2a2a;
+    --background3: #3a3a3a;
+    --foreground0: var(--bit7);
+    --foreground1: var(--bit8);
+    --foreground2: var(--bit7);
+    --box-border-color: var(--bit7);
+    --table-border-color: var(--bit7);
+    --separator-color: var(--bit8);
+    /* accents */
+    --green: var(--bit10);
+    --red: var(--bit9);
+    --yellow: var(--bit11);
+    --blue: var(--bit14);
+    --cyan: var(--bit14);
+    --magenta: var(--bit13);
+    --white: var(--bit15);
+  }
+
+  [data-webtui-theme='light'] {
+    --background0: #ffffff;
+    --background1: #e0e0e0;
+    --background2: #c0c0c0;
+    --background3: #a0a0a0;
+    --foreground0: #000000;
+    --foreground1: #404040;
+    --foreground2: #808080;
+    --box-border-color: #000000;
+    --table-border-color: #000000;
+    --separator-color: #808080;
+    --green: #008000;
+    --red: #800000;
+    --yellow: #808000;
+    --blue: #000080;
+    --cyan: #008080;
+    --magenta: #800080;
+    --white: #000000;
   }
 }
 
-/* ─── Starlight chrome mapped to WebTUI colors ─── */
+/* ═══════════════════════════════════════════════════════════════════
+   CUSTOM — Starlight chrome → terminal
+   ═══════════════════════════════════════════════════════════════════ */
 @layer components {
-  /* Sidebar + nav follow the theme */
-  .site-header,
-  .sidebar,
-  .page-frame {
-    background-color: var(--background0) !important;
+  /* ─── Header / Navbar (WebTUI terminal bar) ─── */
+  .site-header {
+    background-color: var(--background1);
+    border-bottom: var(--box-border-width, 2px) solid var(--foreground0);
   }
 
+  .site-header .site-title a {
+    font-family: var(--font-family);
+    font-weight: var(--font-weight-bold);
+    color: var(--foreground0);
+  }
+
+  .site-header .site-title a::before {
+    content: '\f120'; /* nf-fa-terminal */
+    font-family: 'Symbols Nerd Font';
+    margin-right: 0.75ch;
+    color: var(--green, var(--foreground0));
+  }
+
+  .site-header nav a,
+  .site-header .right-sidebar a {
+    font-family: var(--font-family);
+    color: var(--foreground1);
+    text-decoration: none;
+  }
+  .site-header nav a:hover {
+    color: var(--green, var(--foreground0));
+    text-decoration: underline;
+  }
+
+  .site-header .toggle-theme button {
+    font-family: var(--font-family);
+  }
+
+  /* ─── Sidebars ─── */
+  .sidebar,
   .sidebar-content,
   .sidebar-pane {
-    background-color: var(--background0) !important;
+    background-color: var(--background0);
   }
 
-  /* Links: terminal underline */
-  .content a {
-    color: var(--foreground2);
-    text-decoration: underline;
-    text-decoration-thickness: 1px;
-    text-underline-offset: 3px;
+  .sidebar nav a {
+    font-family: var(--font-family);
+    font-size: 0.9rem;
+    color: var(--foreground1);
   }
-  .content a:hover {
+  .sidebar nav a:hover {
+    color: var(--green, var(--foreground0));
+    background-color: var(--background1);
+  }
+  .sidebar nav a[aria-current='true'] {
     color: var(--foreground0);
-    text-decoration-thickness: 2px;
+    font-weight: var(--font-weight-bold);
+    background-color: var(--background1);
+    border-left: 3px solid var(--green, var(--foreground0));
   }
 
-  /* Headings: monospace, terminal weight */
-  .content h1,
-  .content h2,
-  .content h3,
-  .content h4,
-  .content h5,
-  .content h6 {
+  /* ─── Typography ─── */
+  .content h1, .content h2, .content h3,
+  .content h4, .content h5, .content h6 {
     font-family: var(--font-family);
     color: var(--foreground0);
   }
+  .content h1 { font-size: 1.8rem; }
+  .content h1::before { content: '# '; color: var(--green, var(--foreground0)); }
+  .content h2 { font-size: 1.35rem; border-bottom: 1px solid var(--background2); padding-bottom: 0.35rem; }
+  .content h2::before { content: '## '; color: var(--green, var(--foreground0)); }
+  .content h3::before { content: '### '; color: var(--green, var(--foreground0)); }
+  .content h4::before { content: '#### '; color: var(--green, var(--foreground0)); }
 
-  .content h1 {
-    font-size: 2rem;
-    letter-spacing: -0.02em;
-  }
-  .content h2 {
-    font-size: 1.4rem;
-    border-bottom: var(--box-border-width, 2px) solid var(--background2);
-    padding-bottom: 0.4rem;
-  }
-
-  /* Code: terminal inline */
-  .content :not(pre) > code {
-    background-color: var(--background1);
-    color: var(--foreground0);
-    padding: 0 1ch;
-  }
-
-  /* Inline code blocks inside pre keep WebTUI pre style */
-  pre {
-    background-color: var(--background1) !important;
-    border: var(--box-border-width, 2px) solid var(--foreground0);
-    border-radius: 0;
-    color: var(--foreground0);
-  }
-  pre code {
-    background: none !important;
-    color: inherit;
-  }
-
-  /* Tables: terminal grid */
-  .content table {
-    border-collapse: collapse;
-  }
-  .content th,
-  .content td {
-    border: var(--table-border-color, var(--foreground0)) solid var(--box-border-width, 1px);
-    padding: 0.4rem 1ch;
-  }
-  .content th {
-    color: var(--foreground0);
-    font-weight: var(--font-weight-bold);
-  }
-  .content td {
+  .content p, .content li {
+    font-family: var(--font-family);
+    font-size: var(--font-size);
+    line-height: var(--line-height);
     color: var(--foreground1);
   }
 
-  /* Callouts → terminal blocks */
+  .content a {
+    color: var(--blue, var(--foreground2));
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+  .content a:hover { color: var(--cyan, var(--foreground0)); }
+
+  .content :not(pre) > code {
+    font-family: var(--font-family);
+    background-color: var(--background2);
+    color: var(--red, var(--foreground0));
+    padding: 0 0.75ch;
+  }
+
+  /* ─── Code blocks ─── */
+  pre {
+    background-color: var(--background1);
+    border: var(--box-border-width, 2px) solid var(--foreground0);
+    border-radius: 0;
+    color: var(--foreground0);
+    font-family: var(--font-family);
+    font-size: 0.85rem;
+    line-height: 1.6;
+  }
+  pre code { background: none; color: inherit; }
+
+  /* ─── Tables ─── */
+  .content table { border-collapse: collapse; }
+  .content th, .content td {
+    border: 1px solid var(--table-border-color, var(--foreground0));
+    padding: 0.4rem 1ch;
+    font-family: var(--font-family);
+  }
+  .content th { color: var(--foreground0); font-weight: var(--font-weight-bold); }
+  .content td { color: var(--foreground1); }
+  .content tbody tr:hover { background-color: var(--background1); }
+
+  /* ─── Callouts → terminal ─── */
   .starlight-aside {
     border: var(--box-border-width, 2px) solid var(--foreground0);
-    border-left: calc(var(--box-border-width, 2px) * 3) solid var(--foreground0);
+    border-left-width: 0.75ch;
     border-radius: 0;
     background-color: var(--background1);
     padding: 0.75rem 1.5ch;
+    font-family: var(--font-family);
   }
-  .starlight-aside--note {
-    border-left-color: var(--blue, var(--foreground2));
-  }
-  .starlight-aside--tip {
-    border-left-color: var(--green, var(--foreground2));
-  }
-  .starlight-aside--caution {
-    border-left-color: var(--yellow, var(--foreground2));
-  }
-  .starlight-aside--danger {
-    border-left-color: var(--red, var(--foreground2));
-  }
+  .starlight-aside--note { border-left-color: var(--blue, var(--foreground2)); }
+  .starlight-aside--tip { border-left-color: var(--green, var(--foreground0)); }
+  .starlight-aside--caution { border-left-color: var(--yellow, var(--foreground2)); }
+  .starlight-aside--danger { border-left-color: var(--red, var(--foreground2)); }
 
-  /* Badges → terminal badges */
-  .badge,
-  [is-~='badge'] {
-    border: 1px solid var(--foreground0);
-  }
-
-  /* Search input: terminal */
+  /* ─── Search ─── */
   .search-input {
     border: 1px solid var(--foreground0) !important;
     border-radius: 0 !important;
@@ -157,97 +237,112 @@
     color: var(--foreground0) !important;
     font-family: var(--font-family) !important;
   }
+  .search-input::placeholder { color: var(--foreground2); }
+
+  /* ─── Footer ─── */
+  .site-footer {
+    border-top: var(--box-border-width, 2px) solid var(--foreground0);
+    background-color: var(--background1);
+  }
+  .site-footer p { font-family: var(--font-family); color: var(--foreground1); }
 }
 
-/* ─── Landing page: WebTUI components ─── */
+/* ═══════════════════════════════════════════════════════════════════
+   CUSTOM — Landing components
+   ═══════════════════════════════════════════════════════════════════ */
 @layer components {
+  /* Hero */
   .ja-hero {
     text-align: center;
-    padding: 4rem 1rem 2rem;
+    padding: 4rem 1rem 2.5rem;
+    position: relative;
   }
-
   .ja-hero h1 {
-    font-size: clamp(2.2rem, 5vw, 3.5rem);
+    font-size: clamp(2rem, 5vw, 3.25rem);
     margin-bottom: 1rem;
-    letter-spacing: -0.03em;
   }
-
-  .ja-hero h1 .accent {
-    color: var(--green, var(--foreground0));
-  }
-
+  .ja-hero h1 .accent { color: var(--green, var(--foreground0)); }
+  .ja-hero h1::before { content: ''; }
   .ja-hero-sub {
-    max-width: 40rem;
+    max-width: 42rem;
     margin: 0 auto 2rem;
+    color: var(--foreground1);
+    font-family: var(--font-family);
   }
-
   .ja-hero-actions {
     display: flex;
     gap: 1rem;
     justify-content: center;
     flex-wrap: wrap;
   }
-
-  .ja-actions a,
-  .ja-actions button {
+  .ja-hero-actions a {
+    font-family: var(--font-family);
     font-size: var(--font-size);
   }
 
-  /* Stats: terminal box grid */
+  /* Stats */
   .ja-stats {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
     gap: 0.75rem;
     margin: 2rem 0;
   }
-
   .ja-stat {
     border: var(--box-border-width, 2px) solid var(--foreground0);
     background-color: var(--background1);
     padding: 1rem 0.5rem;
     text-align: center;
+    position: relative;
   }
-
+  .ja-stat::before {
+    content: '\f0ce'; /* grid icon */
+    font-family: 'Symbols Nerd Font';
+    position: absolute;
+    top: 0.4rem;
+    left: 0.6rem;
+    font-size: 0.7rem;
+    color: var(--foreground2);
+  }
   .ja-stat-value {
+    font-family: var(--font-family);
     font-size: 1.5rem;
     font-weight: var(--font-weight-bold);
     color: var(--green, var(--foreground0));
   }
-
   .ja-stat-label {
+    font-family: var(--font-family);
     font-size: 0.8rem;
     color: var(--foreground1);
   }
 
-  /* Cards: terminal boxes */
+  /* Cards */
   .ja-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
     gap: 0.75rem;
     margin: 1.5rem 0;
   }
-
   .ja-card {
     border: var(--box-border-width, 2px) solid var(--foreground0);
     background-color: var(--background0);
     padding: 1.25rem;
+    position: relative;
+    transition: background-color 0.15s ease;
   }
-
-  .ja-card:hover {
-    background-color: var(--background1);
-  }
-
+  .ja-card:hover { background-color: var(--background1); }
   .ja-card-icon {
-    font-size: 1.25rem;
+    font-family: 'Symbols Nerd Font';
+    font-size: 1.3rem;
     margin-bottom: 0.5rem;
+    color: var(--green, var(--foreground0));
   }
-
   .ja-card h3 {
+    font-family: var(--font-family);
     font-size: 1rem;
     margin: 0 0 0.5rem;
   }
-
   .ja-card p {
+    font-family: var(--font-family);
     font-size: 0.85rem;
     color: var(--foreground1);
     margin: 0;
@@ -259,98 +354,113 @@
     border: var(--box-border-width, 2px) solid var(--foreground0);
     background-color: var(--background1);
     margin: 1.5rem 0;
+    overflow: hidden;
   }
-
   .ja-terminal-bar {
     display: flex;
-    gap: 0.75ch;
     align-items: center;
+    gap: 1ch;
     padding: 0.5rem 1ch;
     border-bottom: var(--box-border-width, 2px) solid var(--foreground0);
     background-color: var(--background2);
+    font-family: var(--font-family);
     font-size: 0.8rem;
   }
-
-  .ja-terminal-title {
-    color: var(--foreground0);
-    margin-left: 1ch;
-  }
-
+  .ja-terminal-dot { width: 0.8em; height: 0.8em; border-radius: 50%; display: inline-block; }
+  .ja-terminal-dot:nth-child(1) { background: var(--red, #f00); }
+  .ja-terminal-dot:nth-child(2) { background: var(--yellow, #ff0); }
+  .ja-terminal-dot:nth-child(3) { background: var(--green, #0f0); }
+  .ja-terminal-title { color: var(--foreground0); margin-left: 1ch; }
   .ja-terminal-body {
     padding: 1rem 1.5ch;
+    font-family: var(--font-family);
     font-size: 0.85rem;
     line-height: 1.7;
     color: var(--green, var(--foreground0));
     overflow-x: auto;
   }
-
   .ja-terminal-body .cm { color: var(--foreground2); }
   .ja-terminal-body .ok { color: var(--green, var(--foreground0)); }
   .ja-terminal-body .dim { color: var(--foreground2); }
 
-  /* Benchmark bars: terminal progress */
-  .ja-bars {
-    margin: 1.5rem 0;
-    display: flex;
-    flex-direction: column;
-    gap: 0.6rem;
-  }
-
+  /* Benchmark bars */
+  .ja-bars { margin: 1.5rem 0; display: flex; flex-direction: column; gap: 0.6rem; }
   .ja-bar-row {
     display: grid;
-    grid-template-columns: 7rem 1fr 4rem;
+    grid-template-columns: 8rem 1fr 4.5rem;
     align-items: center;
     gap: 1ch;
+    font-family: var(--font-family);
     font-size: 0.85rem;
   }
-
-  .ja-bar-label {
-    text-align: right;
-    color: var(--foreground1);
-  }
-
-  .ja-bar-row--winner .ja-bar-label {
-    color: var(--green, var(--foreground0));
-    font-weight: var(--font-weight-bold);
-  }
-
+  .ja-bar-label { text-align: right; color: var(--foreground1); }
+  .ja-bar-row--winner .ja-bar-label { color: var(--green, var(--foreground0)); font-weight: var(--font-weight-bold); }
   .ja-bar-track {
     height: 1.5rem;
     border: var(--box-border-width, 2px) solid var(--foreground0);
     background-color: var(--background0);
     padding: 2px;
   }
-
   .ja-bar-fill {
     height: 100%;
     width: 0%;
     background-color: var(--green, var(--foreground0));
     transition: width 1.2s cubic-bezier(0.16, 1, 0.3, 1);
   }
+  .ja-bar-value { color: var(--foreground0); text-align: right; }
 
-  .ja-bar-value {
-    font-family: var(--font-family);
-    color: var(--foreground0);
+  /* Tabs */
+  .ja-tabs {
+    border: var(--box-border-width, 2px) solid var(--foreground0);
+    background-color: var(--background0);
+    margin: 1.5rem 0;
   }
+  .ja-tabs-bar {
+    display: flex;
+    border-bottom: var(--box-border-width, 2px) solid var(--foreground0);
+    background-color: var(--background1);
+    overflow-x: auto;
+  }
+  .ja-tab-btn {
+    font-family: var(--font-family);
+    padding: 0.5rem 2ch;
+    font-size: 0.85rem;
+    color: var(--foreground1);
+    background: none;
+    border: none;
+    border-right: 1px solid var(--background2);
+    cursor: pointer;
+    height: auto !important;
+  }
+  .ja-tab-btn:hover { background-color: var(--background2); color: var(--foreground0); }
+  .ja-tab-btn[data-active='true'] {
+    background-color: var(--foreground0);
+    color: var(--background0);
+    font-weight: var(--font-weight-bold);
+  }
+  .ja-tab-panel { padding: 1rem; background-color: var(--background0); }
+  .ja-tab-panel pre { margin: 0; border: none; background: none; }
 
   /* CTA */
   .ja-cta {
     border: var(--box-border-width, 2px) solid var(--foreground0);
     background-color: var(--background1);
-    padding: 2rem 1rem;
+    padding: 2.5rem 1rem;
     text-align: center;
     margin: 2rem 0 1rem;
+    position: relative;
   }
-
-  .ja-cta h2 {
-    margin: 0 0 0.5rem;
-    border: none;
+  .ja-cta::before {
+    content: '\f121'; /* nf-fa-terminal-line */
+    font-family: 'Symbols Nerd Font';
+    position: absolute;
+    top: 0.75rem;
+    left: 1rem;
+    color: var(--green, var(--foreground0));
   }
-
-  .ja-cta p {
-    color: var(--foreground1);
-    margin: 0 0 1.5rem;
-  }
+  .ja-cta h2 { margin: 0 0 0.5rem; border: none; }
+  .ja-cta h2::before { content: ''; }
+  .ja-cta p { font-family: var(--font-family); color: var(--foreground1); margin: 0 0 1.5rem; }
 
   /* Section headings */
   .ja-section {
@@ -358,73 +468,15 @@
     align-items: center;
     gap: 1ch;
     margin: 2.5rem 0 1rem;
+    font-family: var(--font-family);
     font-size: 1.1rem;
     font-weight: var(--font-weight-bold);
     color: var(--foreground0);
   }
+  .ja-section::before { content: '\f489'; font-family: 'Symbols Nerd Font'; color: var(--green, var(--foreground0)); }
+  .ja-section::after { content: ''; flex: 1; border-bottom: var(--box-border-width, 2px) solid var(--background2); }
 
-  .ja-section::after {
-    content: '';
-    flex: 1;
-    border-bottom: var(--box-border-width, 2px) solid var(--background2);
-  }
-}
-
-/* ─── Tabs (terminal) ─── */
-@layer components {
-  .ja-tabs {
-    border: var(--box-border-width, 2px) solid var(--foreground0);
-    background-color: var(--background0);
-    margin: 1.5rem 0;
-  }
-
-  .ja-tabs-bar {
-    display: flex;
-    gap: 0;
-    border-bottom: var(--box-border-width, 2px) solid var(--foreground0);
-    background-color: var(--background1);
-    overflow-x: auto;
-  }
-
-  .ja-tab-btn {
-    padding: 0.5rem 2ch;
-    font-size: 0.85rem;
-    font-weight: var(--font-weight-normal);
-    color: var(--foreground1);
-    background: none;
-    border: none;
-    border-right: 1px solid var(--background2);
-    cursor: pointer;
-    font-family: var(--font-family);
-    height: auto !important;
-  }
-
-  .ja-tab-btn:hover {
-    background-color: var(--background2);
-    color: var(--foreground0);
-  }
-
-  .ja-tab-btn[data-active='true'] {
-    background-color: var(--foreground0);
-    color: var(--background0);
-    font-weight: var(--font-weight-bold);
-    text-decoration: none !important;
-  }
-
-  .ja-tab-panel {
-    padding: 1rem;
-    background-color: var(--background0);
-  }
-
-  .ja-tab-panel pre {
-    margin: 0;
-    border: none;
-    background: none !important;
-  }
-}
-
-/* ─── Theme switcher (terminal dots) ─── */
-@layer components {
+  /* Theme switcher — terminal buttons */
   .ja-theme-switcher {
     position: fixed;
     bottom: 1rem;
@@ -435,53 +487,35 @@
     padding: 0.4rem;
     border: var(--box-border-width, 2px) solid var(--foreground0);
     background-color: var(--background0);
+    font-family: 'Symbols Nerd Font';
   }
-
   .ja-theme-btn {
-    width: 1.75rem;
-    height: 1.75rem;
-    border: 1px solid var(--foreground2);
-    cursor: pointer;
-    transition: transform 0.2s ease;
+    font-family: 'Symbols Nerd Font';
+    font-size: 1rem;
+    line-height: 1;
+    width: 2rem;
+    height: 2rem;
     padding: 0;
+    border: 1px solid var(--foreground2);
+    background: none;
+    color: var(--foreground0);
+    cursor: pointer;
+    transition: transform 0.15s ease, background-color 0.15s ease;
   }
-
-  .ja-theme-btn:hover {
-    transform: scale(1.2);
-  }
-
-  .ja-theme-btn[data-active='true'] {
-    border: 2px solid var(--foreground0);
-  }
-
-  .ja-theme-btn--dark { background: #09090b; color: #22c55e; }
-  .ja-theme-btn--light { background: #e5e7eb; color: #111; }
-  .ja-theme-btn--catppuccin { background: #1e1e2e; color: #89b4fa; }
-  .ja-theme-btn--nord { background: #2e3440; color: #88c0d0; }
-  .ja-theme-btn--gruvbox { background: #282828; color: #fabd2f; }
+  .ja-theme-btn:hover { transform: scale(1.15); background-color: var(--background2); }
+  .ja-theme-btn[data-active='true'] { border: 2px solid var(--foreground0); color: var(--green, var(--foreground0)); }
 }
 
-/* ─── Print / a11y / misc ─── */
-:focus-visible {
-  outline: 2px solid var(--foreground0);
-  outline-offset: 2px;
-}
+/* ─── Misc ─── */
+:focus-visible { outline: 2px solid var(--foreground0); outline-offset: 2px; }
+
+::selection { background: var(--foreground0); color: var(--background0); }
 
 @media print {
-  .sidebar,
-  .toc-panel,
-  .edit-link,
-  .prev-next-nav,
-  .ja-theme-switcher {
-    display: none !important;
-  }
+  .sidebar, .toc-panel, .edit-link, .prev-next-nav, .ja-theme-switcher { display: none !important; }
 }
 
 @media (max-width: 768px) {
-  .ja-bar-row {
-    grid-template-columns: 5.5rem 1fr 3.5rem;
-  }
-  .ja-stats {
-    grid-template-columns: repeat(2, 1fr);
-  }
+  .ja-bar-row { grid-template-columns: 5.5rem 1fr 3.5rem; }
+  .ja-stats { grid-template-columns: repeat(2, 1fr); }
 }

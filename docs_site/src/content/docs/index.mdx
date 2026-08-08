@@ -5,7 +5,7 @@ template: splash
 ---
 
 <div class="ja-hero">
-  <span is="badge" variant="green">v2.0.9 · published on PyPI · 8 platforms</span>
+  <span is="badge" variant="green"> v2.0.9 · published on PyPI · 8 platforms</span>
   <h1>
     Python writes the logic.<br/>
     <span class="accent">Rust does everything else.</span>
@@ -15,8 +15,8 @@ template: splash
     routing, TLS, validation, serialization and the server itself run in Rust.
   </p>
   <div class="ja-hero-actions">
-    <a href="/getting-started/overview/" is="button" size="large">Get Started →</a>
-    <a href="https://github.com/swadhinbiswas/JustAPI" is="button" box="" size="large">GitHub ↗</a>
+    <a href="/getting-started/overview/" is="button" size="large"> Get Started</a>
+    <a href="https://github.com/swadhinbiswas/JustAPI" is="button" box="" size="large"> GitHub</a>
   </div>
 </div>
 
@@ -53,9 +53,9 @@ template: splash
 
 <div class="ja-tabs">
   <div class="ja-tabs-bar">
-    <button class="ja-tab-btn" data-tab-btn="pip" data-active="true">pip</button>
-    <button class="ja-tab-btn" data-tab-btn="uv">uv</button>
-    <button class="ja-tab-btn" data-tab-btn="scaffold">scaffold</button>
+    <button class="ja-tab-btn" data-tab-btn="pip" data-active="true"> pip</button>
+    <button class="ja-tab-btn" data-tab-btn="uv"> uv</button>
+    <button class="ja-tab-btn" data-tab-btn="scaffold"> scaffold</button>
   </div>
   <div class="ja-tab-panel" data-tab-panel="pip">
 ```bash
@@ -82,8 +82,10 @@ cd my_app && python app/main.py
 
 <div class="ja-terminal">
   <div class="ja-terminal-bar">
-    <span>●</span><span>●</span><span>●</span>
-    <span class="ja-terminal-title">main.py</span>
+    <span class="ja-terminal-dot"></span>
+    <span class="ja-terminal-dot"></span>
+    <span class="ja-terminal-dot"></span>
+    <span class="ja-terminal-title"> main.py</span>
   </div>
   <div class="ja-terminal-body">
     <span class="cm">from</span> justapi <span class="cm">import</span> JustAPIApp<br/>
@@ -95,7 +97,7 @@ cd my_app && python app/main.py
     &nbsp;&nbsp;&nbsp;&nbsp;<span class="cm">return</span> &#123;<span class="ok">"Hello"</span>: <span class="ok">"World"</span>&#125;<br/>
     <br/>
     app.run()<br/>
-    <span class="ok">✓</span> <span class="dim">server started · /docs · /redoc · OpenAPI auto</span>
+    <span class="ok"></span> <span class="dim">server started · /docs · /redoc · OpenAPI auto</span>
   </div>
 </div>
 
@@ -132,47 +134,47 @@ cd my_app && python app/main.py
 
 <div class="ja-grid">
   <div class="ja-card">
-    <div class="ja-card-icon">⚡</div>
+    <div class="ja-card-icon"></div>
     <h3>Rust core</h3>
     <p>Networking, TLS, routing, serialization run in Rust. Python executes only your logic.</p>
   </div>
   <div class="ja-card">
-    <div class="ja-card-icon">🗄️</div>
+    <div class="ja-card-icon"></div>
     <h3>Native async DB</h3>
     <p><code>await app.db.query_async()</code> runs SQL on Rust's tokio runtime — 53× faster on slow queries.</p>
   </div>
   <div class="ja-card">
-    <div class="ja-card-icon">📡</div>
+    <div class="ja-card-icon"></div>
     <h3>Rust-native SSE</h3>
     <p><code>app.sse_native()</code> streams events with zero Python per event.</p>
   </div>
   <div class="ja-card">
-    <div class="ja-card-icon">🚀</div>
+    <div class="ja-card-icon"></div>
     <h3>Multi-worker</h3>
     <p><code>justapi serve --workers N</code> — 1.88× throughput at 4 workers, auto-scale.</p>
   </div>
   <div class="ja-card">
-    <div class="ja-card-icon">🧠</div>
+    <div class="ja-card-icon"></div>
     <h3>Free-threaded</h3>
     <p>CPython 3.14t wheels — CPU-bound Python scales with cores, 12.4× measured.</p>
   </div>
   <div class="ja-card">
-    <div class="ja-card-icon">🔐</div>
+    <div class="ja-card-icon"></div>
     <h3>Security built-in</h3>
     <p>JWT, rate limiting, CORS, security headers — all in Rust middleware.</p>
   </div>
   <div class="ja-card">
-    <div class="ja-card-icon">🛡️</div>
+    <div class="ja-card-icon"></div>
     <h3>Production-ready</h3>
     <p>Circuit breakers, OTel tracing, Prometheus metrics, health checks.</p>
   </div>
   <div class="ja-card">
-    <div class="ja-card-icon">📋</div>
+    <div class="ja-card-icon"></div>
     <h3>Type-checked</h3>
     <p><code>py.typed</code> + complete stubs — mypy-clean on user code.</p>
   </div>
   <div class="ja-card">
-    <div class="ja-card-icon">🔗</div>
+    <div class="ja-card-icon"></div>
     <h3>FastAPI-compatible</h3>
     <p>Same decorators, Pydantic models, Depends. Migrate with one import.</p>
   </div>
@@ -191,7 +193,7 @@ cd my_app && python app/main.py
 <div class="ja-cta">
   <h2>Ready to build something fast?</h2>
   <p>One import. Rust underneath. Zero config.</p>
-  <a href="/getting-started/overview/" is="button" size="large">Get Started →</a>
+  <a href="/getting-started/overview/" is="button" size="large"> Get Started</a>
 </div>
 
 

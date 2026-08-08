@@ -26,16 +26,34 @@ export default defineConfig({
         { icon: 'x.com', label: 'X (Twitter)', href: 'https://x.com/justapidev' },
       ],
       customCss: ['./src/styles/custom.css'],
+      components: {
+        Header: './src/components/Header.astro',
+      },
       editLink: {
         baseUrl: 'https://github.com/swadhinbiswas/JustAPI/edit/main/docs_site',
       },
       head: [
         {
+          tag: 'link',
+          attrs: {
+            rel: 'stylesheet',
+            href: 'https://cdn.jsdelivr.net/gh/ryanoasis/nerd-fonts@master/css/nerd-fonts-generated.css',
+          },
+        },
+        {
+          tag: 'link',
+          attrs: {
+            rel: 'stylesheet',
+            href: 'https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap',
+          },
+        },
+        {
           tag: 'script',
           attrs: { is: 'inline' },
-          content: `// JustAPI theme switcher (webtui themes)
+          content: `// JustAPI theme switcher (terminal themes)
 (function () {
-  var THEMES = ['dark', 'light', 'catppuccin', 'nord', 'gruvbox'];
+  var THEMES = ['dark', 'light', 'catppuccin', 'everforest', 'nord'];
+  var ICONS = { dark: '\\uf1db', light: '\\uf185', catppuccin: '\\uf870', everforest: '\\uf1a0', nord: '\\uf0c8' };
   function apply(t) {
     document.documentElement.setAttribute('data-webtui-theme', t);
     document.documentElement.setAttribute('data-theme', t);
@@ -52,10 +70,11 @@ export default defineConfig({
     w.className = 'ja-theme-switcher';
     THEMES.forEach(function (t) {
       var b = document.createElement('button');
-      b.className = 'ja-theme-btn ja-theme-btn--' + (t === 'catppuccin' ? 'catppuccin' : t);
+      b.className = 'ja-theme-btn';
       b.dataset.theme = t;
       b.title = t;
       b.setAttribute('aria-label', 'Theme: ' + t);
+      b.textContent = ICONS[t];
       b.addEventListener('click', function () { apply(t); });
       w.appendChild(b);
     });

@@ -13,7 +13,10 @@
     "@astrojs/sitemap": "^3.7.3",
     "@astrojs/starlight": "^0.41.4",
     "@webtui/css": "^0.1.9",
+    "@webtui/plugin-nf": "^0.1.2",
     "@webtui/theme-catppuccin": "^0.0.5",
+    "@webtui/theme-everforest": "^0.0.5",
+    "@webtui/theme-nord": "^0.0.4",
     "astro": "^7.1.3"
   },
   "engines": {
