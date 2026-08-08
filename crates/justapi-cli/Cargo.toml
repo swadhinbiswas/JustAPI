@@ -1,11 +1,12 @@
 [package]
 name = "justapi-cli"
+description = "JustAPI CLI — serve, create, check, profile, openapi, hot reload. High-performance Rust CLI for the JustAPI framework."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "justapi"
+name = "justapi-cli"
 path = "src/main.rs"
 
 [features]
@@ -17,7 +18,7 @@ inference = ["justapi-core/inference", "dep:justapi-inference"]
 
 [dependencies]
 justapi-core = { workspace = true, features = ["db"] }
-justapi-inference = { path = "../justapi-inference", optional = true }
+justapi-inference = { version = "2.0.9", path = "../justapi-inference", optional = true }
 tokio.workspace = true
 clap.workspace = true
 tracing.workspace = true

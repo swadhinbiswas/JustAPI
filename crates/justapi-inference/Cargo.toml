@@ -1,5 +1,6 @@
 [package]
 name = "justapi-inference"
+description = "JustAPI inference engine — Candle-based LLM serving (experimental, optional feature)."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
