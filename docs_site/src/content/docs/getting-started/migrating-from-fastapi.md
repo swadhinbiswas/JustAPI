@@ -98,9 +98,10 @@ def verify_token(token: str = Header(...)):
 def get_pet(pet_id: int, token: str = Depends(verify_token)):
     return {"pet_id": pet_id}
 
-@app.post("/pets/")
-def create_pet(pet: Pet):
-    return {"name": pet.name}
+@app.post("/pets/", body_schema=Pet)
+def create_pet(request):
+    pet = request.json()   # validated by Pydantic's JSON Schema (Rust engine)
+    return {"name": pet["name"]}
 ```
 
 ### JustAPI (Same Logic)
@@ -123,9 +124,10 @@ def verify_token(token: str = Header(...)):
 def get_pet(pet_id: int, token: str = Depends(verify_token)):
     return {"pet_id": pet_id}
 
-@app.post("/pets/")
-def create_pet(pet: Pet):
-    return {"name": pet.name}
+@app.post("/pets/", body_schema=Pet)
+def create_pet(request):
+    pet = request.json()   # validated by Pydantic's JSON Schema (Rust engine)
+    return {"name": pet["name"]}
 ```
 
 ## Middleware Migration

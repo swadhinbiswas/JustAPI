@@ -21,15 +21,14 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
 
 ## Performance
 
-| Framework | Requests/sec | p50 Latency | p99 Latency |
-|---|--:|--:|--:|
-| **JustAPI (native fast path)** | **701,234** | **0.07 ms** | **0.19 ms** |
-| **JustAPI (Python handler)** | **60,297** | **1.03 ms** | **5.21 ms** |
-| Robyn 0.88 | 39,103 | 1.78 ms | 11.47 ms |
-| Granian | 69,195 | 0.72 ms | 3.87 ms |
-| FastAPI + Uvicorn | 36,189 | 1.72 ms | 24.63 ms |
+| Framework | Hello-world req/s | JSON echo | p99 latency | RSS |
+|---|--:|--:|--:|--:|
+| **JustAPI (native fast path)** | **766,000** | **782,000** | **0.48 ms** | **12 MB** |
+| Granian (ASGI) | 314,000 | 145,000 | 0.74 ms | 37 MB |
+| Robyn | 39,000 | — | — | — |
+| FastAPI + Uvicorn | 36,000 | 33,000 | 24.63 ms | 29 MB |
 
-All measurements on the same hardware (i5-13600K, 20 threads), 100 concurrent connections, 30s duration.
+All measurements on the same hardware, 100 concurrent connections, 30s duration. Full methodology in [BENCHMARKS.md](https://github.com/swadhinbiswas/JustAPI/blob/main/BENCHMARKS.md).
 
 ## What It Does
 
@@ -70,7 +69,16 @@ Open `/docs` for Swagger UI, `/redoc` for ReDoc, and the full OpenAPI schema —
     JWT auth, rate limiting, circuit breakers, OpenTelemetry, health checks.
   </Card>
   <Card title="Multi-Protocol" icon="globe">
-    REST, GraphQL, gRPC, JSON-RPC 2.0 — all in one app.
+    REST, GraphQL, gRPC, JSON-RPC 2.0, WebSocket, SSE — all in one app.
+  </Card>
+  <Card title="Native Async DB" icon="rocket">
+    `await app.db.query_async()` — SQL runs on Rust's tokio runtime, GIL released. 53× faster on slow queries.
+  </Card>
+  <Card title="Rust-Native SSE" icon="activity">
+    `app.sse_native()` streams events with zero Python per event.
+  </Card>
+  <Card title="Free-Threathed 3.14t" icon="shield">
+    CPU-bound Python scales with cores — 12.4× measured.
   </Card>
   <Card title="Auto Docs" icon="document">
     Swagger UI, ReDoc, Scalar. Generated from your code.

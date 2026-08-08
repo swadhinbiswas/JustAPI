@@ -77,7 +77,7 @@ export default defineConfig({
                 url: site,
                 downloadUrl: 'https://pypi.org/project/justapi/',
                 installUrl: 'https://pypi.org/project/justapi/',
-                softwareVersion: '2.0.8',
+                softwareVersion: '2.0.9',
                 offers: {
                   '@type': 'Offer',
                   price: '0',

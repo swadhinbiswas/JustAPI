@@ -1,0 +1,543 @@
+# JustAPI — Complete Framework Reference for AI/LLM Agents
+
+> This file is the authoritative, self-contained guide to building production-grade
+> applications with **JustAPI** (v2.0.9). It is written for LLM agents and developers
+> who want to build complete applications without reading the entire source tree.
+>
+> JustAPI = Python web framework with a Rust core. **You write Python logic.
+> Rust does everything else** — networking, TLS, routing, validation,
+> serialization, SSE, database I/O, rate limiting.
+>
+> Version: 2.0.9 | License: MIT | Repo: https://github.com/swadhinbiswas/JustAPI
+
+---
+
+## 1. Installation
+
+```bash
+pip install justapi==2.0.9        # from PyPI (8 platforms incl. free-threaded 3.14t)
+uv pip install justapi            # uv users
+uvx justapi create my_app         # scaffold a full project
+```
+
+Requires Python ≥ 3.11 (abi3 wheel). The wheel bundles the entire Rust runtime —
+no separate binary, no uvicorn, no gunicorn needed.
+
+**Verify:**
+```python
+import justapi
+print(justapi.__version__)        # "2.0.9"
+```
+
+---
+
+## 2. Minimal App (the mental model)
+
+```python
+from justapi import JustAPIApp
+
+app = JustAPIApp()
+
+@app.get("/")
+def read_root():
+    return {"Hello": "World"}
+
+app.run()   # defaults to 127.0.0.1:8000
+```
+
+That is a complete server: routing, JSON serialization, OpenAPI docs at `/docs`,
+ReDoc at `/redoc`, all in Rust. `app.run()` blocks; bind explicitly with
+`app.run("0.0.0.0:8080")`.
+
+**The core contract:** handlers return Python objects (dict, list, str, int,
+Pydantic model, dataclass, Response). Rust serializes them to JSON. Exceptions
+become HTTP errors.
+
+---
+
+## 3. Routing — all methods
+
+```python
+from justapi import JustAPIApp
+
+app = JustAPIApp()
+
+@app.get("/items/{item_id}")            # path params: type-annotated → validated
+def read_item(item_id: int, q: str | None = None):   # query params auto-extracted
+    return {"item_id": item_id, "q": q}
+
+@app.post("/items", body_schema=ItemCreate)   # body validated (Schema or Pydantic model)
+def create_item(request):
+    data = request.json()              # parsed + validated body
+    return {"created": True, **data}
+
+@app.put("/items/{item_id}")
+@app.patch("/items/{item_id}")
+@app.delete("/items/{item_id}")
+@app.head("/health")
+@app.options("/anything")
+@app.trace("/trace")
+def handler(request): ...
+
+# HTTP QUERY method (RFC 10008)
+@app.query("/search")
+def search(request):
+    return {"results": []}
+
+# WebSocket
+@app.websocket("/ws")
+async def ws_handler(websocket):
+    await websocket.accept()
+    await websocket.send_text("hello")
+    await websocket.close()
+
+# Server-Sent Events (Python generator)
+@app.sse("/stream")
+def stream(request):
+    for i in range(10):
+        yield {"n": i}
+```
+
+**Path/query params:** declare them as function arguments with type annotations.
+`item_id: int` validates; `q: str | None = None` makes it optional; `request`
+gives full access to method, headers, body, query, path params, client, auth.
+
+---
+
+## 4. Request Body Validation (Pydantic bridge + native Schema)
+
+```python
+from pydantic import BaseModel, Field
+from justapi import JustAPIApp, Schema
+
+# Option A: Pydantic v2 models (FastAPI-compatible)
+class ItemCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    price: float = Field(..., ge=0)
+    tags: list[str] = []
+
+# Option B: native JustAPI Schema (validated in Rust — faster)
+class ItemCreateRust(Schema):
+    name: str = Field(..., min_length=1)
+    price: float = Field(..., ge=0)
+
+@app.post("/items", body_schema=ItemCreate)   # Pydantic v2 models work as body_schema
+def create(request):
+    item = request.json()                # validated dict (Rust engine validates)
+    return item
+
+@app.post("/items2", body_schema=ItemCreateRust)   # native Schema — validated in Rust
+def create2(request):
+    return request.json()
+```
+
+**IMPORTANT:** Pydantic models are validated via `body_schema=` (their JSON
+Schema is compiled in Rust). Unlike FastAPI, Pydantic models are NOT injected
+as handler arguments — read the validated body from `request.json()`. Native
+`justapi.Schema` subclasses work the same way (fastest path).
+
+Validation errors → `422` with RFC 9457-style detail. Handlers can also use
+`request["body"]` (parsed) or `request["body_raw"]` (bytes).
+
+---
+
+## 5. Dependencies & DI
+
+```python
+from justapi import Depends
+
+async def get_db():
+    return app.db
+
+def get_current_user(auth=Depends(get_auth)):
+    ...
+
+@app.get("/users/me")
+def read_me(user: dict = Depends(get_current_user)):
+    return user
+
+# Generator dependencies (yield) — cleanup runs after response
+async def get_session():
+    session = open_session()
+    try:
+        yield session
+    finally:
+        session.close()
+
+# Cached per-request
+@app.get("/x")
+def x(db=Depends(get_db, use_cache=True)):
+    ...
+```
+
+DI supports: sync/async functions, classes, generators (sync+async) with
+`finally` cleanup, sub-dependencies, and `Security(dep, scopes=[...])` for
+OAuth2 scopes.
+
+---
+
+## 6. Database — synchronous + NATIVE ASYNC
+
+```python
+app.set_database("postgres://user:pass@host/db")   # or sqlite://file.db, mysql://...
+app.connect_database()
+
+# In sync handlers (blocks the GIL worker, releases GIL during query):
+def handler(request):
+    rows = app.db.query("SELECT * FROM users WHERE id = ?", [1])
+    n = app.db.execute("UPDATE users SET name = ? WHERE id = ?", ["x", 1])
+
+# NATIVE ASYNC (recommended for async handlers — NEVER blocks the loop):
+@app.get("/users/{uid}")
+async def get_user(uid: int):
+    row = await app.db.query_async("SELECT * FROM users WHERE id = ?", [uid])
+    return row
+
+@app.post("/users")
+async def create_user(request):
+    n = await app.db.execute_async("INSERT INTO users (name) VALUES (?)", ["alice"])
+    return {"affected": n}
+
+# Transactions
+app.db.transaction([
+    ["UPDATE a SET x = 1", None],
+    ["UPDATE b SET y = 2", None],
+])
+```
+
+**Why query_async matters:** it runs on the DB's own multi-threaded tokio
+runtime with the GIL released for the whole execution. The asyncio loop is never
+blocked — measured **53× faster than the blocking path on slow queries**
+(320 vs 6 RPS). Use `query_async`/`execute_async` in every async handler.
+
+Supported DBs: SQLite, PostgreSQL, MySQL, DuckDB (via sqlx). Pooled, with
+migrations (`justapi create` scaffolds them), WAL pragmas for SQLite, busy
+timeout, and health checks.
+
+---
+
+## 7. Authentication & Security
+
+```python
+from justapi import JustAPIApp, Depends, Security
+from justapi.auth import JwtAuth, OAuth2PasswordBearer
+
+app = JustAPIApp()
+app.set_jwt_auth(secret="super-secret", algorithm="HS256")   # or RS256/ES256
+
+# JWT-protected route
+@app.get("/protected")
+def protected(request):
+    claims = request.auth_claims   # {"sub": ..., "role": ...}
+    return claims
+
+# OAuth2 password flow
+oauth2 = OAuth2PasswordBearer(tokenUrl="/token")
+
+@app.post("/token")
+def login(form: OAuth2PasswordRequestForm = Depends()):
+    ... # validate, issue JWT
+
+@app.get("/me")
+def me(user=Security(get_current_user, scopes=["read"])):
+    return user
+
+# Rate limiting (GCRA, Redis-distributed; feature: redis-rate-limit)
+from justapi import RateLimiter
+limiter = await RateLimiter.new_redis("redis://localhost:6379/0")
+result = await limiter.check_limit(key="user:123", limit=10, window_seconds=60)
+if not result.allowed:
+    raise HTTPException(status_code=429, detail="rate limit exceeded")
+
+# CORS
+app.add_cors(allow_origins=["https://example.com"], allow_methods=["GET", "POST"])
+
+# Security headers: HSTS, CSP, X-Frame-Options, nosniff — built-in
+```
+
+---
+
+## 8. Middleware
+
+```python
+@app.middleware("http")
+async def timing_middleware(request, call_next):
+    start = time.perf_counter()
+    response = await call_next(request)
+    response.headers["x-timing"] = str(time.perf_counter() - start)
+    return response
+
+# Built-in Rust middleware (near-zero overhead):
+#   CORS, SecurityHeaders, JwtAuth, RateLimiter, IpRateLimiter,
+#   CircuitBreaker (per-route), Compression (gzip/brotli/zstd), StaticDir
+```
+
+---
+
+## 9. Background Tasks, Scheduler, Streaming
+
+```python
+from justapi import BackgroundTasks
+
+@app.post("/send-email")
+def send(request, background: BackgroundTasks):
+    background.add_task(send_email_async, "user@example.com")
+    return {"queued": True}
+
+# Cron scheduler (native Rust scheduler — GIL released, UTC)
+app.schedule("0 */6 * * *", cleanup_job)     # 5-field cron, UTC
+app.every(3600, poll_upstream, url="https://...")   # interval job
+
+# Streaming responses
+@app.get("/stream")
+def stream(request):
+    def gen():
+        for i in range(100):
+            yield f"data: {i}\n\n"
+    return StreamingResponse(gen(), media_type="text/event-stream")
+
+# RUST-NATIVE SSE (zero Python per event — fastest path):
+app.sse_native("/events", count=1000, interval_ms=0)   # 1000 events, no delay
+
+# TokenStreamResponse for LLM token streaming with validation
+from justapi import TokenStreamResponse
+```
+
+---
+
+## 10. Advanced Features
+
+```python
+from justapi import JustAPIApp, native_async
+
+# @native_async: marks handlers for the fastest dispatch; on free-threaded
+# CPython 3.14t the dispatch runs in true parallel across cores.
+@app.get("/users/{uid}")
+@native_async
+async def get_user(request, uid: int):
+    return await app.db.query_async("SELECT * FROM users WHERE id = ?", [uid])
+
+# Class-based controllers
+from justapi import Controller, controller
+
+@controller("/api")
+class UsersController(Controller):
+    @route_get("/{uid}")
+    def get_user(self, uid: int): ...
+
+# APIRouter (sub-applications / multiple files)
+from justapi import APIRouter
+router = APIRouter(prefix="/v1")
+@router.get("/items")
+def items(): ...
+app.include_router(router)
+
+# Adaptive batching (bursty workloads)
+from justapi import adaptive_batch
+
+@app.post("/batch")
+@adaptive_batch(max_size=32, window_ms=10)
+def batch_handler(requests): ...
+
+# GraphQL / gRPC / JSON-RPC — all mountable
+app.graphql(path="/graphql")
+app.set_grpc_addr("0.0.0.0:50051")
+
+# HTTP/3 (QUIC) — only Python framework that ships it
+app.enable_http3("cert.pem", "key.pem")
+```
+
+---
+
+## 11. Error Handling
+
+```python
+from justapi import HTTPException, RequestValidationError
+
+@app.get("/items/{item_id}")
+def get(item_id: int):
+    if item_id < 0:
+        raise HTTPException(status_code=400, detail="negative id")
+    return {"id": item_id}
+
+# Custom exception handlers
+@app.exception_handler(MyError)
+def handle_my_error(request, exc):
+    return {"error": str(exc)}, 400
+
+# Status codes: return (body, status) tuples or Response(status_code=...)
+return {"done": True}, 201
+```
+
+---
+
+## 12. Testing
+
+```python
+from justapi import JustAPIApp, JustAPITestClient
+
+app = JustAPIApp()
+@app.get("/")
+def root(): return {"ok": True}
+
+client = JustAPITestClient(app)
+r = client.get("/")            # synchronous, in-process, no server needed
+assert r["status"] == 200
+
+# Async tests
+from justapi.testing import AsyncTestClient
+import asyncio
+
+async def main():
+    async with AsyncTestClient(app) as c:
+        r = await c.get("/")
+        assert r["status"] == 200
+asyncio.run(main())
+
+# Database testing helpers: ManagedDb, db_client fixtures (transactional)
+```
+
+---
+
+## 13. Deployment
+
+```bash
+# Multi-worker prefork (saturate all cores) — 1.88x at 4 workers
+justapi serve --workers 4 --scale
+
+# Docker (multi-stage, uv-based)
+docker build -t my-app .
+docker run -p 8000:8000 my-app
+
+# Kubernetes (Helm)
+helm install my-api helm/justapi/ --set image.repository=your-registry/app
+
+# Direct
+python main.py          # app.run("0.0.0.0:8000")
+```
+
+Production checklist: TLS via rustls (`app.run` + reverse proxy or
+`Server::with_tls`), health checks at `/live` `/ready`, OTel tracing +
+Prometheus metrics, circuit breakers for downstream deps, structured logging.
+
+---
+
+## 14. Performance Contract (verified numbers)
+
+| Metric | Value |
+|---|---|
+| Hello-world (native fast path) | **766k req/s** (p99 0.48ms, 12MB RSS) |
+| JSON echo | **782k req/s** |
+| Route lookup (500 routes) | 51 ns |
+| Native CRUD SELECT | 181k req/s (×125 vs FastAPI) |
+| Native async DB (slow query) | 320 RPS vs 6 RPS blocking (**53×**) |
+| Multi-worker (4 workers) | 1.88× throughput |
+| Free-threaded CPU-bound | 12.4× (GIL ceiling removed) |
+| vs Granian | 2.4× hello-world, 5.4× JSON echo |
+
+**Honest limits:** Python-handler path ~60-120k req/s (GIL-bound on CPython);
+light async handlers ~4-12k req/s (asyncio loop floor, same as every Python
+framework); LLM/inference claims are NOT verified (no real GPU run).
+
+---
+
+## 15. API Cheat-Sheet (quick lookup)
+
+```python
+# App lifecycle
+app = JustAPIApp(title="x", version="1.0")
+app.run("0.0.0.0:8000")
+app.set_database(url) / app.connect_database() / app.db
+app.add_cors(...) / app.set_jwt_auth(...) / app.add_exception_handler(...)
+app.sse_native(path, count, interval_ms) / app.enable_http3(cert, key)
+app.graphql(path) / app.include_router(router) / app.middleware("http")
+app.schedule(cron_expr, fn) / app.every(seconds, fn)
+RateLimiter.new_redis(url) / limiter.check_limit(key, limit, window_seconds)
+
+# Routing decorators
+@app.get/post/put/patch/delete/head/options/trace/query/sse/websocket(path, ...)
+#   kwargs: body_schema=, query_schema=, dependencies=[], middlewares=[],
+#           tags=[], summary=, description=, deprecated=, status_code=,
+#           responses={}, name=, include_in_schema=, native=True (Rust fast path)
+
+# Handler args (auto-injected by type/name)
+request          # full Request object
+item_id: int     # path param
+q: str = None    # query param
+body: Model      # validated body
+db=Depends(...)  # DI
+
+# DbPool methods
+db.query(sql, params=None) -> list[dict]
+db.execute(sql, params=None) -> int
+db.query_async(sql, params=None) -> awaitable list[dict]
+db.execute_async(sql, params=None) -> awaitable int
+db.transaction([[sql, params], ...]) -> final rows
+
+# Exports
+JustAPIApp, JustAPI, JustAPP, Depends, Security, APIRouter, Controller,
+controller, route_get/post/put/patch/delete/query/sse/websocket,
+native_async, adaptive_batch, Schema, pydantic_schema, BackgroundTasks,
+Scheduler, TokenStreamResponse, ValidatedStreamResponse, StreamingResponse,
+Response, HTMLResponse, JSONResponse, RedirectResponse, PlainTextResponse,
+HTTPException, RequestValidationError, JustAPITestClient, Database, DbPool,
+DbParam, RateLimiter, RateLimitResult, WebSocket, WebSocketState, Session,
+Jinja2Templates, __version__
+```
+
+---
+
+## 16. Architecture Notes (why it's fast)
+
+1. **Everything except your code runs in Rust.** Kernel → tokio → TLS (rustls)
+   → HTTP (hyper) → router (matchit, 51ns) → middleware (Rust) → your Python
+   handler → Rust serializer (serde_json/simd-json) → socket.
+2. **Native fast path:** routes with `native=True` + a Schema validate and
+   respond entirely in Rust — no Python at all (the 766k path).
+3. **GIL pool:** one persistent Python worker thread; sync handlers dispatch
+   there (GIL released during I/O). Free-threaded CPython auto-detected for
+   parallel dispatch.
+4. **Async handlers:** coroutines run on a single asyncio loop; completion is
+   callback-driven (no thread hop). Framework ops (DB via query_async, SSE via
+   sse_native) run on Rust runtimes — the loop never blocks.
+5. **Multi-worker prefork:** `justapi serve --workers N` binds one socket, forks
+   N processes, auto-scales. Each worker gets its own GIL.
+6. **Memory:** per-request arena + buffer pools; 12 MB RSS steady state.
+
+---
+
+## 17. Production Do's and Don'ts
+
+**DO:**
+- Use `query_async`/`execute_async` in async handlers (never `db.query` there)
+- Use `@native_async` on async handlers doing DB/IO/SSE work
+- Use `app.sse_native` for high-throughput event streams
+- Set JWT auth + rate limits + CORS before exposing anything
+- Use `--workers N` in production (N = cores)
+- Keep Pydantic models for FastAPI-style migration; `Schema` for max speed
+- Read BENCHMARKS.md before claiming performance numbers
+
+**DON'T:**
+- Don't call blocking `db.query()` from an async handler (freezes the loop)
+- Don't write your own JSON serialization (Rust does it faster)
+- Don't run `--reload` in production
+- Don't claim LLM/inference performance (unverified — no real GPU run)
+- Don't skip exception handlers for user input (422s are automatic, 500s are not)
+
+---
+
+## 18. Where to look for more
+
+| Need | Source |
+|---|---|
+| Full API docs | https://github.com/swadhinbiswas/JustAPI/tree/main/docs_site (161 pages) |
+| Performance ledger | BENCHMARKS.md (append-only, honest) |
+| Roadmap/status | PLAN.md (single source of truth, honesty-coded) |
+| Architecture decisions | DECISIONS.md (ADR-001 → ADR-093) |
+| Migration from FastAPI | docs_site: getting-started/migrating-from-fastapi |
+| Release history | CHANGELOG.md |
+
+---
+
+*This file is maintained to stay in sync with the codebase. If something here
+disagrees with the source, the source wins — file an issue.*
