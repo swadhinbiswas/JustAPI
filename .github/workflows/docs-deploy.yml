@@ -1,0 +1,40 @@
+name: Deploy Docs to Cloudflare Pages
+
+on:
+  push:
+    branches: [main]
+    paths: ['docs_site/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Build & Deploy Docs
+    runs-on: ubuntu-latest
+    # Requires repo secret CLOUDFLARE_API_TOKEN (token with Pages:Edit permission)
+    # and CLOUDFLARE_ACCOUNT_ID. Set both in Settings → Secrets → Actions.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: docs_site/package-lock.json
+
+      - name: Install dependencies
+        working-directory: docs_site
+        run: npm ci
+
+      - name: Build
+        working-directory: docs_site
+        run: npm run build
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy docs_site/dist --project-name=justapi-docs --branch=main

@@ -2,7 +2,7 @@ import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import sitemap from '@astrojs/sitemap';
 
-const site = 'https://justapi.dev';
+const site = 'https://justapi.pages.dev';
 
 export default defineConfig({
   site,
@@ -74,7 +74,7 @@ export default defineConfig({
         { tag: 'meta', attrs: { property: 'og:site_name', content: 'JustAPI' } },
         { tag: 'meta', attrs: { property: 'og:title', content: 'JustAPI — Built to Handle Pressure' } },
         { tag: 'meta', attrs: { property: 'og:description', content: 'Python web framework powered by Rust. Handles 700k+ requests per second. FastAPI alternative with 20× performance.' } },
-        { tag: 'meta', attrs: { property: 'og:image', content: 'https://justapi.dev/og-image.png' } },
+        { tag: 'meta', attrs: { property: 'og:image', content: 'https://justapi.pages.dev/og-image.png' } },
         { tag: 'meta', attrs: { property: 'og:image:width', content: '1200' } },
         { tag: 'meta', attrs: { property: 'og:image:height', content: '630' } },
         { tag: 'meta', attrs: { property: 'og:image:alt', content: 'JustAPI — Python web framework powered by Rust' } },
@@ -82,7 +82,7 @@ export default defineConfig({
         { tag: 'meta', attrs: { name: 'twitter:card', content: 'summary_large_image' } },
         { tag: 'meta', attrs: { name: 'twitter:title', content: 'JustAPI — Built to Handle Pressure' } },
         { tag: 'meta', attrs: { name: 'twitter:description', content: 'Python web framework powered by Rust. 700k+ requests per second. FastAPI alternative.' } },
-        { tag: 'meta', attrs: { name: 'twitter:image', content: 'https://justapi.dev/og-image.png' } },
+        { tag: 'meta', attrs: { name: 'twitter:image', content: 'https://justapi.pages.dev/og-image.png' } },
         {
           tag: 'script',
           attrs: { type: 'application/ld+json' },
