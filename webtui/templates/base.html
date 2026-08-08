@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en" data-webtui-theme="catppuccin" data-theme="catppuccin">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title }} — JustAPI</title>
+  <meta name="description" content="{{ description }}">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/ryanoasis/nerd-fonts@master/css/nerd-fonts-generated.css">
+  <link rel="stylesheet" href="/css/main.css">
+</head>
+<body>
+  <!-- ─── Terminal Navbar ─── -->
+  <header class="ja-navbar">
+    <div class="ja-navbar-bar">
+      <span class="ja-dot"></span><span class="ja-dot"></span><span class="ja-dot"></span>
+      <span class="ja-navbar-title">justapi — /docs</span>
+    </div>
+    <div class="ja-navbar-body">
+      <div class="ja-nav-brand">
+        <a href="/"><span class="nf">&#xf120;</span> JUSTAPI</a>
+      </div>
+      <nav class="ja-nav-links">
+        <a href="/">Home</a>
+        <a href="/getting-started/">Getting Started</a>
+        <a href="/tutorials/">Tutorials</a>
+        <a href="/api-reference/">API</a>
+        <a href="/deployment/">Deploy</a>
+        <a href="https://github.com/swadhinbiswas/JustAPI" target="_blank"><span class="nf">&#xf09b;</span></a>
+      </nav>
+    </div>
+  </header>
+
+  <div class="ja-layout">
+    <!-- ─── Left sidebar: docs nav ─── -->
+    <aside class="ja-sidebar">
+      <nav class="ja-nav-tree">
+        {{ sidebar }}
+      </nav>
+    </aside>
+
+    <!-- ─── Main content ─── -->
+    <main class="ja-content">
+      <article>
+        {{ content }}
+      </article>
+
+      <footer class="ja-footer">
+        <p>JustAPI v2.0.9 — MIT License · <a href="https://github.com/swadhinbiswas/JustAPI">github.com/swadhinbiswas/JustAPI</a></p>
+      </footer>
+    </main>
+
+    <!-- ─── Right sidebar: page TOC ─── -->
+    <aside class="ja-toc-sidebar">
+      <div class="ja-toc">
+        <div class="ja-toc-title">On this page</div>
+        {{ toc }}
+      </div>
+    </aside>
+  </div>
+
+  <!-- ─── Theme switcher ─── -->
+  <div class="ja-theme-switcher" id="themeSwitcher"></div>
+
+  <script src="/js/main.js"></script>
+</body>
+</html>
