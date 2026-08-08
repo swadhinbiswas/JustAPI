@@ -39,8 +39,8 @@
   <!-- JustAPI bar: 766k → height ~300 -->
   <g font-family="'Segoe UI', Arial, sans-serif">
     <rect x="170" y="100" width="90" height="300" rx="8" fill="url(#barJ)">
-      <animate attributeName="height" values="0;300" dur="1.2s" fill="freeze" calcMode="spline" keySplines="0.34 1.56 0.64 1"/>
-      <animate attributeName="y" values="400;100" dur="1.2s" fill="freeze" calcMode="spline" keySplines="0.34 1.56 0.64 1"/>
+      <animate attributeName="height" values="0;300" dur="1.2s" fill="freeze" calcMode="spline" keySplines="0.25 0.1 0.25 1"/>
+      <animate attributeName="y" values="400;100" dur="1.2s" fill="freeze" calcMode="spline" keySplines="0.25 0.1 0.25 1"/>
     </rect>
     <text x="215" y="88" text-anchor="middle" font-size="26" font-weight="800" fill="#f5a524">
       766k
@@ -51,8 +51,8 @@
 
     <!-- Granian: 314k → height 123 -->
     <rect x="330" y="277" width="90" height="123" rx="8" fill="url(#barO)">
-      <animate attributeName="height" values="0;123" dur="1.2s" begin="0.3s" fill="freeze" calcMode="spline" keySplines="0.34 1.56 0.64 1"/>
-      <animate attributeName="y" values="400;277" dur="1.2s" begin="0.3s" fill="freeze" calcMode="spline" keySplines="0.34 1.56 0.64 1"/>
+      <animate attributeName="height" values="0;123" dur="1.2s" begin="0.3s" fill="freeze" calcMode="spline" keySplines="0.25 0.1 0.25 1"/>
+      <animate attributeName="y" values="400;277" dur="1.2s" begin="0.3s" fill="freeze" calcMode="spline" keySplines="0.25 0.1 0.25 1"/>
     </rect>
     <text x="375" y="265" text-anchor="middle" font-size="22" font-weight="700" fill="#22d3ee">
       314k
@@ -63,8 +63,8 @@
 
     <!-- FastAPI: 36k → height 14 -->
     <rect x="490" y="386" width="90" height="14" rx="8" fill="url(#barM)">
-      <animate attributeName="height" values="0;14" dur="1.2s" begin="0.6s" fill="freeze" calcMode="spline" keySplines="0.34 1.56 0.64 1"/>
-      <animate attributeName="y" values="400;386" dur="1.2s" begin="0.6s" fill="freeze" calcMode="spline" keySplines="0.34 1.56 0.64 1"/>
+      <animate attributeName="height" values="0;14" dur="1.2s" begin="0.6s" fill="freeze" calcMode="spline" keySplines="0.25 0.1 0.25 1"/>
+      <animate attributeName="y" values="400;386" dur="1.2s" begin="0.6s" fill="freeze" calcMode="spline" keySplines="0.25 0.1 0.25 1"/>
     </rect>
     <text x="535" y="376" text-anchor="middle" font-size="18" font-weight="600" fill="#8b5cf6">
       36k
@@ -75,8 +75,8 @@
 
     <!-- Robyn: 39k -->
     <rect x="650" y="384" width="90" height="16" rx="8" fill="url(#barO)" opacity="0.8">
-      <animate attributeName="height" values="0;16" dur="1.2s" begin="0.9s" fill="freeze" calcMode="spline" keySplines="0.34 1.56 0.64 1"/>
-      <animate attributeName="y" values="400;384" dur="1.2s" begin="0.9s" fill="freeze" calcMode="spline" keySplines="0.34 1.56 0.64 1"/>
+      <animate attributeName="height" values="0;16" dur="1.2s" begin="0.9s" fill="freeze" calcMode="spline" keySplines="0.25 0.1 0.25 1"/>
+      <animate attributeName="y" values="400;384" dur="1.2s" begin="0.9s" fill="freeze" calcMode="spline" keySplines="0.25 0.1 0.25 1"/>
     </rect>
     <text x="695" y="374" text-anchor="middle" font-size="18" font-weight="600" fill="#22d3ee">
       39k

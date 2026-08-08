@@ -150,7 +150,7 @@ Every PR runs via `.github/workflows/wheels.yml`:
 7. `pytest` after wheel build (Python 3.12 + free-threaded 3.14t)
 8. Publish to PyPI via OIDC trusted publishing (on tagged releases)
 
-On release, `.github/workflows/publish.yml` handles the standalone publish matrix.
+On release, `.github/workflows/wheels.yml` builds the 9-platform wheel matrix and publishes to PyPI via OIDC trusted publishing (no token). Push a `v*` tag to trigger it.
 
 ## See Also
 

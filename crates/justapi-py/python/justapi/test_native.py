@@ -260,3 +260,39 @@ def test_native_async_db_concurrent_through_http():
         futs = [ex.submit(c.get, "/native") for _ in range(40)]
         results = [f.result() for f in futs]
     assert all(r["status"] == 200 for r in results), results
+
+
+def test_run_defaults_to_localhost_8000():
+    """app.run() with no args binds 127.0.0.1:8000 (README quickstart)."""
+    import threading
+    import time
+    import urllib.request
+    from justapi import JustAPIApp
+
+    app = JustAPIApp()
+
+    @app.get("/")
+    def root():
+        return {"Hello": "World"}
+
+    t = threading.Thread(target=app.run, daemon=True)
+    t.start()
+    try:
+        deadline = time.time() + 15
+        last = None
+        while time.time() < deadline:
+            try:
+                last = urllib.request.urlopen("http://127.0.0.1:8000/", timeout=2)
+                break
+            except Exception as e:
+                last = e
+                time.sleep(0.3)
+        assert last is not None and getattr(last, "status", None) == 200, f"server not reachable: {last}"
+    finally:
+        import socket
+        s = socket.socket()
+        try:
+            s.connect(("127.0.0.1", 8000))
+            s.close()
+        except Exception:
+            pass

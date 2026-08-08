@@ -27,7 +27,7 @@
       <circle cx="600" cy="70" r="34" fill="#1e293b" stroke="#f5a524" stroke-width="2"/>
       <text x="600" y="66" text-anchor="middle" font-size="20">⚡</text>
       <text x="600" y="86" text-anchor="middle" font-size="11" fill="#f5a524" font-weight="700">766k req/s</text>
-      <circle r="3" fill="#f5a524">
+      <circle cx="600" cy="70" r="3" fill="#f5a524">
         <animate attributeName="opacity" values="1;0.2;1" dur="1.6s" repeatCount="indefinite"/>
       </circle>
       <text x="600" y="125" text-anchor="middle" font-size="12" fill="#94a3b8">hello-world native</text>
@@ -37,7 +37,7 @@
       <circle cx="1130" cy="270" r="34" fill="#1e293b" stroke="#22d3ee" stroke-width="2"/>
       <text x="1130" y="266" text-anchor="middle" font-size="20">🗄️</text>
       <text x="1130" y="286" text-anchor="middle" font-size="11" fill="#22d3ee" font-weight="700">native DB awaits</text>
-      <circle r="3" fill="#22d3ee">
+      <circle cx="1130" cy="270" r="3" fill="#22d3ee">
         <animate attributeName="opacity" values="1;0.2;1" dur="1.8s" repeatCount="indefinite"/>
       </circle>
       <text x="1130" y="325" text-anchor="middle" font-size="12" fill="#94a3b8">query_async · 53x</text>
@@ -47,7 +47,7 @@
       <circle cx="600" cy="470" r="34" fill="#1e293b" stroke="#8b5cf6" stroke-width="2"/>
       <text x="600" y="466" text-anchor="middle" font-size="20">🧠</text>
       <text x="600" y="486" text-anchor="middle" font-size="11" fill="#8b5cf6" font-weight="700">free-threaded</text>
-      <circle r="3" fill="#8b5cf6">
+      <circle cx="600" cy="470" r="3" fill="#8b5cf6">
         <animate attributeName="opacity" values="1;0.2;1" dur="2s" repeatCount="indefinite"/>
       </circle>
       <text x="600" y="525" text-anchor="middle" font-size="12" fill="#94a3b8">CPython 3.14t · 12.4x CPU</text>
@@ -57,7 +57,7 @@
       <circle cx="70" cy="270" r="34" fill="#1e293b" stroke="#e6522c" stroke-width="2"/>
       <text x="70" y="266" text-anchor="middle" font-size="20">🔐</text>
       <text x="70" y="286" text-anchor="middle" font-size="11" fill="#e6522c" font-weight="700">HTTP/3</text>
-      <circle r="3" fill="#e6522c">
+      <circle cx="70" cy="270" r="3" fill="#e6522c">
         <animate attributeName="opacity" values="1;0.2;1" dur="2.2s" repeatCount="indefinite"/>
       </circle>
       <text x="70" y="325" text-anchor="middle" font-size="12" fill="#94a3b8">QUIC, no one else ships it</text>
@@ -68,7 +68,7 @@
       <circle cx="850" cy="130" r="34" fill="#1e293b" stroke="#22d3ee" stroke-width="2"/>
       <text x="850" y="126" text-anchor="middle" font-size="20">📡</text>
       <text x="850" y="146" text-anchor="middle" font-size="11" fill="#22d3ee" font-weight="700">native SSE</text>
-      <circle r="3" fill="#22d3ee">
+      <circle cx="1130" cy="270" r="3" fill="#22d3ee">
         <animate attributeName="opacity" values="1;0.2;1" dur="1.9s" repeatCount="indefinite"/>
       </circle>
       <text x="850" y="185" text-anchor="middle" font-size="12" fill="#94a3b8">sse_native · 0 Python/event</text>
@@ -78,7 +78,7 @@
       <circle cx="350" cy="130" r="34" fill="#1e293b" stroke="#f5a524" stroke-width="2"/>
       <text x="350" y="126" text-anchor="middle" font-size="20">🧩</text>
       <text x="350" y="146" text-anchor="middle" font-size="11" fill="#f5a524" font-weight="700">native CRUD</text>
-      <circle r="3" fill="#f5a524">
+      <circle cx="600" cy="70" r="3" fill="#f5a524">
         <animate attributeName="opacity" values="1;0.2;1" dur="2.1s" repeatCount="indefinite"/>
       </circle>
       <text x="350" y="185" text-anchor="middle" font-size="12" fill="#94a3b8">181k SELECT · 125x FastAPI</text>
@@ -88,7 +88,7 @@
       <circle cx="350" cy="410" r="34" fill="#1e293b" stroke="#8b5cf6" stroke-width="2"/>
       <text x="350" y="406" text-anchor="middle" font-size="20">🚀</text>
       <text x="350" y="426" text-anchor="middle" font-size="11" fill="#8b5cf6" font-weight="700">multi-worker</text>
-      <circle r="3" fill="#8b5cf6">
+      <circle cx="600" cy="470" r="3" fill="#8b5cf6">
         <animate attributeName="opacity" values="1;0.2;1" dur="2.3s" repeatCount="indefinite"/>
       </circle>
       <text x="350" y="465" text-anchor="middle" font-size="12" fill="#94a3b8">--workers N · 1.88x @4</text>
@@ -98,7 +98,7 @@
       <circle cx="850" cy="410" r="34" fill="#1e293b" stroke="#e6522c" stroke-width="2"/>
       <text x="850" y="406" text-anchor="middle" font-size="20">📋</text>
       <text x="850" y="426" text-anchor="middle" font-size="11" fill="#e6522c" font-weight="700">OpenAPI 3.1</text>
-      <circle r="3" fill="#e6522c">
+      <circle cx="70" cy="270" r="3" fill="#e6522c">
         <animate attributeName="opacity" values="1;0.2;1" dur="2.5s" repeatCount="indefinite"/>
       </circle>
       <text x="850" y="465" text-anchor="middle" font-size="12" fill="#94a3b8">Pydantic v2 bridge</text>

@@ -55,7 +55,7 @@ This is ideal for CI pipelines, quick prototyping, and ephemeral environments.
 
 ```bash
 python -c "import justapi; print(justapi.__version__)"
-# Output: 2.0.8
+# Output: 2.0.9
 ```
 
 ## Install CLI Tooling (`justapi-cli`)
@@ -68,7 +68,7 @@ cargo install justapi-cli
 
 # Verify
 justapi --version
-# Output: justapi 2.0.8
+# Output: justapi 2.0.9
 ```
 
 ## Docker

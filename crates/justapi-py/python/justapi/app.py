@@ -1845,7 +1845,7 @@ class JustAPIApp:
         register_system_routes(self)
         return self
 
-    def run(self, addr: str, max_body_size: int = 50 * 1024 * 1024):
+    def run(self, addr: str = "127.0.0.1:8000", max_body_size: int = 50 * 1024 * 1024):
         # Execute startup handlers (FastAPI on_event parity).
         for handler in self._startup_handlers:
             if inspect.iscoroutinefunction(handler):

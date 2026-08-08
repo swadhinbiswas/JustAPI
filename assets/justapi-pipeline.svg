@@ -75,19 +75,19 @@
     </marker>
 
     <!-- moving packet dots -->
-    <circle r="4" fill="#22d3ee" filter="url(#glow2)">
+    <circle cx="170" cy="111" r="4" fill="#22d3ee" filter="url(#glow2)">
       <animateMotion dur="2s" repeatCount="indefinite" path="M170,111 L218,111"/>
     </circle>
-    <circle r="4" fill="#22d3ee" filter="url(#glow2)">
+    <circle cx="370" cy="111" r="4" fill="#22d3ee" filter="url(#glow2)">
       <animateMotion dur="2.3s" repeatCount="indefinite" path="M370,111 L418,111"/>
     </circle>
-    <circle r="4" fill="#22d3ee" filter="url(#glow2)">
+    <circle cx="570" cy="111" r="4" fill="#22d3ee" filter="url(#glow2)">
       <animateMotion dur="2.6s" repeatCount="indefinite" path="M570,111 L618,111"/>
     </circle>
-    <circle r="4" fill="#22d3ee" filter="url(#glow2)">
+    <circle cx="770" cy="111" r="4" fill="#22d3ee" filter="url(#glow2)">
       <animateMotion dur="2.9s" repeatCount="indefinite" path="M770,111 L818,111"/>
     </circle>
-    <circle r="4" fill="#22d3ee" filter="url(#glow2)">
+    <circle cx="970" cy="111" r="4" fill="#22d3ee" filter="url(#glow2)">
       <animateMotion dur="3.2s" repeatCount="indefinite" path="M970,111 L1018,111"/>
     </circle>
   </g>
