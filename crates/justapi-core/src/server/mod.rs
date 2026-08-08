@@ -957,7 +957,8 @@ impl Server {
     }
 
     /// Run the server on an already-bound Unix domain socket listener (used by
-    /// the prefork supervisor to hand a UDS fd to a worker child).
+    /// the prefork supervisor to hand a UDS fd to a worker child). Unix only.
+    #[cfg(unix)]
     pub async fn run_on_uds(mut self, listener: tokio::net::UnixListener) -> Result<()> {
         if let Some(router) = self.router.take() {
             let pool = Arc::new(BufferPool::new());
@@ -1734,6 +1735,7 @@ async fn serve_http(
 /// previous run (a common footgun — `bind` fails with EADDRINUSE on an existing
 /// socket path). The socket file is unlinked when the listener is dropped.
 #[cfg(unix)]
+#[cfg(unix)]
 pub async fn bind_unix_listener(path: &std::path::Path) -> Result<tokio::net::UnixListener> {
     // Remove a leftover socket file so re-start doesn't fail with EADDRINUSE.
     if path.exists() {
@@ -1771,6 +1773,7 @@ impl Drop for UnixSocketGuard {
 /// **IMPORTANT:** This duplicates `serve_http` above. A future refactoring
 /// should extract the common accept loop into a generic function parameterized
 /// over the listener type. See P2-3 in deepanalysis.md.
+#[cfg(unix)]
 #[cfg(unix)]
 async fn serve_unix(
     listener: tokio::net::UnixListener,
@@ -2065,6 +2068,7 @@ mod tests {
     // shared `serve_connection` path through `serve_unix`.
     #[cfg(all(unix, not(miri)))]
     #[tokio::test]
+    #[cfg(unix)]
     async fn test_unix_socket_serves_http() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 

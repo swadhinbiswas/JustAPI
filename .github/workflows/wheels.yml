@@ -145,6 +145,13 @@ jobs:
           maturin build --release --out dist $ZIG --target ${{ matrix.target }} \
             $INTERP ${{ matrix.features || '' }}
       - name: Install wheel & test
+        # Only rows where the wheel is installable on the runner itself:
+        #   ubuntu x86_64-gnu (glibc matches, incl. the 3.14t row)
+        #   macos aarch64 (runner is arm64)
+        #   windows x64 (runner is x64)
+        # Skipped: musllinux wheels (can't install on the glibc runner),
+        # linux aarch64, and macos x86_64 (cross-built, arm64 runner).
+        if: matrix.target == 'x86_64-unknown-linux-gnu' || matrix.target == 'aarch64-apple-darwin' || matrix.target == 'x86_64-pc-windows-msvc'
         shell: bash
         working-directory: crates/justapi-py
         run: |
