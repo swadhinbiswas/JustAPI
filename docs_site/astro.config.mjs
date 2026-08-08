@@ -26,6 +26,9 @@ export default defineConfig({
         { icon: 'x.com', label: 'X (Twitter)', href: 'https://x.com/justapidev' },
       ],
       customCss: ['./src/styles/custom.css'],
+      components: {
+        PageFrame: './src/components/PageFrame.astro',
+      },
       editLink: {
         baseUrl: 'https://github.com/swadhinbiswas/JustAPI/edit/main/docs_site',
       },
