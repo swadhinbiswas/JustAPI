@@ -4,55 +4,54 @@ description: Python web framework powered by Rust. 766k req/s hello-world. FastA
 template: splash
 ---
 
-<div class="ja-hero" data-reveal>
-  <div class="ja-hero-badge">
-    <span class="dot"></span>
-    v2.0.9 · published on PyPI · 8 platforms
-  </div>
-  <h1 data-hero-title>
+<div class="ja-hero">
+  <span is="badge" variant="green">v2.0.9 · published on PyPI · 8 platforms</span>
+  <h1>
     Python writes the logic.<br/>
-    <span class="grad">Rust does everything else.</span>
+    <span class="accent">Rust does everything else.</span>
   </h1>
   <p class="ja-hero-sub">
     JustAPI is a Python web framework with a Rust core. One import, zero config —
     routing, TLS, validation, serialization and the server itself run in Rust.
   </p>
   <div class="ja-hero-actions">
-    <a class="ja-btn ja-btn--primary" href="/getting-started/overview/">Get Started →</a>
-    <a class="ja-btn ja-btn--ghost" href="https://github.com/swadhinbiswas/JustAPI" target="_blank">GitHub ↗</a>
+    <a href="/getting-started/overview/" is="button" size="large">Get Started →</a>
+    <a href="https://github.com/swadhinbiswas/JustAPI" is="button" box="" size="large">GitHub ↗</a>
   </div>
 </div>
 
-<div class="ja-stats" data-reveal-group>
-  <div class="ja-stat" data-reveal-item>
-    <div class="ja-stat-value" data-count="766" data-suffix="k">0</div>
+## Performance
+
+<div class="ja-stats">
+  <div class="ja-stat">
+    <div class="ja-stat-value">766k</div>
     <div class="ja-stat-label">req/s hello-world</div>
   </div>
-  <div class="ja-stat" data-reveal-item>
-    <div class="ja-stat-value" data-count="782" data-suffix="k">0</div>
+  <div class="ja-stat">
+    <div class="ja-stat-value">782k</div>
     <div class="ja-stat-label">req/s JSON echo</div>
   </div>
-  <div class="ja-stat" data-reveal-item>
-    <div class="ja-stat-value" data-count="2.4" data-decimals="1" data-suffix="x">0</div>
+  <div class="ja-stat">
+    <div class="ja-stat-value">2.4x</div>
     <div class="ja-stat-label">faster than Granian</div>
   </div>
-  <div class="ja-stat" data-reveal-item>
-    <div class="ja-stat-value" data-count="53" data-suffix="x">0</div>
-    <div class="ja-stat-label">native async DB awaits</div>
+  <div class="ja-stat">
+    <div class="ja-stat-value">53x</div>
+    <div class="ja-stat-label">native async DB</div>
   </div>
-  <div class="ja-stat" data-reveal-item>
-    <div class="ja-stat-value" data-count="181" data-suffix="k">0</div>
+  <div class="ja-stat">
+    <div class="ja-stat-value">181k</div>
     <div class="ja-stat-label">native CRUD SELECT</div>
   </div>
-  <div class="ja-stat" data-reveal-item>
-    <div class="ja-stat-value" data-count="12" data-suffix=" MB">0</div>
+  <div class="ja-stat">
+    <div class="ja-stat-value">12MB</div>
     <div class="ja-stat-label">resident memory</div>
   </div>
 </div>
 
-<div class="ja-section" data-reveal>Install in seconds</div>
+## Quick start
 
-<div class="ja-tabs" data-tabs data-reveal>
+<div class="ja-tabs">
   <div class="ja-tabs-bar">
     <button class="ja-tab-btn" data-tab-btn="pip" data-active="true">pip</button>
     <button class="ja-tab-btn" data-tab-btn="uv">uv</button>
@@ -79,109 +78,107 @@ cd my_app && python app/main.py
   </div>
 </div>
 
-<div class="ja-section" data-reveal>Minimal app</div>
+## Minimal app
 
-<div class="ja-terminal" data-terminal data-reveal>
+<div class="ja-terminal">
   <div class="ja-terminal-bar">
-    <span class="ja-terminal-dot"></span>
-    <span class="ja-terminal-dot"></span>
-    <span class="ja-terminal-dot"></span>
+    <span>●</span><span>●</span><span>●</span>
     <span class="ja-terminal-title">main.py</span>
   </div>
   <div class="ja-terminal-body">
-    <div data-term-line><span class="cm">from</span> justapi <span class="cm">import</span> JustAPIApp</div>
-    <div data-term-line>&nbsp;</div>
-    <div data-term-line>app = JustAPIApp()</div>
-    <div data-term-line>&nbsp;</div>
-    <div data-term-line><span class="cm">@app.get</span>(<span class="ok">"/"</span>)</div>
-    <div data-term-line><span class="cm">def</span> hello():</div>
-    <div data-term-line>&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm">return</span> &#123;<span class="ok">"Hello"</span>: <span class="ok">"World"</span>&#125;</div>
-    <div data-term-line>&nbsp;</div>
-    <div data-term-line>app.run()<span data-cursor style="display:inline-block">▌</span></div>
-    <div data-term-line><span class="ok">✓</span> <span class="dim">server started · /docs · /redoc · OpenAPI auto</span></div>
+    <span class="cm">from</span> justapi <span class="cm">import</span> JustAPIApp<br/>
+    <br/>
+    app = JustAPIApp()<br/>
+    <br/>
+    <span class="cm">@app.get</span>(<span class="ok">"/"</span>)<br/>
+    <span class="cm">def</span> hello():<br/>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="cm">return</span> &#123;<span class="ok">"Hello"</span>: <span class="ok">"World"</span>&#125;<br/>
+    <br/>
+    app.run()<br/>
+    <span class="ok">✓</span> <span class="dim">server started · /docs · /redoc · OpenAPI auto</span>
   </div>
 </div>
 
-<div class="ja-section" data-reveal>Benchmarks</div>
+## Benchmarks
 
-<div class="ja-bars" data-reveal>
+<div class="ja-bars">
   <div class="ja-bar-row ja-bar-row--winner">
     <span class="ja-bar-label">JustAPI</span>
-    <div class="ja-bar-track"><div class="ja-bar-fill" data-bar data-w="100%" data-delay="0"></div></div>
+    <div class="ja-bar-track"><div class="ja-bar-fill" data-w="100%"></div></div>
     <span class="ja-bar-value">766k</span>
   </div>
   <div class="ja-bar-row">
     <span class="ja-bar-label">Granian</span>
-    <div class="ja-bar-track"><div class="ja-bar-fill" data-bar data-w="41%" data-delay="150"></div></div>
+    <div class="ja-bar-track"><div class="ja-bar-fill" data-w="41%"></div></div>
     <span class="ja-bar-value">314k</span>
   </div>
   <div class="ja-bar-row">
     <span class="ja-bar-label">Robyn</span>
-    <div class="ja-bar-track"><div class="ja-bar-fill" data-bar data-w="5%" data-delay="300"></div></div>
+    <div class="ja-bar-track"><div class="ja-bar-fill" data-w="5%"></div></div>
     <span class="ja-bar-value">39k</span>
   </div>
   <div class="ja-bar-row">
     <span class="ja-bar-label">FastAPI</span>
-    <div class="ja-bar-track"><div class="ja-bar-fill" data-bar data-w="5%" data-delay="450"></div></div>
+    <div class="ja-bar-track"><div class="ja-bar-fill" data-w="5%"></div></div>
     <span class="ja-bar-value">36k</span>
   </div>
 </div>
 
-<p style="font-size: 0.8rem; color: var(--ja-muted); margin-top: -0.5rem;">
+<blockquote>
   hello-world, 100 concurrent connections, 30s, same hardware — full methodology in <a href="https://github.com/swadhinbiswas/JustAPI/blob/main/BENCHMARKS.md">BENCHMARKS.md</a>
-</p>
+</blockquote>
 
-<div class="ja-section" data-reveal>Features</div>
+## Features
 
-<div class="ja-grid" data-reveal-group>
-  <div class="ja-card" data-reveal-item>
+<div class="ja-grid">
+  <div class="ja-card">
     <div class="ja-card-icon">⚡</div>
     <h3>Rust core</h3>
     <p>Networking, TLS, routing, serialization run in Rust. Python executes only your logic.</p>
   </div>
-  <div class="ja-card" data-reveal-item>
+  <div class="ja-card">
     <div class="ja-card-icon">🗄️</div>
     <h3>Native async DB</h3>
     <p><code>await app.db.query_async()</code> runs SQL on Rust's tokio runtime — 53× faster on slow queries.</p>
   </div>
-  <div class="ja-card" data-reveal-item>
+  <div class="ja-card">
     <div class="ja-card-icon">📡</div>
     <h3>Rust-native SSE</h3>
     <p><code>app.sse_native()</code> streams events with zero Python per event.</p>
   </div>
-  <div class="ja-card" data-reveal-item>
+  <div class="ja-card">
     <div class="ja-card-icon">🚀</div>
     <h3>Multi-worker</h3>
     <p><code>justapi serve --workers N</code> — 1.88× throughput at 4 workers, auto-scale.</p>
   </div>
-  <div class="ja-card" data-reveal-item>
+  <div class="ja-card">
     <div class="ja-card-icon">🧠</div>
     <h3>Free-threaded</h3>
     <p>CPython 3.14t wheels — CPU-bound Python scales with cores, 12.4× measured.</p>
   </div>
-  <div class="ja-card" data-reveal-item>
+  <div class="ja-card">
     <div class="ja-card-icon">🔐</div>
     <h3>Security built-in</h3>
     <p>JWT, rate limiting, CORS, security headers — all in Rust middleware.</p>
   </div>
-  <div class="ja-card" data-reveal-item>
+  <div class="ja-card">
     <div class="ja-card-icon">🛡️</div>
     <h3>Production-ready</h3>
     <p>Circuit breakers, OTel tracing, Prometheus metrics, health checks.</p>
   </div>
-  <div class="ja-card" data-reveal-item>
+  <div class="ja-card">
     <div class="ja-card-icon">📋</div>
     <h3>Type-checked</h3>
     <p><code>py.typed</code> + complete stubs — mypy-clean on user code.</p>
   </div>
-  <div class="ja-card" data-reveal-item>
+  <div class="ja-card">
     <div class="ja-card-icon">🔗</div>
     <h3>FastAPI-compatible</h3>
     <p>Same decorators, Pydantic models, Depends. Migrate with one import.</p>
   </div>
 </div>
 
-<div class="ja-section" data-reveal>Framework comparison</div>
+## Framework comparison
 
 | | FastAPI | JustAPI |
 |---|---|---|
@@ -191,8 +188,10 @@ cd my_app && python app/main.py
 | **Native DB SELECT** | Python driver | **181k req/s (×125)** |
 | **Memory** | 29 MB | **12 MB** |
 
-<div class="ja-cta" data-reveal>
-  <div class="ja-cta-title">Ready to build something fast?</div>
-  <p class="ja-cta-sub">One import. Rust underneath. Zero config.</p>
-  <a class="ja-btn ja-btn--primary" href="/getting-started/overview/">Get Started →</a>
+<div class="ja-cta">
+  <h2>Ready to build something fast?</h2>
+  <p>One import. Rust underneath. Zero config.</p>
+  <a href="/getting-started/overview/" is="button" size="large">Get Started →</a>
 </div>
+
+

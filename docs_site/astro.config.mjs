@@ -26,9 +26,6 @@ export default defineConfig({
         { icon: 'x.com', label: 'X (Twitter)', href: 'https://x.com/justapidev' },
       ],
       customCss: ['./src/styles/custom.css'],
-      components: {
-        PageFrame: './src/components/PageFrame.astro',
-      },
       editLink: {
         baseUrl: 'https://github.com/swadhinbiswas/JustAPI/edit/main/docs_site',
       },
@@ -36,10 +33,11 @@ export default defineConfig({
         {
           tag: 'script',
           attrs: { is: 'inline' },
-          content: `// JustAPI theme switcher (dark/light/dracula/rose-pine/warm)
+          content: `// JustAPI theme switcher (webtui themes)
 (function () {
-  var THEMES = ['dark', 'light', 'dracula', 'rose-pine', 'warm'];
+  var THEMES = ['dark', 'light', 'catppuccin', 'nord', 'gruvbox'];
   function apply(t) {
+    document.documentElement.setAttribute('data-webtui-theme', t);
     document.documentElement.setAttribute('data-theme', t);
     try { localStorage.setItem('ja-theme', t); } catch (e) {}
     document.querySelectorAll('.ja-theme-btn').forEach(function (b) {
@@ -54,7 +52,7 @@ export default defineConfig({
     w.className = 'ja-theme-switcher';
     THEMES.forEach(function (t) {
       var b = document.createElement('button');
-      b.className = 'ja-theme-btn ja-theme-btn--' + (t === 'rose-pine' ? 'rosepine' : t);
+      b.className = 'ja-theme-btn ja-theme-btn--' + (t === 'catppuccin' ? 'catppuccin' : t);
       b.dataset.theme = t;
       b.title = t;
       b.setAttribute('aria-label', 'Theme: ' + t);
@@ -62,7 +60,7 @@ export default defineConfig({
       w.appendChild(b);
     });
     document.body.appendChild(w);
-    apply(saved || (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'));
+    apply(saved || 'dark');
   });
 })();`,
         },
