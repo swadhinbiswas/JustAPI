@@ -5,16 +5,54 @@ All notable changes to JustAPI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.0.8] - 2026-08-06
+## [2.0.9] - 2026-08-08
 
-### Added (2026-08-07)
-- **Native async DB awaits** — `app.db.query_async(sql, params)` / `app.db.execute_async(...)`: awaitable DB ops on the DB's own tokio runtime, GIL released, loop never blocked. **53× faster than the blocking path on slow queries** (320 vs 6 RPS, ADR-093)
-- **Multi-worker prefork verified** — `justapi serve --workers N --scale`: 4 workers = 1.88× throughput (99.7k RPS), auto-scale respawns (benchmarked 2026-08-07)
-- **Type-checked DX** — `py.typed` marker + mypy-clean `.pyi` stubs (routes, `app.db`, `native_async`, `sse_native` all typed)
-- **Scaffold demos differentiators** — `justapi create` generates a CRUD app exercising `query_async`, `@native_async`, and Rust-native SSE
-- **Rust-native SSE streaming** — `app.sse_native(path, count, interval_ms)`: events generated entirely in Rust, zero Python per event (ADR-088)
-- **`@native_async` decorator** — marks async handlers for the fastest dispatch; true parallel dispatch on free-threaded CPython (ADR-089)
-- **Callback-driven async resolution** — `_DoneNotifier` fires on coroutine completion; no blocking wait, no thread hop (ADR-086)
+### Added
+
+**Native async DB awaits — the headliner (ADR-093)**
+- `app.db.query_async(sql, params)` / `app.db.execute_async(...)` — awaitable DB operations that run on the DB's own multi-threaded tokio runtime with the GIL released for the whole execution. The asyncio loop is never blocked, so slow queries (Postgres, network DBs) no longer serialize other requests.
+- **Measured: 53× faster than the blocking path on slow queries** (320 vs 6 RPS, 2M-row CTE benchmark).
+
+**Rust-native SSE streaming (ADR-088)**
+- `app.sse_native(path, count=10, interval_ms=100)` — events generated entirely in Rust (tokio + mpsc + stream). Zero Python, zero GIL, zero pump per event.
+
+**`@native_async` decorator (ADR-089)**
+- Marks async handlers for the fastest dispatch path; on free-threaded CPython (3.14t) the dispatch runs in true parallel (available_parallelism workers, ADR-087).
+
+**Callback-driven async resolution (ADR-086)**
+- `_DoneNotifier` fires the instant a coroutine completes — the async path no longer blocks a thread or polls; one less thread hop per async request.
+
+**Type-checked DX**
+- `py.typed` marker + fully-typed `.pyi` stubs — mypy-clean on user code (`app.get`, `app.db`, `native_async`, `sse_native`, `query_async` all typed). Fixed 200+ pre-existing stub errors (implicit-Optional, missing imports, duplicate defs).
+
+**Scaffold demos the differentiators**
+- `justapi create` now generates a CRUD project that exercises `query_async`, `@native_async`, and Rust-native SSE out of the box.
+
+**Multi-worker prefork — verified with data**
+- `justapi serve --workers N --scale`: 4 workers = **1.88× throughput** (99.7k RPS vs 53k, keep-alive static), auto-scale respawns verified.
+
+**Modern README with animated SVG diagrams**
+- Animated hero (matrix rain + metrics), request-pipeline diagram, benchmark chart, feature matrix — all SMIL-only (GitHub-safe, no scripts).
+
+### CI & Release Infrastructure
+- **OIDC trusted publishing** — `wheels.yml` publishes to PyPI with zero tokens (GitHub → PyPI trusted publisher, environment `pypi`). Tag push = build → publish → GitHub Release.
+- **9-platform wheel matrix green end-to-end** — manylinux/musllinux × x86_64/aarch64, macOS arm64 + x86_64 (zig cross), Windows x64, free-threaded 3.14t. Every row builds, tests, and uploads.
+- **Windows build fixed** — Unix-only server APIs (`run_on_uds`, `serve_unix`, `bind_unix_listener`, UDS test) are now `#[cfg(unix)]`-gated; the crate compiles clean on Windows.
+- **CI hardening** — replaced PyO3/maturin-action (unsupported inputs, broken venv dance) with direct maturin + `--zig`; zig downloaded from ziglang.org (setup-zig mirrors were down); fixed GitHub bool-vs-string matrix gotchas; cross-platform wheel smoke tests.
+- **Repo hygiene** — 160 MB of wheel artifacts + debug logs purged from git history (`.git` 225 MB → 61 MB).
+
+### Changed
+- `pyproject.toml` project URLs corrected to `swadhinbiswas/JustAPI`.
+
+### Experiments recorded (no code shipped)
+- ADR-090 — native-awaitables experiment: every bridge/driver approach measured, none beats the asyncio loop; HTTP A/B shows justapi already beats Granian on real async workloads (1ms-sleep: 3.9k vs 2.9k RPS).
+- ADR-091 — multiplexing Rust coroutine driver: 29× slower per-await than asyncio (16µs vs 0.56µs); asyncio's stepping is the C-API floor.
+- ADR-092 — multi-loop async dispatch A/B: neutral-to-worse (GIL worker is the single dispatch point); reverted, `JUSTAPI_ASYNC_LOOPS` kept for experiments.
+
+### Fixed
+- **Unix-only server APIs now cfg-gated** (Windows compile fix — see CI section).
+
+## [2.0.8] - 2026-08-06
 
 ### Security Fixes
 - **CRITICAL:** Fixed global panic hook race condition in `panic.rs` (P0-1)

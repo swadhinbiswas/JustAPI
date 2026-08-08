@@ -25,7 +25,7 @@ Usage:
 
 """
 
-__version__ = "2.0.8"
+__version__ = "2.0.9"
 
 # The compiled core MUST be imported first: submodules (auth, testing, ...)
 # do `from ._justapi import ...`, and on free-threaded builds a submodule
