@@ -10,7 +10,7 @@
     <img src="https://github.com/swadhinbiswas/JustAPI/actions/workflows/wheels.yml/badge.svg" alt="Wheels & Release">
   </a>
   <a href="https://pypi.org/project/justapi/">
-    <img src="https://img.shields.io/badge/pypi-2.0.8-blue.svg?logo=pypi&logoColor=white" alt="PyPI">
+    <img src="https://img.shields.io/badge/pypi-2.0.9-blue.svg?logo=pypi&logoColor=white" alt="PyPI">
   </a>
   <a href="https://www.python.org/downloads/">
     <img src="https://img.shields.io/badge/python-3.11%20|%203.12%20|%203.13%20|%203.14-blue.svg?logo=python&logoColor=white" alt="Python">
