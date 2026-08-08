@@ -2729,7 +2729,7 @@ dependencies = [
 
 [[package]]
 name = "justapi-bench"
-version = "2.0.8"
+version = "2.0.9"
 dependencies = [
  "anyhow",
  "clap",
@@ -2744,7 +2744,7 @@ dependencies = [
 
 [[package]]
 name = "justapi-cli"
-version = "2.0.8"
+version = "2.0.9"
 dependencies = [
  "anyhow",
  "clap",
@@ -2764,7 +2764,7 @@ dependencies = [
 
 [[package]]
 name = "justapi-core"
-version = "2.0.8"
+version = "2.0.9"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -2833,7 +2833,7 @@ dependencies = [
 
 [[package]]
 name = "justapi-inference"
-version = "2.0.8"
+version = "2.0.9"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -2853,7 +2853,7 @@ dependencies = [
 
 [[package]]
 name = "justapi-py"
-version = "2.0.8"
+version = "2.0.9"
 dependencies = [
  "anyhow",
  "base64 0.22.1",

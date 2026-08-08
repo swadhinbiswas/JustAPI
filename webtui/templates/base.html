@@ -3,16 +3,25 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{ title }} — JustAPI</title>
+  <title>{{ title }} — JustAPI Docs</title>
   <meta name="description" content="{{ description }}">
+  <!-- SEO & Open Graph -->
+  <meta name="google-site-verification" content="OGwxuIzhp_huelFM3j_dzbm2bESKAhpE2LA5RRnsQUA" />
+  <meta property="og:title" content="{{ title }} — JustAPI Docs">
+  <meta property="og:description" content="{{ description }}">
+  <meta property="og:type" content="article">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="{{ title }} — JustAPI Docs">
+  <meta name="twitter:description" content="{{ description }}">
+  <link rel="canonical" href="https://justapi.pages.dev{{ url }}">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/ryanoasis/nerd-fonts@master/css/nerd-fonts-generated.css">
   <link rel="stylesheet" href="/css/main.css">
 </head>
 <body>
-  <!-- ─── Terminal Navbar ─── -->
+  <!-- ─── WebTUI Terminal Navbar ─── -->
   <header class="ja-navbar">
     <div class="ja-navbar-bar">
       <span class="ja-dot"></span><span class="ja-dot"></span><span class="ja-dot"></span>
@@ -20,7 +29,7 @@
     </div>
     <div class="ja-navbar-body">
       <div class="ja-nav-brand">
-        <a href="/"><span class="nf">&#xf120;</span> JUSTAPI</a>
+        <a href="/"><span class="nf">&#xf120;</span> &lt;/<span class="accent">#</span>&gt;JUSTAPI</a>
       </div>
       <nav class="ja-nav-links">
         <a href="/">Home</a>
@@ -28,31 +37,34 @@
         <a href="/tutorials/">Tutorials</a>
         <a href="/api-reference/">API</a>
         <a href="/deployment/">Deploy</a>
-        <a href="https://github.com/swadhinbiswas/JustAPI" target="_blank"><span class="nf">&#xf09b;</span></a>
+        <a href="https://github.com/swadhinbiswas/JustAPI" target="_blank" rel="noopener"><span class="nf">&#xf09b;</span> GitHub</a>
+        <button type="button" class="ja-search-trigger" id="openSearchBtn">
+          <span class="nf">&#xea6d;</span> Search <kbd>Ctrl+K</kbd>
+        </button>
       </nav>
     </div>
   </header>
 
   <div class="ja-layout">
-    <!-- ─── Left sidebar: docs nav ─── -->
+    <!-- ─── Left Sidebar: Docs Navigation Tree ─── -->
     <aside class="ja-sidebar">
       <nav class="ja-nav-tree">
         {{ sidebar }}
       </nav>
     </aside>
 
-    <!-- ─── Main content ─── -->
+    <!-- ─── Main Article Content ─── -->
     <main class="ja-content">
       <article>
         {{ content }}
       </article>
 
       <footer class="ja-footer">
-        <p>JustAPI v2.0.9 — MIT License · <a href="https://github.com/swadhinbiswas/JustAPI">github.com/swadhinbiswas/JustAPI</a></p>
+        <p>JustAPI v2.0.9 — Open Source MIT License · Built with WebTUI · <a href="https://github.com/swadhinbiswas/JustAPI" target="_blank" rel="noopener">GitHub</a></p>
       </footer>
     </main>
 
-    <!-- ─── Right sidebar: page TOC ─── -->
+    <!-- ─── Right Sidebar: Table of Contents ─── -->
     <aside class="ja-toc-sidebar">
       <div class="ja-toc">
         <div class="ja-toc-title">On this page</div>
@@ -61,7 +73,35 @@
     </aside>
   </div>
 
-  <!-- ─── Theme switcher ─── -->
+  <!-- ─── WebTUI Neovim Statusline Bar (Fixed Bottom) ─── -->
+  <div id="statusline">
+    <div class="statusline-left">
+      <span is-="badge" variant-="blue" style="--badge-text: var(--background0)">NORMAL</span>
+      <span is-="badge" variant-="background1" style="--badge-text: var(--blue)"><span class="nf">&#xe725;</span> master</span>
+      <span is-="badge" variant-="background0">justapi/docs</span>
+    </div>
+    <div class="statusline-right" id="statusline-right">
+      <span is-="badge" variant-="background0">utf-8</span>
+      <span is-="badge" variant-="background1">Top</span>
+      <span is-="badge" variant-="blue" style="--badge-text: var(--background0)">1:1</span>
+    </div>
+  </div>
+
+  <!-- ─── WebTUI Search Dialog Modal ─── -->
+  <dialog id="search-dialog" is-="dialog" size-="default" position-="center">
+    <div class="ja-search-box" box-="square">
+      <div class="ja-search-header">
+        <span is-="badge" variant-="green" cap-="round"><span class="nf">&#xea6d;</span> Search Documentation</span>
+        <button type="button" is-="button" box-="square" size-="small" id="closeSearchBtn">✕</button>
+      </div>
+      <input type="text" id="searchInput" class="ja-search-input" placeholder="Type to filter pages (e.g. routing, zero-gil, db)..." autofocus>
+      <div class="ja-search-results" id="searchResults">
+        <!-- populated dynamically via JS -->
+      </div>
+    </div>
+  </dialog>
+
+  <!-- ─── Floating Theme Switcher Widget ─── -->
   <div class="ja-theme-switcher" id="themeSwitcher"></div>
 
   <script src="/js/main.js"></script>

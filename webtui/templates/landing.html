@@ -4,14 +4,24 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>JustAPI — Python writes the logic. Rust does everything else.</title>
-  <meta name="description" content="JustAPI — Python web framework with a Rust core. 766k req/s hello-world. FastAPI-compatible.">
+  <meta name="description" content="JustAPI — Ultra-fast Python web framework with a Rust core. 766k req/s hello-world. FastAPI-compatible.">
+  <!-- SEO & Open Graph -->
+  <meta name="google-site-verification" content="OGwxuIzhp_huelFM3j_dzbm2bESKAhpE2LA5RRnsQUA" />
+  <meta property="og:title" content="JustAPI — Python writes the logic. Rust does everything else.">
+  <meta property="og:description" content="JustAPI — Ultra-fast Python web framework with a Rust core. 766k req/s hello-world. FastAPI-compatible.">
+  <meta property="og:type" content="website">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="JustAPI — Python writes the logic. Rust does everything else.">
+  <meta name="twitter:description" content="JustAPI — Ultra-fast Python web framework with a Rust core. 766k req/s hello-world. FastAPI-compatible.">
+  <link rel="canonical" href="https://justapi.pages.dev/">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/ryanoasis/nerd-fonts@master/css/nerd-fonts-generated.css">
   <link rel="stylesheet" href="/css/main.css">
 </head>
 <body>
+  <!-- ─── WebTUI Navbar ─── -->
   <header class="ja-navbar">
     <div class="ja-navbar-bar">
       <span class="ja-dot"></span><span class="ja-dot"></span><span class="ja-dot"></span>
@@ -19,49 +29,115 @@
     </div>
     <div class="ja-navbar-body">
       <div class="ja-nav-brand">
-        <a href="/"><span class="nf">&#xf120;</span> JUSTAPI</a>
+        <a href="/"><span class="nf">&#xf120;</span> &lt;/<span class="accent">#</span>&gt;JUSTAPI</a>
       </div>
       <nav class="ja-nav-links">
-        <a href="/">Home</a>
+        <a href="/" class="active">Home</a>
         <a href="/getting-started/">Getting Started</a>
         <a href="/tutorials/">Tutorials</a>
         <a href="/api-reference/">API</a>
         <a href="/deployment/">Deploy</a>
-        <a href="https://github.com/swadhinbiswas/JustAPI" target="_blank"><span class="nf">&#xf09b;</span></a>
+        <a href="https://github.com/swadhinbiswas/JustAPI" target="_blank" rel="noopener"><span class="nf">&#xf09b;</span> GitHub</a>
+        <button type="button" class="ja-search-trigger" id="openSearchBtn">
+          <span class="nf">&#xea6d;</span> Search <kbd>Ctrl+K</kbd>
+        </button>
       </nav>
     </div>
   </header>
 
-  <main class="ja-content ja-landing">
-    <!-- ─── Hero ─── -->
-    <div class="ja-hero">
-      <span is="badge" variant="green">&#xf17d; v2.0.9 · published on PyPI · 8 platforms</span>
-      <h1>Python writes the logic.<br><span class="accent">Rust does everything else.</span></h1>
-      <p class="ja-hero-sub">JustAPI is a Python web framework with a Rust core. One import, zero config — routing, TLS, validation, serialization and the server itself run in Rust.</p>
-      <div class="ja-hero-actions">
-        <a href="/getting-started/overview/" is="button" size="large">&#xf061; Get Started</a>
-        <a href="https://github.com/swadhinbiswas/JustAPI" is="button" box size="large">&#xf09b; GitHub</a>
+  <!-- ─── Hero Section with WebTUI Desktop Backdrop ─── -->
+  <div id="intro-backdrop">
+    <!-- Background Desktop Widgets Grid -->
+    <div id="widgets-grid">
+      <div class="terminal-widget" box-="square">
+        <span style="color: var(--blue);">&#xf07b; ~/projects/justapi-app</span>
+        <ul marker-="tree">
+          <li style="color: var(--blue);">&#xf07b; .git</li>
+          <li style="color: var(--blue);">&#xf07b; app</li>
+          <ul marker-="tree">
+            <li><span style="color: var(--yellow);">&#xe606;</span> main.py</li>
+            <li><span style="color: var(--yellow);">&#xe606;</span> routes.py</li>
+          </ul>
+          <li>&#xe7a8; Cargo.toml</li>
+        </ul>
+      </div>
+
+      <div class="terminal-widget" box-="square">
+        <div box-="round" pad-="1 1" style="--box-border-color: var(--background2); color: var(--mauve);">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <strong style="color: var(--green);">justapi-core</strong>
+            <span>200 OK</span>
+          </div>
+          <div style="display: flex; gap: 0.5ch; margin-top: 0.5lh; align-items: center;">
+            <span>[</span>
+            <div is-="separator" style="--separator-color: var(--lavender); width: 14ch;"></div>
+            <div is-="separator" style="--separator-color: var(--background2); flex-grow: 1;"></div>
+            <span>]</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="terminal-widget" box-="square">
+        <div style="display: flex; align-items: center; justify-content: space-between;">
+          <span style="color: var(--foreground2);">766k RPS</span>
+          <span is-="badge" variant-="green" cap-="round">ACTIVE</span>
+        </div>
       </div>
     </div>
 
-    <!-- ─── Performance stats ─── -->
-    <div class="ja-section">Performance</div>
+    <!-- Centered Hero Box Window -->
+    <div id="main-hero" box-="square">
+      <div style="display: flex; gap: 0.5ch; justify-content: center; margin-bottom: 1rem; flex-wrap: wrap;">
+        <span is-="badge" variant-="green" cap-="round"><span class="nf">&#xf17d;</span> v2.0.9 · PyPI</span>
+        <span is-="badge" variant-="blue" cap-="round"><span class="nf">&#xeb01;</span> Zero-GIL CPython 3.14t</span>
+        <span is-="badge" variant-="mauve" cap-="round"><span class="nf">&#xf0e7;</span> 766k req/s</span>
+      </div>
+      <h1>Python writes the logic.<br><span class="accent">Rust does everything else.</span></h1>
+      <p class="ja-hero-sub">JustAPI is an ultra-fast Python web framework built on a Rust core. One import, zero config — routing, TLS, request validation, serialization, and connection handling run in Rust.</p>
+      <div class="ja-hero-actions">
+        <a href="/getting-started/" is-="button" variant-="green" size-="large"><span class="nf">&#xf061;</span> Get Started</a>
+        <a href="https://github.com/swadhinbiswas/JustAPI" is-="button" box-="square" size-="large" target="_blank" rel="noopener"><span class="nf">&#xf09b;</span> GitHub</a>
+      </div>
+    </div>
+  </div>
+
+  <main class="ja-content ja-landing" style="max-width: 60rem; margin: 0 auto;">
+    <!-- ─── Performance Stats ─── -->
+    <div class="ja-section">Performance Overview</div>
     <div class="ja-stats">
-      <div class="ja-stat"><div class="ja-stat-value">766k</div><div class="ja-stat-label">req/s hello-world</div></div>
-      <div class="ja-stat"><div class="ja-stat-value">782k</div><div class="ja-stat-label">req/s JSON echo</div></div>
-      <div class="ja-stat"><div class="ja-stat-value">2.4x</div><div class="ja-stat-label">faster than Granian</div></div>
-      <div class="ja-stat"><div class="ja-stat-value">53x</div><div class="ja-stat-label">native async DB</div></div>
-      <div class="ja-stat"><div class="ja-stat-value">181k</div><div class="ja-stat-label">native CRUD SELECT</div></div>
-      <div class="ja-stat"><div class="ja-stat-value">12MB</div><div class="ja-stat-label">resident memory</div></div>
+      <div class="ja-stat">
+        <div class="ja-stat-value">766k</div>
+        <div class="ja-stat-label">req/s hello-world</div>
+      </div>
+      <div class="ja-stat">
+        <div class="ja-stat-value">782k</div>
+        <div class="ja-stat-label">req/s JSON echo</div>
+      </div>
+      <div class="ja-stat">
+        <div class="ja-stat-value">2.4x</div>
+        <div class="ja-stat-label">faster than Granian</div>
+      </div>
+      <div class="ja-stat">
+        <div class="ja-stat-value">53x</div>
+        <div class="ja-stat-label">native async DB queries</div>
+      </div>
+      <div class="ja-stat">
+        <div class="ja-stat-value">181k</div>
+        <div class="ja-stat-label">native CRUD SELECT req/s</div>
+      </div>
+      <div class="ja-stat">
+        <div class="ja-stat-value">12MB</div>
+        <div class="ja-stat-label">resident RAM footprint</div>
+      </div>
     </div>
 
-    <!-- ─── Quick start ─── -->
-    <div class="ja-section">Quick start</div>
-    <div class="ja-tabs">
+    <!-- ─── Quick Start Tabs ─── -->
+    <div class="ja-section">Quick Start</div>
+    <div class="ja-tabs" box-="square">
       <div class="ja-tabs-bar">
-        <button class="ja-tab-btn" data-tab-btn="pip" data-active="true">&#xf472; pip</button>
-        <button class="ja-tab-btn" data-tab-btn="uv">&#xf42e; uv</button>
-        <button class="ja-tab-btn" data-tab-btn="scaffold">&#xf4c2; scaffold</button>
+        <button type="button" class="ja-tab-btn" data-tab-btn="pip" data-active="true"><span class="nf">&#xf472;</span> pip</button>
+        <button type="button" class="ja-tab-btn" data-tab-btn="uv"><span class="nf">&#xf42e;</span> uv</button>
+        <button type="button" class="ja-tab-btn" data-tab-btn="scaffold"><span class="nf">&#xf4c2;</span> scaffold</button>
       </div>
       <div class="ja-tab-panel" data-tab-panel="pip">
 <pre>pip install justapi
@@ -78,12 +154,12 @@ cd my_app && python app/main.py</pre>
       </div>
     </div>
 
-    <!-- ─── Minimal app ─── -->
-    <div class="ja-section">Minimal app</div>
-    <div class="ja-terminal">
+    <!-- ─── Minimal App Code Showcase ─── -->
+    <div class="ja-section">Minimal Application</div>
+    <div class="ja-terminal" box-="square">
       <div class="ja-terminal-bar">
         <span class="ja-dot"></span><span class="ja-dot"></span><span class="ja-dot"></span>
-        <span class="ja-terminal-title">&#xf1c5; main.py</span>
+        <span class="ja-terminal-title"><span class="nf">&#xf1c5;</span> main.py</span>
       </div>
       <div class="ja-terminal-body">
         <span class="cm">from</span> justapi <span class="cm">import</span> JustAPIApp<br><br>
@@ -92,12 +168,12 @@ cd my_app && python app/main.py</pre>
         <span class="cm">def</span> hello():<br>
         &nbsp;&nbsp;&nbsp;&nbsp;<span class="cm">return</span> &#123;<span class="ok">"Hello"</span>: <span class="ok">"World"</span>&#125;<br><br>
         app.run()<br>
-        <span class="ok">&#xf00c;</span> <span class="dim">server started · /docs · /redoc · OpenAPI auto</span>
+        <span class="ok"><span class="nf">&#xf00c;</span> server started</span> <span class="dim">· OpenAPI auto-generated at /docs</span>
       </div>
     </div>
 
-    <!-- ─── Benchmarks ─── -->
-    <div class="ja-section">Benchmarks</div>
+    <!-- ─── Benchmarks Comparison ─── -->
+    <div class="ja-section">Throughput Benchmarks</div>
     <div class="ja-bars">
       <div class="ja-bar-row winner">
         <span class="ja-bar-label">JustAPI</span>
@@ -120,49 +196,142 @@ cd my_app && python app/main.py</pre>
         <span class="ja-bar-value">36k</span>
       </div>
     </div>
+    <p style="font-size: 0.8rem; color: var(--foreground2); margin-top: 0.4rem;">
+      <em>hello-world, 100 concurrent connections, 30s benchmark duration on identical hardware — see detailed methodology in BENCHMARKS.md</em>
+    </p>
 
-    <blockquote>hello-world, 100 concurrent connections, 30s, same hardware — full methodology in BENCHMARKS.md</blockquote>
-
-    <!-- ─── Features ─── -->
-    <div class="ja-section">Features</div>
+    <!-- ─── Feature Grid ─── -->
+    <div class="ja-section">Framework Features</div>
     <div class="ja-grid">
-      <div class="ja-card"><div class="ja-card-icon">&#xf40d;</div><h3>Rust core</h3><p>Networking, TLS, routing, serialization run in Rust. Python executes only your logic.</p></div>
-      <div class="ja-card"><div class="ja-card-icon">&#xf471;</div><h3>Native async DB</h3><p><code>await app.db.query_async()</code> runs SQL on Rust's tokio runtime — 53× faster on slow queries.</p></div>
-      <div class="ja-card"><div class="ja-card-icon">&#xf295;</div><h3>Rust-native SSE</h3><p><code>app.sse_native()</code> streams events with zero Python per event.</p></div>
-      <div class="ja-card"><div class="ja-card-icon">&#xf085;</div><h3>Multi-worker</h3><p><code>justapi serve --workers N</code> — 1.88× throughput at 4 workers, auto-scale.</p></div>
-      <div class="ja-card"><div class="ja-card-icon">&#xf4e7;</div><h3>Free-threaded</h3><p>CPython 3.14t wheels — CPU-bound Python scales with cores, 12.4× measured.</p></div>
-      <div class="ja-card"><div class="ja-card-icon">&#xf4ab;</div><h3>Security built-in</h3><p>JWT, rate limiting, CORS, security headers — all in Rust middleware.</p></div>
-      <div class="ja-card"><div class="ja-card-icon">&#xf4dc;</div><h3>Production-ready</h3><p>Circuit breakers, OTel tracing, Prometheus metrics, health checks.</p></div>
-      <div class="ja-card"><div class="ja-card-icon">&#xf487;</div><h3>Type-checked</h3><p><code>py.typed</code> + complete stubs — mypy-clean on user code.</p></div>
-      <div class="ja-card"><div class="ja-card-icon">&#xf44f;</div><h3>FastAPI-compatible</h3><p>Same decorators, Pydantic models, Depends. Migrate with one import.</p></div>
+      <div class="ja-card">
+        <div class="ja-card-icon">&#xf40d;</div>
+        <h3>Rust Core Architecture</h3>
+        <p>Sockets, TLS termination, HTTP parsing (hyper), routing, and response writing run entirely in Rust.</p>
+      </div>
+      <div class="ja-card">
+        <div class="ja-card-icon">&#xf471;</div>
+        <h3>Native Async DB Integration</h3>
+        <p><code>await app.db.query_async()</code> runs SQL queries on Rust's tokio pool — up to 53× faster on slow queries.</p>
+      </div>
+      <div class="ja-card">
+        <div class="ja-card-icon">&#xf295;</div>
+        <h3>Rust-Native SSE & WebSockets</h3>
+        <p><code>app.sse_native()</code> streams real-time events with zero Python overhead per emitted message.</p>
+      </div>
+      <div class="ja-card">
+        <div class="ja-card-icon">&#xf085;</div>
+        <h3>Multi-Worker Auto-Scaling</h3>
+        <p><code>justapi serve --workers N</code> provides 1.88× throughput scaling across multi-core systems.</p>
+      </div>
+      <div class="ja-card">
+        <div class="ja-card-icon">&#xf4e7;</div>
+        <h3>Free-Threaded CPython 3.14t</h3>
+        <p>Native support for GIL-free CPython — CPU-bound Python routes scale linearly across all CPU cores.</p>
+      </div>
+      <div class="ja-card">
+        <div class="ja-card-icon">&#xf4ab;</div>
+        <h3>Built-in Rust Security</h3>
+        <p>JWT verification, token bucket rate limiting, CORS headers, and OWASP security middleware run in Rust.</p>
+      </div>
+      <div class="ja-card">
+        <div class="ja-card-icon">&#xf4dc;</div>
+        <h3>Production Observability</h3>
+        <p>Circuit breakers, OpenTelemetry distributed tracing, Prometheus metrics, and automated health checks.</p>
+      </div>
+      <div class="ja-card">
+        <div class="ja-card-icon">&#xf487;</div>
+        <h3>Type-Checked & Stubbed</h3>
+        <p>Ships with <code>py.typed</code> marker and complete type stubs for 100% clean mypy type validation.</p>
+      </div>
+      <div class="ja-card">
+        <div class="ja-card-icon">&#xf44f;</div>
+        <h3>FastAPI Drop-in Compatibility</h3>
+        <p>Uses familiar decorators, Pydantic models, and <code>Depends</code> injection. Migrate with one import change.</p>
+      </div>
     </div>
 
-    <!-- ─── Comparison ─── -->
-    <div class="ja-section">Framework comparison</div>
-    <table>
-      <thead><tr><th></th><th>FastAPI</th><th>JustAPI</th></tr></thead>
+    <!-- ─── Framework Comparison Table ─── -->
+    <div class="ja-section">FastAPI vs JustAPI Comparison</div>
+    <table class="shadow">
+      <thead>
+        <tr>
+          <th>Metric / Feature</th>
+          <th>FastAPI</th>
+          <th>JustAPI</th>
+        </tr>
+      </thead>
       <tbody>
-        <tr><td><strong>Server</strong></td><td>uvicorn (Python)</td><td>Rust (tokio + hyper)</td></tr>
-        <tr><td><strong>Hello-world</strong></td><td>~36k req/s</td><td><strong>~766k req/s</strong></td></tr>
-        <tr><td><strong>JSON echo</strong></td><td>~33k req/s</td><td><strong>~782k req/s</strong></td></tr>
-        <tr><td><strong>Native DB SELECT</strong></td><td>Python driver</td><td><strong>181k req/s (×125)</strong></td></tr>
-        <tr><td><strong>Memory</strong></td><td>29 MB</td><td><strong>12 MB</strong></td></tr>
+        <tr>
+          <td><strong>Runtime Core</strong></td>
+          <td>uvicorn (Python)</td>
+          <td><strong>Rust (tokio + hyper)</strong></td>
+        </tr>
+        <tr>
+          <td><strong>Hello World Throughput</strong></td>
+          <td>~36k req/s</td>
+          <td><strong>~766k req/s (21x faster)</strong></td>
+        </tr>
+        <tr>
+          <td><strong>JSON Echo Throughput</strong></td>
+          <td>~33k req/s</td>
+          <td><strong>~782k req/s (23x faster)</strong></td>
+        </tr>
+        <tr>
+          <td><strong>Native DB SELECT</strong></td>
+          <td>Python DB Driver</td>
+          <td><strong>181k req/s (125x faster)</strong></td>
+        </tr>
+        <tr>
+          <td><strong>Memory Footprint</strong></td>
+          <td>~29 MB</td>
+          <td><strong>~12 MB (58% lower)</strong></td>
+        </tr>
       </tbody>
     </table>
 
-    <!-- ─── CTA ─── -->
-    <div class="ja-cta">
-      <h2>Ready to build something fast?</h2>
-      <p>One import. Rust underneath. Zero config.</p>
-      <a href="/getting-started/overview/" is="button" size="large">&#xf061; Get Started</a>
+    <!-- ─── CTA Section ─── -->
+    <div class="ja-cta" box-="square">
+      <h2>Ready to build high-performance APIs?</h2>
+      <p>One import. Powered by Rust. Zero complex configuration.</p>
+      <a href="/getting-started/" is-="button" variant-="green" size-="large"><span class="nf">&#xf061;</span> Read the Documentation</a>
     </div>
 
     <footer class="ja-footer">
-      <p>JustAPI v2.0.9 — MIT License · <a href="https://github.com/swadhinbiswas/JustAPI">github.com/swadhinbiswas/JustAPI</a></p>
+      <p>JustAPI v2.0.9 — Open Source MIT License · Built with WebTUI · <a href="https://github.com/swadhinbiswas/JustAPI" target="_blank" rel="noopener">GitHub</a></p>
     </footer>
   </main>
 
+  <!-- ─── WebTUI Neovim Statusline Bar (Fixed Bottom) ─── -->
+  <div id="statusline">
+    <div class="statusline-left">
+      <span is-="badge" variant-="blue" style="--badge-text: var(--background0)">NORMAL</span>
+      <span is-="badge" variant-="background1" style="--badge-text: var(--blue)"><span class="nf">&#xe725;</span> master</span>
+      <span is-="badge" variant-="background0">justapi/home.py</span>
+    </div>
+    <div class="statusline-right" id="statusline-right">
+      <span is-="badge" variant-="background0">utf-8</span>
+      <span is-="badge" variant-="background1">Top</span>
+      <span is-="badge" variant-="blue" style="--badge-text: var(--background0)">1:1</span>
+    </div>
+  </div>
+
+  <!-- ─── WebTUI Search Dialog Modal ─── -->
+  <dialog id="search-dialog" is-="dialog" size-="default" position-="center">
+    <div class="ja-search-box" box-="square">
+      <div class="ja-search-header">
+        <span is-="badge" variant-="green" cap-="round"><span class="nf">&#xea6d;</span> Search Documentation</span>
+        <button type="button" is-="button" box-="square" size-="small" id="closeSearchBtn">✕</button>
+      </div>
+      <input type="text" id="searchInput" class="ja-search-input" placeholder="Type to filter pages (e.g. routing, zero-gil, db)..." autofocus>
+      <div class="ja-search-results" id="searchResults">
+        <!-- populated dynamically via JS -->
+      </div>
+    </div>
+  </dialog>
+
+  <!-- ─── Floating Theme Switcher Widget ─── -->
   <div class="ja-theme-switcher" id="themeSwitcher"></div>
+
   <script src="/js/main.js"></script>
 </body>
 </html>

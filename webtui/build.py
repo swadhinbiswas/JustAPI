@@ -115,9 +115,11 @@ def build_sidebar(active_path: str) -> str:
     parts = []
     for group, items in SIDEBAR:
         parts.append(f'<div class="ja-nav-group">{html_mod.escape(group)}</div>')
+        parts.append('<ul marker-="tree">')
         for label, path in items:
             cls = ' class="active"' if path == active_path else ""
-            parts.append(f'<a href="{path}"{cls}>{html_mod.escape(label)}</a>')
+            parts.append(f'  <li><a href="{path}"{cls}>{html_mod.escape(label)}</a></li>')
+        parts.append('</ul>')
     return "\n".join(parts)
 
 
@@ -141,23 +143,56 @@ def slugify_headers(html: str) -> str:
 
 
 def md_to_html(md_text: str) -> str:
-    return markdown.markdown(
+    html = markdown.markdown(
         md_text,
         extensions=["fenced_code", "tables", "codehilite", "toc", "attr_list"],
     )
+    # Enrich standard elements with WebTUI attributes
+    # <pre> left unstyled — site CSS handles code block styling
+    html = html.replace("<table>", '<table class="shadow" box-="square">')
+    html = html.replace("<blockquote>", '<blockquote box-="square">')
+    return html
+
+
+def get_prev_next(active_path: str):
+    flat = []
+    for group, items in SIDEBAR:
+        for label, path in items:
+            flat.append((label, path))
+    for i, (label, path) in enumerate(flat):
+        if path == active_path:
+            prev_item = flat[i-1] if i > 0 else None
+            next_item = flat[i+1] if i < len(flat) - 1 else None
+            return prev_item, next_item
+    return None, None
 
 
 def render_page(meta: dict, body: str, path: str) -> str:
+    template = (ROOT / "templates/base.html").read_text()
     content_html = md_to_html(body)
     content_html = slugify_headers(content_html)
+    
+    prev_item, next_item = get_prev_next(path)
+    if prev_item or next_item:
+        nav_html = '\n<div class="ja-doc-nav">\n'
+        if prev_item:
+            nav_html += f'  <a href="{prev_item[1]}" class="ja-doc-nav-prev"><span class="nf">&#xf060;</span> Prev: {html_mod.escape(prev_item[0])}</a>\n'
+        else:
+            nav_html += '  <span></span>\n'
+        if next_item:
+            nav_html += f'  <a href="{next_item[1]}" class="ja-doc-nav-next">Next: {html_mod.escape(next_item[0])} <span class="nf">&#xf061;</span></a>\n'
+        nav_html += '</div>\n'
+        content_html += nav_html
+
     title = meta.get("title", "JustAPI")
     description = meta.get("description", "JustAPI — Python web framework with a Rust core.")
-    page = TEMPLATE
+    page = template
     page = page.replace("{{ title }}", html_mod.escape(title))
     page = page.replace("{{ description }}", html_mod.escape(description))
     page = page.replace("{{ content }}", content_html)
     page = page.replace("{{ sidebar }}", build_sidebar(path))
     page = page.replace("{{ toc }}", build_toc(content_html))
+    page = page.replace("{{ url }}", path)
     return page
 
 
@@ -174,6 +209,8 @@ def build() -> None:
     shutil.copy(ROOT / "src/main.js", DIST / "js/main.js")
 
     count = 0
+    urls = ["/"]
+    all_llm_content = ["# JustAPI Full Documentation\n\n"]
     for md_file in sorted(CONTENT.rglob("*.md*")):
         rel = md_file.relative_to(CONTENT)
         if rel.name == "index.mdx":
@@ -183,6 +220,8 @@ def build() -> None:
         out = DIST / str(rel).replace(".mdx", "").replace(".md", "") / "index.html"
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(render_page(meta, body, url_path))
+        urls.append(url_path)
+        all_llm_content.append(f"## {meta.get('title', url_path)}\n\n{body}\n\n")
         count += 1
 
     # Landing page (hand-built, no frontmatter)
@@ -191,7 +230,41 @@ def build() -> None:
     landing = landing.replace("{{ toc }}", "")
     (DIST / "index.html").write_text(landing)
 
-    print(f"built {count} docs pages + landing → {DIST}")
+    # Generate Section Index Entrypoint Aliases (so /getting-started/, /tutorials/, etc. work directly)
+    SECTION_ALIASES = [
+        ("getting-started", "getting-started/overview"),
+        ("tutorials", "tutorials/hello-world"),
+        ("api-reference", "api-reference/justapiapp"),
+        ("deployment", "deployment/docker"),
+        ("advanced", "advanced/zero-gil-architecture"),
+        ("security", "security/policy"),
+        ("observability", "observability/metrics-monitoring"),
+        ("reference", "reference/cli"),
+    ]
+    for sec, target in SECTION_ALIASES:
+        sec_dir = DIST / sec
+        target_file = DIST / target / "index.html"
+        if target_file.exists():
+            sec_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy(target_file, sec_dir / "index.html")
+
+    # Generate sitemap.xml
+    sitemap = ['<?xml version="1.0" encoding="UTF-8"?>']
+    sitemap.append('<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">')
+    for u in urls:
+        priority = "1.0" if u == "/" else "0.8"
+        sitemap.append(f'  <url>\n    <loc>https://justapi.pages.dev{u}</loc>\n    <changefreq>weekly</changefreq>\n    <priority>{priority}</priority>\n  </url>')
+    sitemap.append('</urlset>')
+    (DIST / "sitemap.xml").write_text("\n".join(sitemap))
+
+    # Generate robots.txt
+    robots = "User-agent: *\nAllow: /\n\nSitemap: https://justapi.pages.dev/sitemap.xml\n"
+    (DIST / "robots.txt").write_text(robots)
+
+    # Generate all-llm.txt
+    (DIST / "all-llm.txt").write_text("".join(all_llm_content))
+
+    print(f"built {count} docs pages + landing + section entrypoints + seo artifacts → {DIST}")
 
 
 if __name__ == "__main__":
