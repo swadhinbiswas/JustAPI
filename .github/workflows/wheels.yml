@@ -156,9 +156,11 @@ jobs:
         working-directory: crates/justapi-py
         run: |
           uv venv --python ${{ matrix.python || '3.12' }} "$RUNNER_TEMP/wtest"
-          uv pip install --python "$RUNNER_TEMP/wtest/bin/python" dist/*.whl
-          uv pip install --python "$RUNNER_TEMP/wtest/bin/python" pytest pytest-asyncio requests pydantic jinja2 websockets
-          "$RUNNER_TEMP/wtest/bin/python" -m pytest tests/ -v --tb=short
+          # `uv run --directory` resolves the venv python on all platforms
+          # (Scripts/ on Windows, bin/ on Unix).
+          uv pip install --python "$(uv run --directory "$RUNNER_TEMP/wtest" python -c 'import sys; print(sys.executable)')" dist/*.whl
+          uv pip install --python "$(uv run --directory "$RUNNER_TEMP/wtest" python -c 'import sys; print(sys.executable)')" pytest pytest-asyncio requests pydantic jinja2 websockets
+          "$(uv run --directory "$RUNNER_TEMP/wtest" python -c 'import sys; print(sys.executable)')" -m pytest tests/ -v --tb=short
       - name: Upload Wheels
         uses: actions/upload-artifact@v4
         with:
