@@ -128,7 +128,6 @@ heaptrack.*
 /split_server.py
 /restore.py
 /generate_commits.sh
-/demo_app.py
 /protection.json
 
 # Olist dataset (large, download separately)
