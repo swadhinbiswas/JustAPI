@@ -1,7 +1,7 @@
 # =============================================================================
 # Stage 1: Build the Rust CLI binary and Python wheel
 # =============================================================================
-FROM rust:1.85-bookworm AS builder
+FROM rust:1.97-bookworm AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libssl-dev pkg-config python3 python3-pip python3-venv \
@@ -11,12 +11,10 @@ WORKDIR /app
 
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/
-COPY python/ python/
 
 RUN python3 -m venv /opt/venv && \
     . /opt/venv/bin/activate && \
-    pip install maturin==1.8.3 && \
-    pip install uv
+    pip install maturin uv
 ENV PATH="/opt/venv/bin:$PATH"
 
 RUN cargo build --release -p justapi-cli --features tls,compression
@@ -40,6 +38,9 @@ COPY --from=builder /app/wheels /tmp/wheels
 
 RUN pip install uv && uv pip install --system /tmp/wheels/*.whl && rm -rf /tmp/wheels
 
+# demo_app.py uses pydantic for request validation
+RUN pip install --no-cache-dir pydantic>=2.0
+
 COPY demo_app.py /app/
 
 EXPOSE 8080
@@ -52,4 +53,5 @@ USER justapi
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/live')"]
 
-ENTRYPOINT ["justapi", "serve"]
+# demo_app.py ends with app.run("127.0.0.1:8080") — run the Python app.
+ENTRYPOINT ["python", "demo_app.py"]
