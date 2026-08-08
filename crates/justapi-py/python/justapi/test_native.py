@@ -296,3 +296,29 @@ def test_run_defaults_to_localhost_8000():
             s.close()
         except Exception:
             pass
+
+
+def test_pydantic_model_as_body_schema():
+    """Pydantic v2 models work as body_schema (validated via their JSON
+    Schema in the Rust engine) — FastAPI-migration path (fixed 2026-08-08)."""
+    from pydantic import BaseModel, Field
+    from justapi import JustAPIApp, JustAPITestClient
+
+    class Pet(BaseModel):
+        name: str = Field(..., min_length=1)
+        species: str
+
+    app = JustAPIApp()
+
+    @app.post("/pets", body_schema=Pet)
+    def create(request):
+        body = request.json()
+        return {"name": body["name"], "species": body["species"]}
+
+    c = JustAPITestClient(app)
+    ok = c.post("/pets", b'{"name": "rex", "species": "dog"}')
+    empty = c.post("/pets", b'{"name": "", "species": "dog"}')
+    wrong = c.post("/pets", b'{"name": 123, "species": "dog"}')
+    assert ok["status"] == 200, ok
+    assert empty["status"] == 422, empty
+    assert wrong["status"] == 422, wrong

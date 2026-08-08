@@ -217,6 +217,26 @@ def validate_body(schema_fn, body_bytes):
         except Exception as e:  # pragma: no cover - defensive
             return [f"schema validation error: {e}"]
 
+    # Pydantic v2 model class: validate via model_json_schema() through the
+    # Rust engine (mirrors the native fast path). This makes
+    # `body_schema=SomePydanticModel` work for FastAPI migrants.
+    model_json_schema = getattr(schema_fn, "model_json_schema", None)
+    if callable(model_json_schema) and _rust_validate_value is not None:
+        try:
+            schema_json = json.dumps(model_json_schema())
+            return _rust_validate_value(schema_json, json.dumps(body_data))
+        except Exception as e:  # pragma: no cover - defensive
+            return [f"schema validation error: {e}"]
+
+    # Pydantic v1 model class: validate via schema().
+    v1_schema = getattr(schema_fn, "schema", None)
+    if callable(v1_schema) and _rust_validate_value is not None:
+        try:
+            schema_json = json.dumps(v1_schema())
+            return _rust_validate_value(schema_json, json.dumps(body_data))
+        except Exception as e:  # pragma: no cover - defensive
+            return [f"schema validation error: {e}"]
+
     # Legacy callable schema.
     result = schema_fn(body_data)
     if result is None:
