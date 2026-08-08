@@ -1,9 +1,9 @@
 ---
 title: JustAPI
-description: Python web framework powered by Rust. Handles 700k+ requests per second. FastAPI alternative with 20× performance.
+description: Python web framework powered by Rust. 766k req/s. Built to handle real traffic.
 template: splash
 hero:
-  tagline: Python web framework powered by Rust. Built to handle real traffic.
+  tagline: Python web framework. Rust engine underneath.
   image:
     file: ../../assets/logo.svg
   actions:
@@ -11,101 +11,128 @@ hero:
       link: /getting-started/overview/
       icon: right-arrow
       variant: primary
-    - text: View on GitHub
+    - text: GitHub
       link: https://github.com/swadhinbiswas/JustAPI
       icon: external
       variant: minimal
 ---
 
-import { Card, CardGrid } from '@astrojs/starlight/components';
+<div class="ja-hero">
+  <img src="/og-image.png" alt="JustAPI — Python writes the logic. Rust does everything else." width="100%" />
+</div>
 
-## Performance
+## Performance Matrix
 
-| Framework | Hello-world req/s | JSON echo | p99 latency | RSS |
-|---|--:|--:|--:|--:|
-| **JustAPI (native fast path)** | **766,000** | **782,000** | **0.48 ms** | **12 MB** |
-| Granian (ASGI) | 314,000 | 145,000 | 0.74 ms | 37 MB |
-| Robyn | 39,000 | — | — | — |
-| FastAPI + Uvicorn | 36,000 | 33,000 | 24.63 ms | 29 MB |
+<div class="benchmark-card">
+  <div class="ja-stats">
+    <div class="ja-stat">
+      <div class="ja-stat-value">766k</div>
+      <div class="ja-stat-label">req/s hello-world</div>
+    </div>
+    <div class="ja-stat">
+      <div class="ja-stat-value">782k</div>
+      <div class="ja-stat-label">req/s JSON echo</div>
+    </div>
+    <div class="ja-stat">
+      <div class="ja-stat-value">2.4x</div>
+      <div class="ja-stat-label">vs Granian</div>
+    </div>
+    <div class="ja-stat">
+      <div class="ja-stat-value">53x</div>
+      <div class="ja-stat-label">native async DB</div>
+    </div>
+    <div class="ja-stat">
+      <div class="ja-stat-value">12MB</div>
+      <div class="ja-stat-label">resident memory</div>
+    </div>
+    <div class="ja-stat">
+      <div class="ja-stat-value">12.4x</div>
+      <div class="ja-stat-label">free-threaded CPU</div>
+    </div>
+  </div>
+</div>
 
-All measurements on the same hardware, 100 concurrent connections, 30s duration. Full methodology in [BENCHMARKS.md](https://github.com/swadhinbiswas/JustAPI/blob/main/BENCHMARKS.md).
+## Runtime
 
-## What It Does
+<div class="ja-terminal">
+  <div class="ja-terminal-bar">
+    <span class="ja-terminal-dot"></span>
+    <span class="ja-terminal-dot"></span>
+    <span class="ja-terminal-dot"></span>
+  </div>
+  <div class="ja-terminal-body">
+    <span class="cm">$</span> pip install justapi<br/>
+    <span class="ok">✓ installed 2.0.9 (8 platforms)</span><br/>
+    <span class="cm">$</span> cat main.py<br/>
+    <span class="cm">from</span> justapi <span class="cm">import</span> JustAPIApp<br/>
+    <br/>
+    app = JustAPIApp()<br/>
+    <br/>
+    <span class="cm">@app.get</span>(<span class="ok">"/"</span>)<br/>
+    <span class="cm">def</span> hello():<br/>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="cm">return</span> &#123;<span class="ok">"Hello"</span>: <span class="ok">"World"</span>&#125;<br/>
+    <br/>
+    app.run()<br/>
+    <span class="ok">✓ server started on http://127.0.0.1:8000</span>
+  </div>
+</div>
 
-JustAPI runs your Python application logic on top of a Rust networking stack. Routing, TLS, serialization, compression — all handled in Rust before your code even runs.
+## Feature Graph
 
-```python title="main.py"
-from justapi import JustAPIApp
+<div class="ja-graph">
+  <img src="/justapi-features.png" alt="JustAPI feature matrix" width="100%" />
+</div>
 
-app = JustAPIApp()
+## Pipeline
 
-@app.get("/")
-def hello():
-    return {"message": "Hello from JustAPI!"}
-```
+<div class="ja-graph">
+  <img src="/justapi-pipeline.svg" alt="Request pipeline — Rust end to end" width="100%" />
+</div>
 
-```bash title="Terminal"
-$ pip install justapi
-$ python main.py
+## Why JustAPI
 
-INFO:     JustAPI running on http://127.0.0.1:8000
-```
-
-Open `/docs` for Swagger UI, `/redoc` for ReDoc, and the full OpenAPI schema — generated automatically from your code.
-
-## Features
-
-<CardGrid>
-  <Card title="FastAPI-Compatible" icon="star">
-    Same decorators, Pydantic models, dependency injection. Switch with one import.
-  </Card>
-  <Card title="Rust Under the Hood" icon="rocket">
-    Networking, TLS, routing, serialization run in Rust. Python does the rest.
-  </Card>
-  <Card title="Zero GIL" icon="shield">
-    GIL released during I/O. Works with free-threaded Python 3.13t/3.14t.
-  </Card>
-  <Card title="Production-Ready" icon="lock">
-    JWT auth, rate limiting, circuit breakers, OpenTelemetry, health checks.
-  </Card>
-  <Card title="Multi-Protocol" icon="globe">
-    REST, GraphQL, gRPC, JSON-RPC 2.0, WebSocket, SSE — all in one app.
-  </Card>
-  <Card title="Native Async DB" icon="rocket">
-    `await app.db.query_async()` — SQL runs on Rust's tokio runtime, GIL released. 53× faster on slow queries.
-  </Card>
-  <Card title="Rust-Native SSE" icon="activity">
+<div class="feature-grid">
+  <div class="feature-card">
+    <h3>Rust Core</h3>
+    Networking, TLS, routing, serialization — all in Rust before your code runs.
+  </div>
+  <div class="feature-card">
+    <h3>Native Async DB</h3>
+    `await app.db.query_async()` — SQL on Rust's tokio runtime, loop never blocked.
+  </div>
+  <div class="feature-card">
+    <h3>Rust-Native SSE</h3>
     `app.sse_native()` streams events with zero Python per event.
-  </Card>
-  <Card title="Free-Threathed 3.14t" icon="shield">
-    CPU-bound Python scales with cores — 12.4× measured.
-  </Card>
-  <Card title="Auto Docs" icon="document">
-    Swagger UI, ReDoc, Scalar. Generated from your code.
-  </Card>
-</CardGrid>
+  </div>
+  <div class="feature-card">
+    <h3>Multi-Worker</h3>
+    `justapi serve --workers N --scale` — 1.88x throughput at 4 workers.
+  </div>
+  <div class="feature-card">
+    <h3>Free-Threaded</h3>
+    CPython 3.14t wheels — CPU-bound Python scales with cores.
+  </div>
+  <div class="feature-card">
+    <h3>Type-Checked</h3>
+    `py.typed` + complete stubs — mypy-clean on user code.
+  </div>
+</div>
 
-## Install
+## Framework vs FastAPI
 
-```bash title="Terminal"
-$ pip install justapi
-$ uv pip install justapi
-$ uvx justapi create my_app
-```
+| | FastAPI | JustAPI |
+|---|---|---|
+| **Server** | uvicorn (Python) | Rust (tokio + hyper) |
+| **Hello-world** | ~36k req/s | **~766k req/s** |
+| **JSON echo** | ~33k req/s | **~782k req/s** |
+| **Native DB SELECT** | Python driver | **181k req/s (×125)** |
+| **Memory** | 29 MB | **12 MB** |
+| **OpenAPI docs** | /docs | /docs |
 
-## Learn
-
-<CardGrid>
-  <Card title="Tutorial" icon="pencil">
-    [36-step learning path →](/tutorials/python-types/)
-  </Card>
-  <Card title="Advanced" icon="rocket">
-    [Rust internals, zero-GIL, native fast path →](/advanced/zero-gil-architecture/)
-  </Card>
-  <Card title="API Reference" icon="document">
-    [Every class and function →](/api-reference/)
-  </Card>
-  <Card title="Deployment" icon="setting">
-    [Docker, Kubernetes, cloud providers →](/deployment/docker/)
-  </Card>
-</CardGrid>
+<div class="ja-cta">
+  <div class="ja-cta-title">Ready to build?</div>
+  <p style={{ color: "var(--ja-muted)" }}>One import. Rust underneath. Zero config.</p>
+  <p>
+    <a href="/getting-started/overview/" class="ja-cta-btn" style={{ display: "inline-block", padding: "0.75rem 1.5rem", border: "1px solid var(--ja-accent)", borderRadius: "9999px", color: "var(--ja-accent)", fontWeight: 700 }}>Get Started →</a>
+  </p>
+</div>

@@ -10,6 +10,12 @@ export default defineConfig({
   integrations: [
     starlight({
       title: 'JustAPI',
+      expressiveCode: {
+        themes: ['dracula', 'github-light'],
+        styleOverrides: {
+          borderRadius: '12px',
+        },
+      },
       description: 'Python web framework. Rust engine underneath.',
       logo: {
         src: './src/assets/logo.svg',
@@ -24,6 +30,39 @@ export default defineConfig({
         baseUrl: 'https://github.com/swadhinbiswas/JustAPI/edit/main/docs_site',
       },
       head: [
+        {
+          tag: 'script',
+          attrs: { is: 'inline' },
+          content: `// JustAPI theme switcher (dark/light/dracula/rose-pine/warm)
+(function () {
+  var THEMES = ['dark', 'light', 'dracula', 'rose-pine', 'warm'];
+  function apply(t) {
+    document.documentElement.setAttribute('data-theme', t);
+    try { localStorage.setItem('ja-theme', t); } catch (e) {}
+    document.querySelectorAll('.ja-theme-btn').forEach(function (b) {
+      b.setAttribute('data-active', b.dataset.theme === t ? 'true' : 'false');
+    });
+  }
+  document.addEventListener('DOMContentLoaded', function () {
+    var saved = null;
+    try { saved = localStorage.getItem('ja-theme'); } catch (e) {}
+    if (saved && THEMES.indexOf(saved) !== -1) apply(saved);
+    var w = document.createElement('div');
+    w.className = 'ja-theme-switcher';
+    THEMES.forEach(function (t) {
+      var b = document.createElement('button');
+      b.className = 'ja-theme-btn ja-theme-btn--' + (t === 'rose-pine' ? 'rosepine' : t);
+      b.dataset.theme = t;
+      b.title = t;
+      b.setAttribute('aria-label', 'Theme: ' + t);
+      b.addEventListener('click', function () { apply(t); });
+      w.appendChild(b);
+    });
+    document.body.appendChild(w);
+    apply(saved || (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'));
+  });
+})();`,
+        },
         { tag: 'meta', attrs: { charset: 'utf-8' } },
         { tag: 'meta', attrs: { name: 'viewport', content: 'width=device-width, initial-scale=1' } },
         { tag: 'meta', attrs: { name: 'generator', content: 'Astro v7 + Starlight' } },
