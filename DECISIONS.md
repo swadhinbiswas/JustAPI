@@ -3639,3 +3639,29 @@ tests must use file-based SQLite — documented in the test.
 
 **Evidence:** `test_native_async_db_query_and_execute` + `test_native_async_db_concurrent_through_http`
 (pass), HTTP benchmarks above.
+
+---
+
+## ADR-094 — 2026-10-06 — Secure headers stay opt-in; JWT aud/iss now enforceable
+
+**Context:** Phase 53 P2 review flagged two "soft defaults": (1) `enable_secure_headers(with_hsts=False)`
+is opt-in rather than default-on; (2) `JwtAuth` only warned when `aud`/`iss` were
+unconfigured (`middleware.rs:617-623`).
+
+**Decision:**
+1. Secure headers stay opt-in — no code change. Rationale: HSTS enabled by
+   default on a plaintext dev server is a footgun (browsers cache it; a wrong
+   `max-age` bricks local domains), and the default `CSP: 'self'` breaks any
+   frontend using CDNs. FastAPI/Starlette ship no secure-headers middleware at
+   all, so opt-in with a safe builder already exceeds parity. The secure
+   default for *new* projects is instead pushed to `justapi create` scaffolding
+   (follow-up).
+2. JWT `aud`/`iss` are now enforceable, not just warned-about:
+   `set_jwt_auth(secret, alg, audience=[...], issuer=...)` threads through
+   `_set_jwt_auth` into the existing `with_audience`/`with_issuer` builders;
+   mismatches are 401s. The one-time warn remains for unconfigured deployments.
+   Also removed dead `Validation` construction in `_set_jwt_auth` (built then
+   dropped; `from_secret` already sets `validate_exp`).
+
+**Evidence:** `test_auth.py::test_set_jwt_auth_with_audience_issuer` (config
+plumbing + backward-compat two-arg call); builders are jsonwebtoken-native.

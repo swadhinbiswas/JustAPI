@@ -1248,7 +1248,7 @@ not test issues:
 - [x] CI: pytest gate runs `test_rate_limit` (skips w/o Redis) + `test_circuit_breaker` (flake fixed); per-PR short fuzz job (`fuzz_body/headers/jwt`, 60s each).
 - [x] JWT `aud`/`iss`: `set_jwt_auth(secret, alg, audience, issuer)` enforces as 401 via Rust builders (was warn-only); stale `app.pyi` entries for touched APIs synced.
 - [ ] Security posture: secure-headers default review, revisit ignored RUSTSEC, close OWASP tail or risk-accept in DECISIONS.md; full `app.pyi` stub audit (pre-existing drift: `lifespan`, `_serve`, `run` sig).
-- [ ] Benchmark gate: add p99 regression check (currently RPS-only).
+- [ ] Benchmark gate: add p99 (currently RPS-only). Approach per `skills/benchmark-harness`: oha A/B (PR vs main, same runner) on hello-world, warn-only for 2 weeks (shared-runner noise), then fail-gate at >5% — release numbers stay on dedicated hardware.
 
 ### Exit criteria
 - [ ] `cargo test --workspace`, `clippy -D warnings`, `fmt --check`, `pytest` green on release wheel; `git diff --cached --stat` <100 lines/commit.
