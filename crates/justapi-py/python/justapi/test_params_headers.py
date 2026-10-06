@@ -62,3 +62,33 @@ def test_bool_invalid_is_422():
     c = JustAPITestClient(app)
     resp = c.get("/f?verbose=maybe")
     assert resp["status"] == 422, resp
+
+
+def test_query_constraints_422_and_ok():
+    from justapi import Query
+
+    app = JustAPIApp()
+
+    @app.get("/items")
+    def items(limit: int = Query(10, ge=1, le=100), q: str = Query("", min_length=0, max_length=10)):
+        return {"limit": limit, "q": q}
+
+    c = JustAPITestClient(app)
+    assert c.get("/items?limit=5")["status"] == 200
+    assert c.get("/items?limit=0")["status"] == 422
+    assert c.get("/items?limit=101")["status"] == 422
+    assert c.get("/items?q=" + "x" * 11)["status"] == 422
+
+
+def test_pattern_constraint():
+    from justapi import Query
+
+    app = JustAPIApp()
+
+    @app.get("/code")
+    def code(v: str = Query("", pattern=r"^[A-Z]{3}$")):
+        return {"v": v}
+
+    c = JustAPITestClient(app)
+    assert c.get("/code?v=ABC")["status"] == 200
+    assert c.get("/code?v=abc")["status"] == 422
