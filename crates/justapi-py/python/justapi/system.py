@@ -83,6 +83,8 @@ def _classify_param(name, param, hints, method, path):
             info["tokenUrl"] = fb.tokenUrl
         else:
             info["scheme"] = type(fb).__name__ if fb is not None else "unknown"
+        if isinstance(getattr(fb, "model", None), dict):
+            info["model"] = dict(fb.model)
         return info
     if isinstance(default, _PARAM_TYPES):
         info["in"] = _PARAM_KINDS[type(default).__name__]
@@ -331,7 +333,7 @@ def build_openapi(app):
                 sec_reqs.append({"OAuth2": s.get("scopes", [])})
             elif s.get("scheme") not in (None, "unknown"):
                 schemes = components.setdefault("securitySchemes", {})
-                schemes.setdefault(s["scheme"], {"type": "http", "scheme": "bearer"})
+                schemes.setdefault(s["scheme"], s.get("model") or {"type": "http", "scheme": "bearer"})
                 sec_reqs.append({s["scheme"]: s.get("scopes", [])})
         if sec_reqs:
             op["security"] = sec_reqs
