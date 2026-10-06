@@ -38,6 +38,11 @@ from .auth import (  # noqa: F401 — top-level re-export (FastAPI parity, used 
     OAuth2PasswordBearer,
     OAuth2PasswordRequestForm,
     OAuth2PasswordRequestFormStrict,
+    HTTPBearer,
+    HTTPBasic,
+    APIKeyHeader,
+    APIKeyQuery,
+    APIKeyCookie,
 )
 from . import testing as testing
 from . import tracing as tracing
@@ -328,5 +333,6 @@ __all__ = [
     "Cookie", "Body", "File", "Form", "status", "HTTPException", "WebSocketException",
     "WebSocketState", "WebSocketDisconnect", "JwtAuth", "OAuth2PasswordBearer",
     "OAuth2PasswordRequestForm", "OAuth2PasswordRequestFormStrict",
+    "HTTPBearer", "HTTPBasic", "APIKeyHeader", "APIKeyQuery", "APIKeyCookie",
     "build_help", "build_openapi", "register_system_routes"
 ]

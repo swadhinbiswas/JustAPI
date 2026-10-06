@@ -220,3 +220,88 @@ class OAuth2PasswordRequestFormStrict:
 
     def __repr__(self) -> str:
         return f"OAuth2PasswordRequestFormStrict(username='{self.username}')"
+
+
+class HTTPBearer:
+    """FastAPI-compatible Bearer scheme. Returns the token string."""
+
+    def __init__(self, auto_error: bool = True):
+        self.auto_error = auto_error
+        self.model = {"type": "http", "scheme": "bearer"}
+
+    async def __call__(self, authorization: Optional[str] = Header(None)) -> str:
+        if not authorization or not authorization.startswith("Bearer "):
+            if self.auto_error:
+                raise HTTPException(status_code=401, detail="Not authenticated",
+                                    headers={"WWW-Authenticate": "Bearer"})
+            return ""
+        return authorization[7:]
+
+
+class HTTPBasic:
+    """FastAPI-compatible Basic scheme. Returns ``(username, password)``."""
+
+    def __init__(self, auto_error: bool = True):
+        self.auto_error = auto_error
+        self.model = {"type": "http", "scheme": "basic"}
+
+    async def __call__(self, authorization: Optional[str] = Header(None)):
+        import base64
+        if not authorization or not authorization.startswith("Basic "):
+            if self.auto_error:
+                raise HTTPException(status_code=401, detail="Not authenticated",
+                                    headers={"WWW-Authenticate": "Basic"})
+            return ("", "")
+        try:
+            raw = base64.b64decode(authorization[6:]).decode("utf-8")
+            user, _, pwd = raw.partition(":")
+            return (user, pwd)
+        except Exception:
+            if self.auto_error:
+                raise HTTPException(status_code=401, detail="Invalid basic credentials")
+            return ("", "")
+
+
+class APIKeyHeader:
+    """API key from a header. Returns the key string."""
+
+    def __init__(self, name: str, auto_error: bool = True):
+        self.name = name
+        self.auto_error = auto_error
+        self.model = {"type": "apiKey", "in": "header", "name": name}
+
+    async def __call__(self, request) -> str:
+        val = request.headers.get(self.name)
+        if not val and self.auto_error:
+            raise HTTPException(status_code=401, detail="Missing API key")
+        return val or ""
+
+
+class APIKeyQuery:
+    """API key from a query param. Returns the key string."""
+
+    def __init__(self, name: str, auto_error: bool = True):
+        self.name = name
+        self.auto_error = auto_error
+        self.model = {"type": "apiKey", "in": "query", "name": name}
+
+    async def __call__(self, request) -> str:
+        val = request.query_params.get(self.name)
+        if not val and self.auto_error:
+            raise HTTPException(status_code=401, detail="Missing API key")
+        return val or ""
+
+
+class APIKeyCookie:
+    """API key from a cookie. Returns the key string."""
+
+    def __init__(self, name: str, auto_error: bool = True):
+        self.name = name
+        self.auto_error = auto_error
+        self.model = {"type": "apiKey", "in": "cookie", "name": name}
+
+    async def __call__(self, request) -> str:
+        val = request.cookies.get(self.name)
+        if not val and self.auto_error:
+            raise HTTPException(status_code=401, detail="Missing API key")
+        return val or ""
