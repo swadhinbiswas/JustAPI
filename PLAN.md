@@ -1245,8 +1245,10 @@ not test issues:
 - [ ] `FileResponse` range/ETag; `TemplateResponse` return `Response`; TestClient `headers/cookies/auth/timeout` + WS helper.
 
 ### P2 — assurance
-- [ ] CI: ungate `test_rate_limit/circuit_breaker`, remove `|| true` on 3.14t, re-enable integration-tests, add p99 gate + per-PR short fuzz.
-- [ ] Security: secure-headers default review, JWT `aud/iss` enforce option, revisit ignored RUSTSEC, close OWASP tail or risk-accept in DECISIONS.md.
+- [x] CI: pytest gate runs `test_rate_limit` (skips w/o Redis) + `test_circuit_breaker` (flake fixed); per-PR short fuzz job (`fuzz_body/headers/jwt`, 60s each).
+- [x] JWT `aud`/`iss`: `set_jwt_auth(secret, alg, audience, issuer)` enforces as 401 via Rust builders (was warn-only); stale `app.pyi` entries for touched APIs synced.
+- [ ] Security posture: secure-headers default review, revisit ignored RUSTSEC, close OWASP tail or risk-accept in DECISIONS.md; full `app.pyi` stub audit (pre-existing drift: `lifespan`, `_serve`, `run` sig).
+- [ ] Benchmark gate: add p99 regression check (currently RPS-only).
 
 ### Exit criteria
 - [ ] `cargo test --workspace`, `clippy -D warnings`, `fmt --check`, `pytest` green on release wheel; `git diff --cached --stat` <100 lines/commit.

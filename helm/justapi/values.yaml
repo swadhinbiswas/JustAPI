@@ -98,6 +98,23 @@ probes:
     timeoutSeconds: 2
     failureThreshold: 30
 
+# NetworkPolicy — default-deny with explicit allowlists. Off by default until
+# you have a CNI that enforces policy (Calico, Cilium); enabling on a
+# non-enforcing CNI is a no-op, enabling with wrong allowlists drops traffic.
+networkPolicy:
+  enabled: false
+  # Who may reach the app pods (in addition to kubelet probes, which bypass
+  # NetworkPolicy). Defaults: ingress-nginx + same namespace.
+  allowIngressFrom:
+    - namespaceSelector:
+        matchLabels:
+          name: ingress-nginx
+    - podSelector: {}
+  # What the app pods may reach (DNS is always allowed, see template).
+  # Defaults: same namespace (postgres/redis via service DNS).
+  allowEgressTo:
+    - podSelector: {}
+
 nodeSelector: {}
 tolerations: []
 affinity: {}
