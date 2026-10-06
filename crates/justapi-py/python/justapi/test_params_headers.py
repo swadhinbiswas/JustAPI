@@ -136,9 +136,23 @@ async def test_async_client_headers():
     def h(user_agent: str = Header("missing")):
         return {"ua": user_agent}
 
+    @app.put("/h")
+    def h_put(user_agent: str = Header("missing")):
+        return {"ua": user_agent}
+
+    @app.delete("/h")
+    def h_del(user_agent: str = Header("missing")):
+        return {"ua": user_agent}
+
     async with AsyncTestClient(app) as c:
         resp = await c.post("/h", b"", headers=[("user-agent", "async-post")])
         assert resp["status"] == 200
         assert _body(resp) == {"ua": "async-post"}
         resp = await c.get("/h", headers=[("user-agent", "async-get")])
         assert resp["status"] == 405  # GET not registered on POST-only route
+        resp = await c.put("/h", b"", headers=[("user-agent", "async-put")])
+        assert resp["status"] == 200
+        assert _body(resp) == {"ua": "async-put"}
+        resp = await c.delete("/h", headers=[("user-agent", "async-del")])
+        assert resp["status"] == 200
+        assert _body(resp) == {"ua": "async-del"}

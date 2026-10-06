@@ -113,6 +113,8 @@ class AsyncTestClient:
                 fn = partial(getattr(client, method.lower() + "_with"), path, headers)
             else:
                 fn = partial(getattr(client, method.lower()), path)
+        elif headers:
+            fn = partial(getattr(client, method.lower() + "_with"), path, body, headers)
         else:
             fn = partial(getattr(client, method.lower()), path, body)
 
@@ -131,14 +133,14 @@ class AsyncTestClient:
             return await loop.run_in_executor(None, fn)
         return await self._run("POST", path, body)
 
-    async def put(self, path: str, body: bytes = b"") -> dict:
-        return await self._run("PUT", path, body)
+    async def put(self, path: str, body: bytes = b"", headers=None) -> dict:
+        return await self._run("PUT", path, body, headers=headers)
 
-    async def patch(self, path: str, body: bytes = b"") -> dict:
-        return await self._run("PATCH", path, body)
+    async def patch(self, path: str, body: bytes = b"", headers=None) -> dict:
+        return await self._run("PATCH", path, body, headers=headers)
 
-    async def delete(self, path: str) -> dict:
-        return await self._run("DELETE", path)
+    async def delete(self, path: str, headers=None) -> dict:
+        return await self._run("DELETE", path, headers=headers)
 
     async def query(self, path: str, body: bytes = b"", headers=None) -> dict:
         client = self._client
