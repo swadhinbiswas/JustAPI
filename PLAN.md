@@ -1253,3 +1253,4 @@ not test issues:
 
 ### Exit criteria
 - [ ] `cargo test --workspace`, `clippy -D warnings`, `fmt --check`, `pytest` green on release wheel; `git diff --cached --stat` <100 lines/commit.
+- [ ] Known flake (2026-10-06): `justapi-inference scheduler_engine_batches_concurrent_requests` fails under full-workspace parallel load, passes in isolation. Frozen area (ADR-067), untouched by Phase 53 — re-run single test to confirm.
