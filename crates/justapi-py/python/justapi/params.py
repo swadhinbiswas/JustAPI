@@ -42,13 +42,30 @@ _TRUE_SET = {"1", "true", "yes", "on"}
 _FALSE_SET = {"0", "false", "no", "off", ""}
 
 
+def is_list_annotation(annotation: Any) -> bool:
+    """True for ``list``, ``List``, ``list[X]`` / ``List[X]`` annotations."""
+    if annotation is list:
+        return True
+    import typing
+    return typing.get_origin(annotation) in (list,)
+
+
+def list_item_type(annotation: Any) -> Any:
+    import typing
+    args = typing.get_args(annotation)
+    return args[0] if args else inspect.Parameter.empty
+
+
 def coerce_param_value(val: Any, annotation: Any, alias: str, spec: Any = None) -> Any:
     """Coerce a raw str param to its annotation, then enforce Param constraints.
 
     Raises ValueError on failure (caller maps to 422).
     """
     out = val
-    if out is not None and annotation is not inspect.Parameter.empty and isinstance(out, str):
+    if isinstance(out, (list, tuple)) and is_list_annotation(annotation):
+        item_ann = list_item_type(annotation)
+        out = [coerce_param_value(v, item_ann, alias) for v in out]
+    elif out is not None and annotation is not inspect.Parameter.empty and isinstance(out, str):
         if annotation is bool:
             low = out.strip().lower()
             if low in _TRUE_SET:
@@ -83,14 +100,15 @@ def _check_constraints(val: Any, spec: Any, alias: str) -> None:
     min_length = getattr(spec, "min_length", None)
     max_length = getattr(spec, "max_length", None)
     pattern = getattr(spec, "pattern", None)
-    if gt is not None and not val > gt:
-        raise ValueError(f"{alias} must be > {gt}")
-    if ge is not None and not val >= ge:
-        raise ValueError(f"{alias} must be >= {ge}")
-    if lt is not None and not val < lt:
-        raise ValueError(f"{alias} must be < {lt}")
-    if le is not None and not val <= le:
-        raise ValueError(f"{alias} must be <= {le}")
+    if isinstance(val, (int, float)) and not isinstance(val, bool):
+        if gt is not None and not val > gt:
+            raise ValueError(f"{alias} must be > {gt}")
+        if ge is not None and not val >= ge:
+            raise ValueError(f"{alias} must be >= {ge}")
+        if lt is not None and not val < lt:
+            raise ValueError(f"{alias} must be < {lt}")
+        if le is not None and not val <= le:
+            raise ValueError(f"{alias} must be <= {le}")
     if min_length is not None and len(val) < min_length:
         raise ValueError(f"{alias} length must be >= {min_length}")
     if max_length is not None and len(val) > max_length:
