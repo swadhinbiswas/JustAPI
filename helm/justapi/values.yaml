@@ -115,6 +115,14 @@ networkPolicy:
   allowEgressTo:
     - podSelector: {}
 
+# DB migrations — runs `justapi db migrate` as a Helm pre-install/pre-upgrade
+# hook before the app starts. Off by default: set a ConfigMap holding your
+# `<version>_<name>.sql` files and reference it here.
+migrations:
+  enabled: false
+  configMapName: ""
+  backoffLimit: 3
+
 nodeSelector: {}
 tolerations: []
 affinity: {}
