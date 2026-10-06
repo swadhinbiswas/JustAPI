@@ -64,12 +64,41 @@ impl TestClient {
         self.request(Method::PUT, path, body, &[]).await
     }
 
+    /// PUT with extra request headers.
+    pub async fn put_with(
+        &self,
+        path: &str,
+        body: Vec<u8>,
+        headers: &[(&str, &str)],
+    ) -> Result<TestResponse, anyhow::Error> {
+        self.request(Method::PUT, path, body, headers).await
+    }
+
     pub async fn patch(&self, path: &str, body: Vec<u8>) -> Result<TestResponse, anyhow::Error> {
         self.request(Method::PATCH, path, body, &[]).await
     }
 
+    /// PATCH with extra request headers.
+    pub async fn patch_with(
+        &self,
+        path: &str,
+        body: Vec<u8>,
+        headers: &[(&str, &str)],
+    ) -> Result<TestResponse, anyhow::Error> {
+        self.request(Method::PATCH, path, body, headers).await
+    }
+
     pub async fn delete(&self, path: &str) -> Result<TestResponse, anyhow::Error> {
         self.request(Method::DELETE, path, Vec::new(), &[]).await
+    }
+
+    /// DELETE with extra request headers.
+    pub async fn delete_with(
+        &self,
+        path: &str,
+        headers: &[(&str, &str)],
+    ) -> Result<TestResponse, anyhow::Error> {
+        self.request(Method::DELETE, path, Vec::new(), headers).await
     }
 
     /// Send an HTTP QUERY request (RFC 10008) with a body. QUERY is safe and

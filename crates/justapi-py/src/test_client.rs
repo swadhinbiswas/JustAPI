@@ -209,14 +209,58 @@ impl JustAPITestClient {
         self.do_request(py, move |client, rt| rt.block_on(client.put(&path, body)))
     }
 
+    /// PUT with extra request headers.
+    #[pyo3(signature = (path, body, headers))]
+    fn put_with(
+        &self,
+        py: Python<'_>,
+        path: &str,
+        body: Vec<u8>,
+        headers: Vec<(String, String)>,
+    ) -> PyResult<Py<PyAny>> {
+        let path = path.to_owned();
+        let hdr: Vec<(&str, &str)> =
+            headers.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        self.do_request(py, move |client, rt| rt.block_on(client.put_with(&path, body, &hdr)))
+    }
+
     fn patch(&self, py: Python<'_>, path: &str, body: Vec<u8>) -> PyResult<Py<PyAny>> {
         let path = path.to_owned();
         self.do_request(py, move |client, rt| rt.block_on(client.patch(&path, body)))
     }
 
+    /// PATCH with extra request headers.
+    #[pyo3(signature = (path, body, headers))]
+    fn patch_with(
+        &self,
+        py: Python<'_>,
+        path: &str,
+        body: Vec<u8>,
+        headers: Vec<(String, String)>,
+    ) -> PyResult<Py<PyAny>> {
+        let path = path.to_owned();
+        let hdr: Vec<(&str, &str)> =
+            headers.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        self.do_request(py, move |client, rt| rt.block_on(client.patch_with(&path, body, &hdr)))
+    }
+
     fn delete(&self, py: Python<'_>, path: &str) -> PyResult<Py<PyAny>> {
         let path = path.to_owned();
         self.do_request(py, move |client, rt| rt.block_on(client.delete(&path)))
+    }
+
+    /// DELETE with extra request headers.
+    #[pyo3(signature = (path, headers))]
+    fn delete_with(
+        &self,
+        py: Python<'_>,
+        path: &str,
+        headers: Vec<(String, String)>,
+    ) -> PyResult<Py<PyAny>> {
+        let path = path.to_owned();
+        let hdr: Vec<(&str, &str)> =
+            headers.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        self.do_request(py, move |client, rt| rt.block_on(client.delete_with(&path, &hdr)))
     }
 
     /// Send an HTTP QUERY request (RFC 10008): safe, idempotent, body-carrying.
