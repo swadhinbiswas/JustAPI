@@ -57,6 +57,7 @@ def _ann_str(ann):
 
 
 def _classify_param(name, param, hints, method, path):
+    import enum
     import re
 
     ann = hints.get(name)
@@ -70,6 +71,8 @@ def _classify_param(name, param, hints, method, path):
         "default": None,
         "alias": None,
     }
+    if inspect.isclass(ann) and issubclass(ann, enum.Enum):
+        info["enum"] = [e.value for e in ann]
     if path_in_tmpl:
         info["in"] = "path"
         info["required"] = True
@@ -311,6 +314,8 @@ def build_openapi(app):
         for p in d["parameters"]:
             name = p.get("alias") or p["name"]
             schema = _openapi_type(p.get("annotation", ""))
+            if p.get("enum") is not None:
+                schema["enum"] = p["enum"]
             for _c, _k in (("gt", "exclusiveMinimum"), ("ge", "minimum"), ("lt", "exclusiveMaximum"), ("le", "maximum"), ("min_length", "minLength"), ("max_length", "maxLength"), ("pattern", "pattern")):
                 if p.get(_c) is not None:
                     schema[_k] = p[_c]

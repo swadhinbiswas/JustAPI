@@ -126,6 +126,25 @@ def test_enum_coercion():
     assert c.get("/paint?color=green")["status"] == 422
 
 
+def test_enum_in_openapi():
+    import enum
+    from justapi.system import build_openapi
+
+    class Color(str, enum.Enum):
+        RED = "red"
+        BLUE = "blue"
+
+    app = JustAPIApp()
+
+    @app.get("/paint")
+    def paint(color: Color):
+        return {"color": color.value}
+
+    doc = build_openapi(app)
+    schema = doc["paths"]["/paint"]["get"]["parameters"][0]["schema"]
+    assert schema["enum"] == ["red", "blue"]
+
+
 @pytest.mark.asyncio
 async def test_async_client_headers():
     from justapi.testing import AsyncTestClient
