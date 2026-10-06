@@ -1234,10 +1234,11 @@ not test issues:
 - [ ] Verify `twine check` + fresh-venv install; document PyPI OIDC setup; make Dockerfile generic (no hard-coded `demo_app.py`).
 - [ ] Helm: add NetworkPolicy + migration Job, verify `readOnlyRootFilesystem` for uploads; Compose: verify corrected mount boots.
 
-### P1 — FastAPI parity (next)
-- [ ] `Param` constraints (`gt/ge/lt/le/min/max_length/pattern/enum`) + Header/Cookie `_`→`-` handling; bool/enum coercion.
-- [ ] OpenAPI: `components/securitySchemes`, real `requestBody` from `schema/body_schema/Form/File`, serialize `servers/contact/license`.
-- [ ] Lifespan `lifespan=` ctor + `HTTPBearer/Basic/APIKey` schemes; fix `include_router` drops (`callbacks`, WS/SSE wrap) + middleware order.
+### P1 — FastAPI parity (in progress)
+- [x] `Param` constraints (`gt/ge/lt/le/min/max_length/pattern`) enforced as 422 + Header `convert_underscores` + bool/int/float coercion (sync+async).
+- [x] OpenAPI: real param types + constraints, `cookie` params, `info/servers/tags/contact/license/termsOfService`, real `requestBody` from `Schema`/Pydantic, `components.securitySchemes` + per-op `security` from `Security()`.
+- [x] Auth schemes `HTTPBearer/HTTPBasic/APIKeyHeader/Query/Cookie` as `Depends` callables with `.model`; TestClient `get_with` (Rust) + `AsyncTestClient.get(headers=)`; `JustAPIApp(lifespan=...)` async/sync CM.
+- [ ] `include_router` SSE/WS parity + `callbacks` forwarding; middleware order review.
 - [ ] `FileResponse` range/ETag; `TemplateResponse` return `Response`; TestClient `headers/cookies/auth/timeout` + WS helper.
 
 ### P2 — assurance
