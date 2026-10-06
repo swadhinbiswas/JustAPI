@@ -787,7 +787,8 @@ class JustAPIApp:
                 if found:
                     try:
                         from .params import coerce_param_value
-                        kwargs[name] = coerce_param_value(val, param.annotation, alias)
+                        _spec = param.default if isinstance(param.default, Param) else None
+                        kwargs[name] = coerce_param_value(val, param.annotation, alias, _spec)
                     except (ValueError, TypeError) as e:
                         raise RequestValidationError([{"loc": [alias], "msg": str(e), "type": "type_error"}])
                 else:
@@ -927,7 +928,8 @@ class JustAPIApp:
                 if found:
                     try:
                         from .params import coerce_param_value
-                        kwargs[name] = coerce_param_value(val, param.annotation, alias)
+                        _spec = param.default if isinstance(param.default, Param) else None
+                        kwargs[name] = coerce_param_value(val, param.annotation, alias, _spec)
                     except (ValueError, TypeError) as e:
                         raise RequestValidationError([{"loc": [alias], "msg": str(e), "type": "type_error"}])
                 else:
