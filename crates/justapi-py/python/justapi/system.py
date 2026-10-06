@@ -77,6 +77,10 @@ def _classify_param(name, param, hints, method, path):
     if isinstance(default, _PARAM_TYPES):
         info["in"] = _PARAM_KINDS[type(default).__name__]
         info["alias"] = getattr(default, "alias", None)
+        for _c in ("gt", "ge", "lt", "le", "min_length", "max_length", "pattern"):
+            _v = getattr(default, _c, None)
+            if _v is not None:
+                info[_c] = _v
         dflt = getattr(default, "default", inspect.Parameter.empty)
         if dflt is inspect.Parameter.empty:
             info["required"] = True
@@ -120,6 +124,7 @@ def _build_descriptor(route):
         "status_code": route.get("status_code"),
         "operation_id": route.get("operation_id"),
         "responses": route.get("responses"),
+        "body_schema": route.get("body_schema"), "schema": route.get("schema"),
         "experimental": bool(route.get("experimental")),
         "openapi_extra": route.get("openapi_extra"),
     }
@@ -227,6 +232,38 @@ def build_help(app):
     }
 
 
+def _openapi_type(ann: str) -> dict:
+    a = (ann or "").lower()
+    if a in ("int", "integer"):
+        return {"type": "integer"}
+    if a in ("float", "number"):
+        return {"type": "number"}
+    if a in ("bool", "boolean"):
+        return {"type": "boolean"}
+    if a.startswith("list") or a.endswith("]") and a.startswith("list"):
+        return {"type": "array", "items": {}}
+    if a.startswith("dict") or a == "object":
+        return {"type": "object"}
+    return {"type": "string"}
+
+
+def _route_body_schema(route):
+    for key in ("schema", "body_schema"):
+        s = route.get(key)
+        if s is None:
+            continue
+        try:
+            if hasattr(s, "_schema_json") and callable(s._schema_json):
+                return json.loads(s._schema_json())
+            if hasattr(s, "model_json_schema") and callable(s.model_json_schema):
+                return s.model_json_schema()
+            if hasattr(s, "schema") and callable(s.schema):
+                return s.schema()
+        except Exception:
+            continue
+    return None
+
+
 def build_openapi(app):
     """Synthesize a minimal OpenAPI 3.1 document from registered routes."""
     paths: dict = {}
@@ -254,37 +291,18 @@ def build_openapi(app):
         parameters = []
         request_body = None
         for p in d["parameters"]:
+            name = p.get("alias") or p["name"]
+            schema = _openapi_type(p.get("annotation", ""))
+            for _c, _k in (("gt", "exclusiveMinimum"), ("ge", "minimum"), ("lt", "exclusiveMaximum"), ("le", "maximum"), ("min_length", "minLength"), ("max_length", "maxLength"), ("pattern", "pattern")):
+                if p.get(_c) is not None:
+                    schema[_k] = p[_c]
             if p["in"] == "path":
-                parameters.append(
-                    {
-                        "name": p["name"],
-                        "in": "path",
-                        "required": True,
-                        "schema": {"type": "string"},
-                    }
-                )
-            elif p["in"] == "query":
-                parameters.append(
-                    {
-                        "name": p["name"],
-                        "in": "query",
-                        "required": p.get("required", False),
-                        "schema": {"type": "string"},
-                    }
-                )
-            elif p["in"] == "header":
-                parameters.append(
-                    {
-                        "name": p["name"],
-                        "in": "header",
-                        "required": p.get("required", False),
-                        "schema": {"type": "string"},
-                    }
-                )
+                parameters.append({"name": name, "in": "path", "required": True, "schema": schema})
+            elif p["in"] in ("query", "header", "cookie"):
+                parameters.append({"name": name, "in": p["in"], "required": p.get("required", False), "schema": schema})
             elif p["in"] in ("body", "form", "file"):
-                request_body = {
-                    "content": {"application/json": {"schema": {"type": "object"}}}
-                }
+                body_schema = _route_body_schema(d)
+                request_body = {"content": {"application/json": {"schema": body_schema or {"type": "object"}}}}
         if parameters:
             op["parameters"] = parameters
         if request_body:
@@ -301,14 +319,24 @@ def build_openapi(app):
             responses[success_code] = {"description": "Successful Response"}
         op["responses"] = responses
         paths.setdefault(path, {})[method] = op
-    return {
-        "openapi": "3.1.0",
-        "info": {
-            "title": getattr(app, "title", "JustAPIApp"),
-            "version": getattr(app, "version", "1.0.0"),
-        },
-        "paths": paths,
+    info: dict = {
+        "title": getattr(app, "title", "JustAPIApp"),
+        "version": getattr(app, "version", "1.0.0"),
     }
+    if getattr(app, "description", None):
+        info["description"] = app.description
+    if getattr(app, "terms_of_service", None):
+        info["termsOfService"] = app.terms_of_service
+    if getattr(app, "contact", None):
+        info["contact"] = app.contact
+    if getattr(app, "license_info", None):
+        info["license"] = app.license_info
+    doc: dict = {"openapi": "3.1.0", "info": info, "paths": paths}
+    if getattr(app, "servers", None):
+        doc["servers"] = app.servers
+    if getattr(app, "openapi_tags", None):
+        doc["tags"] = app.openapi_tags
+    return doc
 
 
 def _help_handler_factory(app):
