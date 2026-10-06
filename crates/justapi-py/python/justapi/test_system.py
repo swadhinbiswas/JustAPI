@@ -70,6 +70,24 @@ def test_openapi_synth():
     assert item_path["parameters"][0]["name"] == "item_id"
 
 
+def test_openapi_callbacks_via_extra():
+    # Documented callbacks path (openapi-callbacks.md): openapi_extra merges
+    # vendor extensions like `callbacks` into the operation. A native
+    # `callbacks=` kwarg is deferred post-2.0.8 (10-signature change).
+    from justapi import JustAPIApp
+    from justapi.system import build_openapi
+
+    app = JustAPIApp()
+    cb = {"on_done": {"http://x/hook": {"post": {"requestBody": "RB"}}}}
+
+    @app.post("/orders", openapi_extra={"callbacks": cb})
+    def create_order():
+        return {"id": 1}
+
+    op = build_openapi(app)["paths"]["/orders"]["post"]
+    assert op["callbacks"] == cb
+
+
 def test_named_route_lookup_and_404():
     app = _make_app()
     c = JustAPITestClient(app)
