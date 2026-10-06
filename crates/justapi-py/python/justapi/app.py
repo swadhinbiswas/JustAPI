@@ -756,9 +756,15 @@ class JustAPIApp:
                     if val is not None: found = True
 
                 if not found and param_type is Header:
-                    val = request.headers.get(alias)
-                    if val is not None:
-                        found = True
+                    _convert = getattr(param.default, "convert_underscores", True)
+                    for _cand in (alias, alias.replace("_", "-")) if (_convert and "_" in alias) else (alias,):
+                        try:
+                            val = request.headers.get(_cand)
+                        except Exception:
+                            val = None
+                        if val is not None:
+                            found = True
+                            break
 
                 if not found and param_type is Cookie:
                     val = request.cookies.get(alias)
@@ -780,12 +786,8 @@ class JustAPIApp:
 
                 if found:
                     try:
-                        if val is not None and param.annotation is int and isinstance(val, str):
-                            kwargs[name] = int(val)
-                        elif val is not None and param.annotation is float and isinstance(val, str):
-                            kwargs[name] = float(val)
-                        else:
-                            kwargs[name] = val
+                        from .params import coerce_param_value
+                        kwargs[name] = coerce_param_value(val, param.annotation, alias)
                     except (ValueError, TypeError) as e:
                         raise RequestValidationError([{"loc": [alias], "msg": str(e), "type": "type_error"}])
                 else:
@@ -894,9 +896,15 @@ class JustAPIApp:
                     if val is not None: found = True
 
                 if not found and param_type is Header:
-                    val = request.headers.get(alias)
-                    if val is not None:
-                        found = True
+                    _convert = getattr(param.default, "convert_underscores", True)
+                    for _cand in (alias, alias.replace("_", "-")) if (_convert and "_" in alias) else (alias,):
+                        try:
+                            val = request.headers.get(_cand)
+                        except Exception:
+                            val = None
+                        if val is not None:
+                            found = True
+                            break
 
                 if not found and param_type is Cookie:
                     val = request.cookies.get(alias)
@@ -918,12 +926,8 @@ class JustAPIApp:
 
                 if found:
                     try:
-                        if val is not None and param.annotation is int and isinstance(val, str):
-                            kwargs[name] = int(val)
-                        elif val is not None and param.annotation is float and isinstance(val, str):
-                            kwargs[name] = float(val)
-                        else:
-                            kwargs[name] = val
+                        from .params import coerce_param_value
+                        kwargs[name] = coerce_param_value(val, param.annotation, alias)
                     except (ValueError, TypeError) as e:
                         raise RequestValidationError([{"loc": [alias], "msg": str(e), "type": "type_error"}])
                 else:
