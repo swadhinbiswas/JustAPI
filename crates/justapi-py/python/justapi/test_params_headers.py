@@ -145,6 +145,30 @@ def test_enum_in_openapi():
     assert schema["enum"] == ["red", "blue"]
 
 
+def test_list_query_params():
+    from typing import List
+    from justapi import Query
+
+    app = JustAPIApp()
+
+    @app.get("/tags")
+    def tags(tag: List[str]):
+        return {"tags": tag}
+
+    @app.get("/nums")
+    def nums(n: List[int] = Query(..., min_length=2)):
+        return {"n": n}
+
+    c = JustAPITestClient(app)
+    resp = c.get("/tags?tag=a&tag=b&tag=c")
+    assert resp["status"] == 200, resp
+    assert _body(resp) == {"tags": ["a", "b", "c"]}
+    resp = c.get("/nums?n=1&n=2&n=3")
+    assert resp["status"] == 200, resp
+    assert _body(resp) == {"n": [1, 2, 3]}
+    assert c.get("/nums?n=1")["status"] == 422  # min_length=2
+
+
 @pytest.mark.asyncio
 async def test_async_client_headers():
     from justapi.testing import AsyncTestClient

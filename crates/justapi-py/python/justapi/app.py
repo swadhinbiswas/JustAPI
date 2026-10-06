@@ -754,8 +754,25 @@ class JustAPIApp:
                     if val is not None: found = True
 
                 if not found and (param_type is Query or (param_type is None and alias in request.query_params)):
-                    val = request.query_params.get(alias)
-                    if val is not None: found = True
+                    from .params import is_list_annotation as _is_list
+                    if _is_list(param.annotation):
+                        try:
+                            _getlist = request.query_params.getlist
+                        except Exception:
+                            _getlist = None
+                        if _getlist is not None:
+                            val = list(_getlist(alias))
+                        else:
+                            import urllib.parse as _up
+                            _qs = request.get("query_string", b"")
+                            if isinstance(_qs, bytes):
+                                _qs = _qs.decode("utf-8")
+                            val = _up.parse_qs(_qs).get(alias, [])
+                        if val:
+                            found = True
+                    else:
+                        val = request.query_params.get(alias)
+                        if val is not None: found = True
 
                 if not found and param_type is Header:
                     _convert = getattr(param.default, "convert_underscores", True)
@@ -895,8 +912,25 @@ class JustAPIApp:
                     if val is not None: found = True
 
                 if not found and (param_type is Query or (param_type is None and alias in request.query_params)):
-                    val = request.query_params.get(alias)
-                    if val is not None: found = True
+                    from .params import is_list_annotation as _is_list
+                    if _is_list(param.annotation):
+                        try:
+                            _getlist = request.query_params.getlist
+                        except Exception:
+                            _getlist = None
+                        if _getlist is not None:
+                            val = list(_getlist(alias))
+                        else:
+                            import urllib.parse as _up
+                            _qs = request.get("query_string", b"")
+                            if isinstance(_qs, bytes):
+                                _qs = _qs.decode("utf-8")
+                            val = _up.parse_qs(_qs).get(alias, [])
+                        if val:
+                            found = True
+                    else:
+                        val = request.query_params.get(alias)
+                        if val is not None: found = True
 
                 if not found and param_type is Header:
                     _convert = getattr(param.default, "convert_underscores", True)
