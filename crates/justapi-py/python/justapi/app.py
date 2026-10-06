@@ -1491,7 +1491,7 @@ class JustAPIApp:
         """
         self._app.enable_secure_headers(with_hsts)
 
-    def set_jwt_auth(self, secret: str, algorithm: str = "HS256"):
+    def set_jwt_auth(self, secret: str, algorithm: str = "HS256", audience: list = None, issuer: str = None):
         """
         Enable Rust-native JWT authentication middleware.
 
@@ -1501,8 +1501,12 @@ class JustAPIApp:
         Args:
             secret: The HMAC shared secret.
             algorithm: Signing algorithm (default ``"HS256"``).
+            audience: Expected ``aud`` claim(s). When set, tokens with a
+                mismatched audience are rejected (401) instead of warned-about.
+            issuer: Expected ``iss`` claim. When set, tokens from other
+                issuers are rejected (401).
         """
-        self._app._set_jwt_auth(secret, algorithm)
+        self._app._set_jwt_auth(secret, algorithm, audience, issuer)
 
     def register_health_check(self, name: str, check: typing.Callable[[], bool]):
         """

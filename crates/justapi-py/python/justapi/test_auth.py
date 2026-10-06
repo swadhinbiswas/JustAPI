@@ -121,3 +121,13 @@ def test_set_jwt_auth_on_app():
     # We can't easily test the full middleware chain here, but we can verify
     # that the configuration was accepted without error.
     assert app._app is not None
+
+
+def test_set_jwt_auth_with_audience_issuer():
+    app = JustAPIApp()
+    app.set_jwt_auth("my-secret", "HS256", audience=["svc-a"], issuer="auth-svc")
+    assert app._app is not None
+    # Backwards compatible: old two-arg call still works.
+    app2 = JustAPIApp()
+    app2.set_jwt_auth("my-secret")
+    assert app2._app is not None

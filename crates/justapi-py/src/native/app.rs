@@ -505,11 +505,14 @@ impl JustAPIApp {
         }
     }
 
+    #[pyo3(signature = (secret, algorithm=None, audience=None, issuer=None))]
     fn _set_jwt_auth(
         &mut self,
         py: Python<'_>,
         secret: String,
         algorithm: Option<String>,
+        audience: Option<Vec<String>>,
+        issuer: Option<String>,
     ) -> PyResult<()> {
         let alg = match algorithm.as_deref() {
             Some("HS384") => jsonwebtoken::Algorithm::HS384,
@@ -522,12 +525,16 @@ impl JustAPIApp {
             Some("EdDSA") | Some("ED25519") => jsonwebtoken::Algorithm::EdDSA,
             _ => jsonwebtoken::Algorithm::HS256,
         };
-        let mut v = jsonwebtoken::Validation::new(alg);
-        v.validate_exp = true;
-        self.jwt_auth = Some(
-            justapi_core::middleware::JwtAuth::from_secret(secret.as_bytes())
-                .with_algorithms(vec![alg]),
-        );
+        let mut auth = justapi_core::middleware::JwtAuth::from_secret(secret.as_bytes())
+            .with_algorithms(vec![alg]);
+        if let Some(aud) = audience.as_ref() {
+            let refs: Vec<&str> = aud.iter().map(|s| s.as_str()).collect();
+            auth = auth.with_audience(&refs);
+        }
+        if let Some(iss) = issuer.as_ref() {
+            auth = auth.with_issuer(iss);
+        }
+        self.jwt_auth = Some(auth);
         let _ = py;
         Ok(())
     }
