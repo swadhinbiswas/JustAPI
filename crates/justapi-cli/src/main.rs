@@ -553,6 +553,9 @@ from justapi import JustAPIApp, Schema, HTTPException
 
 app = JustAPIApp(title="{name}", version="0.1.0")
 
+# Secure defaults: nosniff / DENY / CSP on every response (ADR-094).
+app.enable_secure_headers()
+
 # Mount built-in GraphQL route handler (GraphiQL UI + execution engine)
 app.graphql(path="/graphql")
 
@@ -585,6 +588,9 @@ from justapi import JustAPIApp, Schema, HTTPException
 from pydantic import Field
 
 app = JustAPIApp(title="{name}", version="0.1.0")
+
+# Secure defaults: nosniff / DENY / CSP on every response (ADR-094).
+app.enable_secure_headers()
 
 
 class RPCRequest(Schema):
@@ -630,6 +636,9 @@ from justapi import JustAPIApp, Schema, HTTPException
 from pydantic import Field
 
 app = JustAPIApp(title="{name}", version="0.1.0")
+
+# Secure defaults: nosniff / DENY / CSP on every response (ADR-094).
+app.enable_secure_headers()
 
 
 class JSONRPCRequest(Schema):
@@ -684,6 +693,9 @@ from pydantic import Field
 import duckdb
 
 app = JustAPIApp(title="{name}", version="0.1.0")
+
+# Secure defaults: nosniff / DENY / CSP on every response (ADR-094).
+app.enable_secure_headers()
 
 # Wire DuckDB analytical engine
 conn = duckdb.connect("{name}.duckdb")
@@ -747,6 +759,9 @@ from pydantic import Field
 
 app = JustAPIApp(title="{name}", version="0.1.0")
 
+# Secure defaults: nosniff / DENY / CSP on every response (ADR-094).
+app.enable_secure_headers()
+
 
 class EventPayload(Schema):
     event_name: str = Field(..., description="Event name")
@@ -785,6 +800,9 @@ from pydantic import Field
 from pymongo import MongoClient
 
 app = JustAPIApp(title="{name}", version="0.1.0")
+
+# Secure defaults: nosniff / DENY / CSP on every response (ADR-094).
+app.enable_secure_headers()
 
 # Wire MongoDB connection
 mongo_client = MongoClient("{db_url}")
@@ -835,6 +853,9 @@ from pydantic import Field
 import redis
 
 app = JustAPIApp(title="{name}", version="0.1.0")
+
+# Secure defaults: nosniff / DENY / CSP on every response (ADR-094).
+app.enable_secure_headers()
 
 # Wire Redis client connection
 r = redis.Redis.from_url("{db_url}", decode_responses=True)
@@ -910,6 +931,9 @@ from justapi import JustAPIApp, Schema, HTTPException, native_async
 from pydantic import Field
 
 app = JustAPIApp(title="{name}", version="0.1.0")
+
+# Secure defaults: nosniff / DENY / CSP on every response (ADR-094).
+app.enable_secure_headers()
 
 # Wire database backend
 {db_setup}
@@ -1804,6 +1828,25 @@ async fn run() -> anyhow::Result<()> {
             println!("\n  Report saved to {}", output.display());
 
             Ok(())
+        }
+    }
+}
+
+#[cfg(test)]
+mod scaffold_tests {
+    use super::scaffold_main_py;
+
+    #[test]
+    fn all_scaffolds_enable_secure_headers() {
+        // ADR-094: new projects get secure headers by default.
+        for db in ["postgres", "sqlite", "mysql", "duckdb"] {
+            for api in ["rest", "graphql", "grpc", "jsonrpc"] {
+                let code = scaffold_main_py("demo", db, "sqlite::memory:", api);
+                assert!(
+                    code.contains("app.enable_secure_headers()"),
+                    "scaffold missing secure headers for db={db} api={api}"
+                );
+            }
         }
     }
 }
