@@ -74,6 +74,16 @@ def _classify_param(name, param, hints, method, path):
         info["in"] = "path"
         info["required"] = True
         return info
+    if hasattr(default, "dependency"):
+        info["in"] = "security"
+        info["scopes"] = list(getattr(default, "scopes", []) or [])
+        fb = getattr(default, "dependency", None)
+        if hasattr(fb, "tokenUrl"):
+            info["scheme"] = "oauth2"
+            info["tokenUrl"] = fb.tokenUrl
+        else:
+            info["scheme"] = type(fb).__name__ if fb is not None else "unknown"
+        return info
     if isinstance(default, _PARAM_TYPES):
         info["in"] = _PARAM_KINDS[type(default).__name__]
         info["alias"] = getattr(default, "alias", None)
@@ -129,6 +139,7 @@ def _build_descriptor(route):
         "openapi_extra": route.get("openapi_extra"),
     }
     params = []
+    security = []
     return_ann = None
     docstring = None
     is_websocket = method == "WS"
@@ -149,8 +160,12 @@ def _build_descriptor(route):
                 classified = _classify_param(pname, p, hints, method, path)
                 if classified["in"] in ("request", "websocket"):
                     continue
+                if classified["in"] == "security":
+                    security.append(classified)
+                    continue
                 params.append(classified)
     descriptor["parameters"] = params
+    descriptor["security"] = security
     descriptor["returns"] = _ann_str(return_ann)
     descriptor["is_websocket"] = is_websocket
     descriptor["example"] = _example_snippet(descriptor)
@@ -267,6 +282,7 @@ def _route_body_schema(route):
 def build_openapi(app):
     """Synthesize a minimal OpenAPI 3.1 document from registered routes."""
     paths: dict = {}
+    components: dict = {}
     for d in collect_routes(app):
         path = d["path"]
         method = "get" if d["method"] == "WS" else d["method"].lower()
@@ -307,6 +323,18 @@ def build_openapi(app):
             op["parameters"] = parameters
         if request_body:
             op["requestBody"] = request_body
+        sec_reqs = []
+        for s in d.get("security", []):
+            if s.get("scheme") == "oauth2":
+                schemes = components.setdefault("securitySchemes", {})
+                schemes.setdefault("OAuth2", {"type": "oauth2", "flows": {"password": {"tokenUrl": s.get("tokenUrl") or "/token"}}})
+                sec_reqs.append({"OAuth2": s.get("scopes", [])})
+            elif s.get("scheme") not in (None, "unknown"):
+                schemes = components.setdefault("securitySchemes", {})
+                schemes.setdefault(s["scheme"], {"type": "http", "scheme": "bearer"})
+                sec_reqs.append({s["scheme"]: s.get("scopes", [])})
+        if sec_reqs:
+            op["security"] = sec_reqs
         success_code = str(d.get("status_code") or 200)
         raw_responses = d.get("responses")
         if isinstance(raw_responses, str):
@@ -332,6 +360,8 @@ def build_openapi(app):
     if getattr(app, "license_info", None):
         info["license"] = app.license_info
     doc: dict = {"openapi": "3.1.0", "info": info, "paths": paths}
+    if components:
+        doc["components"] = components
     if getattr(app, "servers", None):
         doc["servers"] = app.servers
     if getattr(app, "openapi_tags", None):
