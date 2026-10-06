@@ -1,5 +1,6 @@
 """Header convert_underscores + bool/int/float coercion parity (Phase 53)."""
 import json
+import pytest
 from justapi import JustAPIApp, JustAPITestClient, Header
 
 
@@ -123,3 +124,21 @@ def test_enum_coercion():
     c = JustAPITestClient(app)
     assert c.get("/paint?color=red")["status"] == 200
     assert c.get("/paint?color=green")["status"] == 422
+
+
+@pytest.mark.asyncio
+async def test_async_client_headers():
+    from justapi.testing import AsyncTestClient
+
+    app = JustAPIApp()
+
+    @app.post("/h")
+    def h(user_agent: str = Header("missing")):
+        return {"ua": user_agent}
+
+    async with AsyncTestClient(app) as c:
+        resp = await c.post("/h", b"", headers=[("user-agent", "async-post")])
+        assert resp["status"] == 200
+        assert _body(resp) == {"ua": "async-post"}
+        resp = await c.get("/h", headers=[("user-agent", "async-get")])
+        assert resp["status"] == 405  # GET not registered on POST-only route

@@ -121,7 +121,14 @@ class AsyncTestClient:
     async def get(self, path: str, headers=None) -> dict:
         return await self._run("GET", path, headers=headers)
 
-    async def post(self, path: str, body: bytes = b"") -> dict:
+    async def post(self, path: str, body: bytes = b"", headers=None) -> dict:
+        if headers:
+            client = self._client
+            if client is None:
+                raise RuntimeError("AsyncTestClient not initialized")
+            loop = asyncio.get_running_loop()
+            fn = partial(client.post_with, path, body, headers)
+            return await loop.run_in_executor(None, fn)
         return await self._run("POST", path, body)
 
     async def put(self, path: str, body: bytes = b"") -> dict:
@@ -133,13 +140,14 @@ class AsyncTestClient:
     async def delete(self, path: str) -> dict:
         return await self._run("DELETE", path)
 
-    async def query(self, path: str, body: bytes = b"") -> dict:
+    async def query(self, path: str, body: bytes = b"", headers=None) -> dict:
         client = self._client
         if client is None:
             raise RuntimeError("AsyncTestClient not initialized")
         loop = asyncio.get_running_loop()
         # RFC 10008 requires a Content-Type on QUERY requests.
-        fn = partial(client.query_with, path, body, [("Content-Type", "application/json")])
+        hdrs = headers or [("Content-Type", "application/json")]
+        fn = partial(client.query_with, path, body, hdrs)
         return await loop.run_in_executor(None, fn)
 
 
