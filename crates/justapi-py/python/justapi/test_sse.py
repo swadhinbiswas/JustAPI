@@ -40,3 +40,22 @@ def test_sse_native_rust_stream():
     assert 'data: {"n":3}' in body
     # content-type is event-stream
     assert r["headers"].get("content-type", "").startswith("text/event-stream")
+
+
+def test_router_sse_include_prefix_tags():
+    """APIRouter SSE via include_router keeps prefix/tags/summary in OpenAPI."""
+    from justapi import JustAPIApp, APIRouter
+    from justapi.system import build_openapi
+
+    app = JustAPIApp()
+    r = APIRouter(prefix="/v1")
+
+    @r.sse("/events", tags=["stream"], summary="EV")
+    def ev(request):
+        yield "x"
+
+    app.include_router(r, prefix="/api")
+    doc = build_openapi(app)
+    op = doc["paths"]["/api/v1/events"]["get"]
+    assert op.get("tags") == ["stream"]
+    assert op.get("summary") == "EV"

@@ -287,7 +287,7 @@ def build_openapi(app):
     components: dict = {}
     for d in collect_routes(app):
         path = d["path"]
-        method = "get" if d["method"] == "WS" else d["method"].lower()
+        method = "get" if d["method"] in ("WS", "SSE") else d["method"].lower()
         op: dict = {}
         if d.get("summary"):
             op["summary"] = d["summary"]

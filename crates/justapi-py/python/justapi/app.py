@@ -1722,9 +1722,9 @@ class JustAPIApp:
             elif route["method"] == "FRONTEND":
                 self.frontend(path, route["directory"], html=route.get("html", True), check_dir=route.get("check_dir", True))
             elif route["method"] == "SSE":
-                self._app.get(path, self._wrap_sse_handler(route["handler"]))
+                self.sse(path, route["handler"], dependencies=combined_deps, middlewares=combined_mws, tags=route_tags or None, summary=route.get("summary"), description=route.get("description"), deprecated=route_deprecated, responses=route_responses or None, operation_id=route.get("operation_id"), openapi_extra=route.get("openapi_extra"), include_in_schema=route_include, name=route.get("name"))
             elif route["method"] == "WS":
-                self._app.websocket(path, route["handler"])
+                self.websocket(path, route["handler"], dependencies=combined_deps, middlewares=combined_mws, tags=route_tags or None, summary=route.get("summary"), description=route.get("description"), deprecated=route_deprecated, responses=route_responses or None, operation_id=route.get("operation_id"), openapi_extra=route.get("openapi_extra"), include_in_schema=route_include, name=route.get("name"))
 
     def url_for(self, name, **path_params):
         """Build a URL path for a named route, substituting path parameters.
@@ -1962,19 +1962,25 @@ class JustAPIApp:
             return TokenStreamResponse(agen())
         return wrapper
 
-    def sse(self, path: str, handler=None):
+    def sse(self, path: str, handler=None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None, tags: typing.List[str] = None, summary: str = None, description: str = None, deprecated: bool = False, responses: dict = None, operation_id: str = None, openapi_extra: dict = None, include_in_schema: bool = True, name: str = None):
         """Register a Server-Sent Events route.
 
         The handler may be a sync or async generator yielding strings/bytes.
         Each yielded item is streamed to the client as an SSE event.
+
+        Note: route ``dependencies``/``middlewares`` are recorded for OpenAPI
+        but are not executed for SSE streams (the stream bypasses the
+        request-handler pipeline by design).
         """
+        def _register(func):
+            self._record("SSE", path, func, dependencies=dependencies or [], middlewares=middlewares or [], tags=tags, summary=summary, description=description, deprecated=deprecated, responses=responses, operation_id=operation_id, openapi_extra=openapi_extra, include_in_schema=include_in_schema, name=name)
+            self._app.get(path, self._wrap_sse_handler(func))
+            return func
         if handler is None:
             def decorator(func):
-                self._app.get(path, self._wrap_sse_handler(func))
-                return func
+                return _register(func)
             return decorator
-        self._app.get(path, self._wrap_sse_handler(handler))
-        return handler
+        return _register(handler)
 
     def sse_native(self, path: str, count: int = 10, interval_ms: int = 100):
         """Register a **Rust-native** Server-Sent Events route (ADR-088).
@@ -1988,7 +1994,7 @@ class JustAPIApp:
         self._app.sse_native(path, count, interval_ms)
         return self
 
-    def websocket(self, path: str, handler=None):
+    def websocket(self, path: str, handler=None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None, tags: typing.List[str] = None, summary: str = None, description: str = None, deprecated: bool = False, responses: dict = None, operation_id: str = None, openapi_extra: dict = None, include_in_schema: bool = True, name: str = None):
         """Register a WebSocket route.
 
         The handler is an async function receiving a single `WebSocket` object:
@@ -1997,14 +2003,19 @@ class JustAPIApp:
                 msg = await ws.receive_text()
                 await ws.send_text(msg)
                 await ws.close()
+
+        Note: route ``dependencies``/``middlewares`` are recorded for OpenAPI
+        but are not executed for WebSocket upgrades (raw TCP upgrade path).
         """
+        def _register(func):
+            self._record("WS", path, func, dependencies=dependencies or [], middlewares=middlewares or [], tags=tags, summary=summary, description=description, deprecated=deprecated, responses=responses, operation_id=operation_id, openapi_extra=openapi_extra, include_in_schema=include_in_schema, name=name)
+            self._app.websocket(path, func)
+            return func
         if handler is None:
             def decorator(func):
-                self._app.websocket(path, func)
-                return func
+                return _register(func)
             return decorator
-        self._app.websocket(path, handler)
-        return handler
+        return _register(handler)
 
     @property
     def _inner(self):
@@ -2144,23 +2155,25 @@ class APIRouter:
         """Register a static frontend (SPA) mount under ``path``."""
         self.routes.append({"method": "FRONTEND", "path": path, "directory": directory, "html": html, "check_dir": check_dir})
 
-    def sse(self, path: str, handler=None, dependencies: typing.List[Depends] = None):
+    def sse(self, path: str, handler=None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None, tags: typing.List[str] = None, summary: str = None, description: str = None, deprecated: bool = False, responses: dict = None, operation_id: str = None, openapi_extra: dict = None, include_in_schema: bool = True, name: str = None):
+        def _store(handler):
+            self.routes.append({"method": "SSE", "path": self.prefix + path, "handler": handler, "dependencies": dependencies or [], "middlewares": middlewares or [], "tags": tags or [], "summary": summary, "description": description, "deprecated": deprecated, "responses": responses, "operation_id": operation_id, "openapi_extra": openapi_extra, "include_in_schema": include_in_schema, "name": name})
+            return handler
         if handler is None:
             def decorator(func):
-                self.routes.append({"method": "SSE", "path": self.prefix + path, "handler": func, "dependencies": dependencies or []})
-                return func
+                return _store(func)
             return decorator
-        self.routes.append({"method": "SSE", "path": self.prefix + path, "handler": handler, "dependencies": dependencies or []})
-        return handler
+        return _store(handler)
 
-    def websocket(self, path: str, handler=None, dependencies: typing.List[Depends] = None):
+    def websocket(self, path: str, handler=None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None, tags: typing.List[str] = None, summary: str = None, description: str = None, deprecated: bool = False, responses: dict = None, operation_id: str = None, openapi_extra: dict = None, include_in_schema: bool = True, name: str = None):
+        def _store(handler):
+            self.routes.append({"method": "WS", "path": self.prefix + path, "handler": handler, "dependencies": dependencies or [], "middlewares": middlewares or [], "tags": tags or [], "summary": summary, "description": description, "deprecated": deprecated, "responses": responses, "operation_id": operation_id, "openapi_extra": openapi_extra, "include_in_schema": include_in_schema, "name": name})
+            return handler
         if handler is None:
             def decorator(func):
-                self.routes.append({"method": "WS", "path": self.prefix + path, "handler": func, "dependencies": dependencies or []})
-                return func
+                return _store(func)
             return decorator
-        self.routes.append({"method": "WS", "path": self.prefix + path, "handler": handler, "dependencies": dependencies or []})
-        return handler
+        return _store(handler)
 
     def route(self, path: str, methods: typing.List[str] = None, dependencies: typing.List[Depends] = None, middlewares: typing.List[typing.Callable] = None):
         if methods is None:
