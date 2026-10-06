@@ -206,6 +206,18 @@ class FileResponse(Response):
             "content-disposition",
             f'{content_disposition_type}; filename="{filename}"',
         )
+        try:
+            st = stat_result if stat_result is not None else os.stat(self.path)
+            lowered = {k.lower() for k in content_headers}
+            if "content-length" not in lowered:
+                content_headers["content-length"] = str(st.st_size)
+            if "last-modified" not in lowered:
+                mtime = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc)
+                content_headers["last-modified"] = mtime.strftime("%a, %d %b %Y %H:%M:%S GMT")
+            if "etag" not in lowered:
+                content_headers["etag"] = f'W/"{int(st.st_mtime):x}-{st.st_size:x}"'
+        except OSError:
+            pass
 
         super().__init__(
             content=content,

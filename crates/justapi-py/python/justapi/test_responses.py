@@ -46,6 +46,25 @@ def test_file_response_serves_content():
         os.unlink(path)
 
 
+def test_file_response_conditional_headers():
+    with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as tf:
+        tf.write(b"0123456789")
+        path = tf.name
+    try:
+        r = FileResponse(path)
+        hdrs = {k: v for k, v in r.headers}
+        assert hdrs[b"content-length"] == b"10"
+        assert hdrs[b"etag"].startswith(b'W/"')
+        assert b"GMT" in hdrs[b"last-modified"]
+        # Caller overrides win; stat_result is honored without disk hit.
+        st = os.stat(path)
+        r2 = FileResponse(path, headers={"etag": '"fixed"', "content-length": "10"}, stat_result=st)
+        hdrs2 = {k: v for k, v in r2.headers}
+        assert hdrs2[b"etag"] == b'"fixed"'
+    finally:
+        os.unlink(path)
+
+
 def test_response_end_to_end_via_testclient():
     app = JustAPIApp()
 
