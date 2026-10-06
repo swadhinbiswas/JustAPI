@@ -1232,7 +1232,8 @@ not test issues:
 ### P0 — release mechanics (in progress)
 - [x] Ops packaging fixes: helm `anomalyco` → `swadhinbiswas`, compose `./python` → `./crates/justapi-py/python`, drop stale 3.11 classifier (`requires-python>=3.12`), Dockerfile add `jinja2` + `timeout=5` healthcheck.
 - [x] Release wheel re-verified on Phase-53 tree (2026-10-06): `maturin build --release` → `twine check` PASSED (`justapi-2.0.10-cp311-abi3-manylinux_2_34_x86_64.whl`).
-- [ ] Publish (blocked: PyPI OIDC / `MATURIN_PYPI_TOKEN`); document PyPI OIDC setup; make Dockerfile generic (no hard-coded `demo_app.py`).
+- [ ] Publish (blocked: PyPI OIDC / `MATURIN_PYPI_TOKEN`); document PyPI OIDC setup; Dockerfile CMD (not ENTRYPOINT) so apps override.
+- [x] Docker image boots standalone: `/live` 200 + `/async-demo` JSON from host. Build found 2 real bugs, both fixed: binary name `justapi-cli` (was `justapi`) + demo bound to 127.0.0.1 (now 0.0.0.0). Full `compose up` not run here — host port 5432 taken by unrelated postgres (environmental).
 - [x] Helm: NetworkPolicy (opt-in default-deny) + migration Job (pre-install/upgrade hook) added; verified with `helm lint` (0 failed) + `helm template` render (helm v3.16.3). Remaining: verify `readOnlyRootFilesystem` for uploads on a live cluster.
 
 ### P1 — FastAPI parity (in progress)
