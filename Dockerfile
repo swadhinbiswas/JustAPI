@@ -54,4 +54,6 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/live', timeout=5)"]
 
 # demo_app.py ends with app.run("127.0.0.1:8080") — run the Python app.
-ENTRYPOINT ["python", "demo_app.py"]
+# CMD (not ENTRYPOINT) so your own app overrides it without --entrypoint:
+#   docker run -v ./myapp:/app/app:ro -p 8000:8080 justapi-app python app/main.py
+CMD ["python", "demo_app.py"]
