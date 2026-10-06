@@ -18,7 +18,7 @@ RUN python3 -m venv /opt/venv && \
 ENV PATH="/opt/venv/bin:$PATH"
 
 RUN cargo build --release -p justapi-cli --features tls,compression
-RUN strip target/release/justapi
+RUN strip target/release/justapi-cli
 
 RUN maturin build -m crates/justapi-py/Cargo.toml --release -o wheels/
 
@@ -33,7 +33,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-COPY --from=builder /app/target/release/justapi /usr/local/bin/justapi
+COPY --from=builder /app/target/release/justapi-cli /usr/local/bin/justapi
 COPY --from=builder /app/wheels /tmp/wheels
 
 RUN pip install uv && uv pip install --system /tmp/wheels/*.whl && rm -rf /tmp/wheels
