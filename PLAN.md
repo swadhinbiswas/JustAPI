@@ -1233,7 +1233,7 @@ not test issues:
 - [x] Ops packaging fixes: helm `anomalyco` → `swadhinbiswas`, compose `./python` → `./crates/justapi-py/python`, drop stale 3.11 classifier (`requires-python>=3.12`), Dockerfile add `jinja2` + `timeout=5` healthcheck.
 - [x] Release wheel re-verified on Phase-53 tree (2026-10-06): `maturin build --release` → `twine check` PASSED (`justapi-2.0.10-cp311-abi3-manylinux_2_34_x86_64.whl`).
 - [ ] Publish (blocked: PyPI OIDC / `MATURIN_PYPI_TOKEN`); document PyPI OIDC setup; make Dockerfile generic (no hard-coded `demo_app.py`).
-- [ ] Helm: add NetworkPolicy + migration Job, verify `readOnlyRootFilesystem` for uploads; Compose: verify corrected mount boots.
+- [x] Helm: NetworkPolicy (opt-in default-deny) + migration Job (pre-install/upgrade hook) added; verified with `helm lint` (0 failed) + `helm template` render (helm v3.16.3). Remaining: verify `readOnlyRootFilesystem` for uploads on a live cluster.
 
 ### P1 — FastAPI parity (in progress)
 - [x] `Param` constraints (`gt/ge/lt/le/min/max_length/pattern`) enforced as 422 + Header `convert_underscores` + bool/int/float coercion (sync+async).
