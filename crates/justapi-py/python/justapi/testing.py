@@ -101,7 +101,7 @@ class AsyncTestClient:
         self._teardown_hooks.append(hook)
         return self
 
-    async def _run(self, method: str, path: str, body: bytes = b"") -> dict:
+    async def _run(self, method: str, path: str, body: bytes = b"", headers=None) -> dict:
         client = self._client
         if client is None:
             raise RuntimeError("AsyncTestClient not initialized")
@@ -109,14 +109,17 @@ class AsyncTestClient:
         loop = asyncio.get_running_loop()
 
         if method in ("GET", "DELETE"):
-            fn = partial(getattr(client, method.lower()), path)
+            if headers:
+                fn = partial(getattr(client, method.lower() + "_with"), path, headers)
+            else:
+                fn = partial(getattr(client, method.lower()), path)
         else:
             fn = partial(getattr(client, method.lower()), path, body)
 
         return await loop.run_in_executor(None, fn)
 
-    async def get(self, path: str) -> dict:
-        return await self._run("GET", path)
+    async def get(self, path: str, headers=None) -> dict:
+        return await self._run("GET", path, headers=headers)
 
     async def post(self, path: str, body: bytes = b"") -> dict:
         return await self._run("POST", path, body)

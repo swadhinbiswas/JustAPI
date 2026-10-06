@@ -92,3 +92,16 @@ def test_pattern_constraint():
     c = JustAPITestClient(app)
     assert c.get("/code?v=ABC")["status"] == 200
     assert c.get("/code?v=abc")["status"] == 422
+
+
+def test_get_with_headers():
+    app = JustAPIApp()
+
+    @app.get("/who")
+    def who(user_agent: str = Header("missing")):
+        return {"ua": user_agent}
+
+    c = JustAPITestClient(app)
+    resp = c.get_with("/who", [("user-agent", "pytest-get")])
+    assert resp["status"] == 200, resp
+    assert _body(resp) == {"ua": "pytest-get"}

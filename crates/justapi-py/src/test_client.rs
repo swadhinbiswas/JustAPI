@@ -171,6 +171,20 @@ impl JustAPITestClient {
         self.do_request(py, move |client, rt| rt.block_on(client.get(&path)))
     }
 
+    /// GET with extra request headers (e.g. `Authorization`, custom `x-*`).
+    #[pyo3(signature = (path, headers))]
+    fn get_with(
+        &self,
+        py: Python<'_>,
+        path: &str,
+        headers: Vec<(String, String)>,
+    ) -> PyResult<Py<PyAny>> {
+        let path = path.to_owned();
+        let hdr: Vec<(&str, &str)> =
+            headers.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        self.do_request(py, move |client, rt| rt.block_on(client.get_with(&path, &hdr)))
+    }
+
     fn post(&self, py: Python<'_>, path: &str, body: Vec<u8>) -> PyResult<Py<PyAny>> {
         let path = path.to_owned();
         self.do_request(py, move |client, rt| rt.block_on(client.post(&path, body)))
