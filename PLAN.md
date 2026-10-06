@@ -1231,14 +1231,17 @@ not test issues:
 
 ### P0 — release mechanics (in progress)
 - [x] Ops packaging fixes: helm `anomalyco` → `swadhinbiswas`, compose `./python` → `./crates/justapi-py/python`, drop stale 3.11 classifier (`requires-python>=3.12`), Dockerfile add `jinja2` + `timeout=5` healthcheck.
-- [ ] Verify `twine check` + fresh-venv install; document PyPI OIDC setup; make Dockerfile generic (no hard-coded `demo_app.py`).
+- [x] Release wheel re-verified on Phase-53 tree (2026-10-06): `maturin build --release` → `twine check` PASSED (`justapi-2.0.10-cp311-abi3-manylinux_2_34_x86_64.whl`).
+- [ ] Publish (blocked: PyPI OIDC / `MATURIN_PYPI_TOKEN`); document PyPI OIDC setup; make Dockerfile generic (no hard-coded `demo_app.py`).
 - [ ] Helm: add NetworkPolicy + migration Job, verify `readOnlyRootFilesystem` for uploads; Compose: verify corrected mount boots.
 
 ### P1 — FastAPI parity (in progress)
 - [x] `Param` constraints (`gt/ge/lt/le/min/max_length/pattern`) enforced as 422 + Header `convert_underscores` + bool/int/float coercion (sync+async).
 - [x] OpenAPI: real param types + constraints, `cookie` params, `info/servers/tags/contact/license/termsOfService`, real `requestBody` from `Schema`/Pydantic, `components.securitySchemes` + per-op `security` from `Security()`.
 - [x] Auth schemes `HTTPBearer/HTTPBasic/APIKeyHeader/Query/Cookie` as `Depends` callables with `.model`; TestClient `get_with` (Rust) + `AsyncTestClient.get(headers=)`; `JustAPIApp(lifespan=...)` async/sync CM.
-- [ ] `include_router` SSE/WS parity + `callbacks` forwarding; middleware order review.
+- [x] TestClient `put/patch/delete_with` (core Rust + PyO3) + `AsyncTestClient` headers for all methods; CI pytest gate un-excludes `test_rate_limit` (skips w/o Redis) + `test_circuit_breaker` (flake fixed).
+- [x] SSE/WS metadata parity: `app.sse/websocket` + router methods accept tags/summary/deps, routes recorded, include_router merges prefix/tags, OpenAPI maps SSE→GET.
+- [ ] `include_router` `callbacks` forwarding; middleware order review (currently first-added-outermost, documented in `docs_site/.../middleware.md:83` — deliberate deviation, keep).
 - [ ] `FileResponse` range/ETag; `TemplateResponse` return `Response`; TestClient `headers/cookies/auth/timeout` + WS helper.
 
 ### P2 — assurance
