@@ -75,7 +75,6 @@ base64 = "0.22"
 # TLS
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 tokio-rustls = { version = "0.26" }
-rustls-pemfile = { version = "2" }
 
 # HTTP/3 (opt-in, feature `http3`)
 h3 = { version = "0.0.8" }

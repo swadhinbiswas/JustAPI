@@ -7,7 +7,7 @@ license.workspace = true
 
 [features]
 default = ["opentelemetry"]
-tls = ["rustls", "tokio-rustls", "rustls-pemfile"]
+tls = ["rustls", "tokio-rustls"]
 ws = ["tokio-tungstenite", "sha1"]
 http3 = ["dep:h3", "dep:h3-quinn", "dep:quinn", "tls"]
 compression = []
@@ -59,7 +59,6 @@ base64 = { workspace = true }
 jsonschema.workspace = true
 rustls = { workspace = true, optional = true }
 tokio-rustls = { workspace = true, optional = true }
-rustls-pemfile = { workspace = true, optional = true }
 sqlx = { workspace = true, optional = true }
 chrono = { version = "0.4", optional = true }
 rand = "0.8"

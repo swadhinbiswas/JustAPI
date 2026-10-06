@@ -13,6 +13,7 @@ use http_body_util::Full;
 use hyper::Request;
 use justapi_core::http3::{serve_http3, Http3Config, Http3Handler};
 use justapi_core::metrics::Metrics;
+use rustls_pki_types::pem::PemObject;
 use tokio_util::sync::CancellationToken;
 
 /// Write a self-signed cert/key pair (via rcgen) to temp files and return paths.
@@ -60,7 +61,7 @@ async fn http3_roundtrip() {
 
     // Trust the SAME certificate the server presents (read from the file).
     let cert_pem = std::fs::read_to_string(&cert_path).unwrap();
-    let cert_der = rustls_pemfile::certs(&mut cert_pem.as_bytes()).next().unwrap().unwrap();
+    let cert_der = rustls_pki_types::CertificateDer::from_pem_slice(cert_pem.as_bytes()).unwrap();
     let mut roots = rustls::RootCertStore::empty();
     roots.add(cert_der).unwrap();
     let client_crypto = quinn::ClientConfig::with_root_certificates(Arc::new(roots)).unwrap();
@@ -148,7 +149,7 @@ app.run("127.0.0.1:8195")
 
     // QUIC client trusting the same cert.
     let cert_pem = std::fs::read_to_string(&cert_path).unwrap();
-    let cert_der = rustls_pemfile::certs(&mut cert_pem.as_bytes()).next().unwrap().unwrap();
+    let cert_der = rustls_pki_types::CertificateDer::from_pem_slice(cert_pem.as_bytes()).unwrap();
     let mut roots = rustls::RootCertStore::empty();
     roots.add(cert_der).unwrap();
     let client_crypto = quinn::ClientConfig::with_root_certificates(Arc::new(roots)).unwrap();

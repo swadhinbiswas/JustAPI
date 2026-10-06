@@ -51,16 +51,16 @@ pub type Http3Handler = Arc<
 
 /// Build a QUIC server config from PEM cert/key files (reuses rustls).
 fn quic_server_config(cfg: &Http3Config) -> Result<quinn::ServerConfig> {
+    use rustls_pki_types::pem::PemObject;
     let certs = {
         let data = std::fs::read(&cfg.cert_path)?;
-        let mut reader = std::io::BufReader::new(data.as_slice());
-        rustls_pemfile::certs(&mut reader).collect::<Result<Vec<_>, _>>()?
+        rustls_pki_types::pem::SliceIter::<rustls_pki_types::CertificateDer<'static>>::new(&data)
+            .collect::<Result<Vec<_>, _>>()?
     };
     let key = {
         let data = std::fs::read(&cfg.key_path)?;
-        let mut reader = std::io::BufReader::new(data.as_slice());
-        rustls_pemfile::private_key(&mut reader)?
-            .ok_or_else(|| anyhow::anyhow!("no private key found in {}", cfg.key_path))?
+        rustls_pki_types::PrivateKeyDer::from_pem_slice(&data)
+            .map_err(|e| anyhow::anyhow!("no private key found in {}: {e}", cfg.key_path))?
     };
     let mut config = quinn::ServerConfig::with_single_cert(certs, key)?;
     config.transport_config(Arc::new(quinn::TransportConfig::default()));

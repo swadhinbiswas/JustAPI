@@ -1835,20 +1835,20 @@ async fn serve_with_tls(
     #[cfg(feature = "wasm")] wasm_middleware: Option<Arc<crate::wasm::WasmEngine>>,
     #[cfg(feature = "ws")] ws_handler: Option<WsHandler>,
 ) -> Result<()> {
-    use std::fs::File;
-    use std::io::BufReader;
+    use rustls_pki_types::pem::PemObject;
     use std::sync::Arc as StdArc;
 
     init_tls_provider();
 
     let certs = {
-        let mut reader = BufReader::new(File::open(&config.cert_path)?);
-        rustls_pemfile::certs(&mut reader).collect::<Result<Vec<_>, _>>()?
+        let data = std::fs::read(&config.cert_path)?;
+        rustls_pki_types::pem::SliceIter::<rustls_pki_types::CertificateDer<'static>>::new(&data)
+            .collect::<Result<Vec<_>, _>>()?
     };
     let key = {
-        let mut reader = BufReader::new(File::open(&config.key_path)?);
-        rustls_pemfile::private_key(&mut reader)?
-            .ok_or_else(|| anyhow::anyhow!("no private key in {}", config.key_path))?
+        let data = std::fs::read(&config.key_path)?;
+        rustls_pki_types::PrivateKeyDer::from_pem_slice(&data)
+            .map_err(|e| anyhow::anyhow!("no private key in {}: {e}", config.key_path))?
     };
 
     let mut server_config =
