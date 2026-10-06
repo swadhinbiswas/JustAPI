@@ -89,6 +89,7 @@ cloud-native readiness.
 | 50 | RadixAttention Prefix Caching | 🟡 implemented / unverified | `RadixPrefixCache` wired into Scheduler; unit-tested, no real model |
 | 51 | Scheduler Serving Integration | 🟡 implemented / unverified | `SchedulerEngine` bridges Engine+Scheduler; **CPU fixture with instant-forward MockModel** |
 | **52** | **GPU Benchmark Gate** | **🔴 frozen** | **The only honest status for "LLM performance": no CUDA driver, no real-weight run (ADR-067). The claim "beats vLLM" is UNTESTED.** |
+| 53 | Beat FastAPI — parity + release | 🟡 in progress | P0: fix ops packaging (helm repo, compose mount, pyproject classifiers, Dockerfile deps/timeout). Next: Param constraints, OpenAPI components, lifespan, router/middleware parity; CI p99 + fuzz per-PR; then LLM verify post-2.0.8. |
 
 ---
 
@@ -1221,3 +1222,27 @@ not test issues:
       `try_serve_static`. Added `run_on(listener)` to avoid an ephemeral-port
       bind race in tests; added Rust integration + unit tests.
 
+
+---
+
+## Phase 53 — Beat FastAPI: parity + release (started 2026-10-06)
+
+**Goal:** Close FastAPI parity blockers and unblock 2.0.8 release mechanics. LLM work stays FROZEN per ADR-067 until 2.0.8 ships.
+
+### P0 — release mechanics (in progress)
+- [x] Ops packaging fixes: helm `anomalyco` → `swadhinbiswas`, compose `./python` → `./crates/justapi-py/python`, drop stale 3.11 classifier (`requires-python>=3.12`), Dockerfile add `jinja2` + `timeout=5` healthcheck.
+- [ ] Verify `twine check` + fresh-venv install; document PyPI OIDC setup; make Dockerfile generic (no hard-coded `demo_app.py`).
+- [ ] Helm: add NetworkPolicy + migration Job, verify `readOnlyRootFilesystem` for uploads; Compose: verify corrected mount boots.
+
+### P1 — FastAPI parity (next)
+- [ ] `Param` constraints (`gt/ge/lt/le/min/max_length/pattern/enum`) + Header/Cookie `_`→`-` handling; bool/enum coercion.
+- [ ] OpenAPI: `components/securitySchemes`, real `requestBody` from `schema/body_schema/Form/File`, serialize `servers/contact/license`.
+- [ ] Lifespan `lifespan=` ctor + `HTTPBearer/Basic/APIKey` schemes; fix `include_router` drops (`callbacks`, WS/SSE wrap) + middleware order.
+- [ ] `FileResponse` range/ETag; `TemplateResponse` return `Response`; TestClient `headers/cookies/auth/timeout` + WS helper.
+
+### P2 — assurance
+- [ ] CI: ungate `test_rate_limit/circuit_breaker`, remove `|| true` on 3.14t, re-enable integration-tests, add p99 gate + per-PR short fuzz.
+- [ ] Security: secure-headers default review, JWT `aud/iss` enforce option, revisit ignored RUSTSEC, close OWASP tail or risk-accept in DECISIONS.md.
+
+### Exit criteria
+- [ ] `cargo test --workspace`, `clippy -D warnings`, `fmt --check`, `pytest` green on release wheel; `git diff --cached --stat` <100 lines/commit.

@@ -39,7 +39,7 @@ COPY --from=builder /app/wheels /tmp/wheels
 RUN pip install uv && uv pip install --system /tmp/wheels/*.whl && rm -rf /tmp/wheels
 
 # demo_app.py uses pydantic for request validation
-RUN pip install --no-cache-dir pydantic>=2.0
+RUN pip install --no-cache-dir "pydantic>=2.0" "jinja2>=3.0"
 
 COPY demo_app.py /app/
 
@@ -51,7 +51,7 @@ USER justapi
 
 # Health check — verifies the server is responding on /live
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/live')"]
+    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/live', timeout=5)"]
 
 # demo_app.py ends with app.run("127.0.0.1:8080") — run the Python app.
 ENTRYPOINT ["python", "demo_app.py"]

@@ -17,7 +17,7 @@ services:
       redis:
         condition: service_started
     volumes:
-      - ./python:/app/python:ro
+      - ./crates/justapi-py/python:/app/python:ro
     restart: unless-stopped
 
   db:
