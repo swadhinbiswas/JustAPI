@@ -105,3 +105,21 @@ def test_get_with_headers():
     resp = c.get_with("/who", [("user-agent", "pytest-get")])
     assert resp["status"] == 200, resp
     assert _body(resp) == {"ua": "pytest-get"}
+
+
+def test_enum_coercion():
+    import enum
+
+    class Color(str, enum.Enum):
+        RED = "red"
+        BLUE = "blue"
+
+    app = JustAPIApp()
+
+    @app.get("/paint")
+    def paint(color: Color):
+        return {"color": color.value}
+
+    c = JustAPITestClient(app)
+    assert c.get("/paint?color=red")["status"] == 200
+    assert c.get("/paint?color=green")["status"] == 422

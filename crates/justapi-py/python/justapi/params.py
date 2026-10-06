@@ -1,3 +1,4 @@
+import enum
 import inspect
 from typing import Any, Optional
 
@@ -60,6 +61,15 @@ def coerce_param_value(val: Any, annotation: Any, alias: str, spec: Any = None) 
             out = int(out.strip())
         elif annotation is float:
             out = float(out.strip())
+    if inspect.isclass(annotation) and issubclass(annotation, enum.Enum):
+        if not isinstance(out, annotation):
+            try:
+                out = annotation(out)
+            except ValueError:
+                try:
+                    out = annotation(int(str(out).strip()))
+                except (ValueError, TypeError):
+                    raise ValueError(f"invalid enum value {val!r}")
     if spec is not None and out is not None:
         _check_constraints(out, spec, alias)
     return out
