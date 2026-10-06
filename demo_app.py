@@ -47,4 +47,4 @@ if __name__ == "__main__":
     print("  - GET  http://127.0.0.1:8080/cpu-heavy")
     print("  - POST http://127.0.0.1:8080/items (Body: {\"name\": \"Test\", \"price\": 99.99})")
     
-    app.run("127.0.0.1:8080")
+    app.run("0.0.0.0:8080")

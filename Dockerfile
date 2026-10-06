@@ -53,7 +53,9 @@ USER justapi
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/live', timeout=5)"]
 
-# demo_app.py ends with app.run("127.0.0.1:8080") — run the Python app.
+# demo_app.py ends with app.run("0.0.0.0:8080") — 0.0.0.0 is required so the
+# server is reachable from outside the container (127.0.0.1 would only listen
+# on container loopback: in-container healthchecks pass, host traffic hangs).
 # CMD (not ENTRYPOINT) so your own app overrides it without --entrypoint:
 #   docker run -v ./myapp:/app/app:ro -p 8000:8080 justapi-app python app/main.py
 CMD ["python", "demo_app.py"]
