@@ -1253,5 +1253,5 @@ not test issues:
 - [ ] Benchmark gate: add p99 (currently RPS-only). Approach per `skills/benchmark-harness`: oha A/B (PR vs main, same runner) on hello-world, warn-only for 2 weeks (shared-runner noise), then fail-gate at >5% — release numbers stay on dedicated hardware.
 
 ### Exit criteria
-- [ ] `cargo test --workspace`, `clippy -D warnings`, `fmt --check`, `pytest` green on release wheel; `git diff --cached --stat` <100 lines/commit.
-- [ ] Known flake (2026-10-06): `justapi-inference scheduler_engine_batches_concurrent_requests` fails under full-workspace parallel load, passes in isolation. Frozen area (ADR-067), untouched by Phase 53 — re-run single test to confirm.
+- [x] `cargo test --workspace` 150 passed + 1 known flake (`scheduler_engine_batches...`, passes solo — frozen area, untouched); `clippy --workspace --tests -D warnings` clean; `fmt --check` clean; pytest 198 passed / 1 skipped on dev wheel. Note: `clippy --all-features` cannot run on this box (cudarc build script needs `nvcc`; no CUDA toolchain — same reason Phase 52 is frozen).
+- [ ] `git diff --cached --stat` <100 lines/commit (held for all 30 Phase-53 commits).

@@ -146,3 +146,5 @@ wheels/
 # Debugging artifacts
 benchmarks/gdb_out.txt
 .wrangler/
+
+.venv-p53/
