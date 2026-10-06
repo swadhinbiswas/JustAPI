@@ -475,6 +475,7 @@ class JustAPIApp:
         redoc_url: str = "/redoc",
         scalar_url: str = "/scalar",
         admin_token: str = None,
+        lifespan=None,
     ):
         self._app = _JustAPIApp()
         self.title = title
@@ -498,6 +499,7 @@ class JustAPIApp:
         self._shutdown_handlers = []
         self.state = _AppState()
         self.admin_token = admin_token
+        self._lifespan = lifespan
 
 
         # Built-in probe/metrics endpoints for the Python app.
@@ -1860,16 +1862,45 @@ class JustAPIApp:
             else:
                 handler()
 
+        # Lifespan (FastAPI parity): an `@asynccontextmanager`-style factory
+        # taking the app. Entered after on_event startup, exited after the
+        # server stops (before on_event shutdown).
+        _ls_cm = None
+        _ls_loop = None
+        if self._lifespan is not None:
+            _ls_cm = self._lifespan(self)
+            if hasattr(_ls_cm, "__aenter__"):
+                import asyncio
+                # One loop drives both enter and exit: two asyncio.run()
+                # calls use different loops and the async-generator body
+                # after `yield` never resumes.
+                _ls_loop = asyncio.new_event_loop()
+                _ls_loop.run_until_complete(_ls_cm.__aenter__())
+            elif hasattr(_ls_cm, "__enter__"):
+                _ls_cm.__enter__()
+
         # Start the native Rust scheduler (if any jobs were registered) so cron
         # and interval jobs run for the lifetime of the server.
         from ._justapi import Scheduler
 
         Scheduler().start()
         try:
-            self._app.run(addr, max_body_size)
+            self._serve(addr, max_body_size)
         except KeyboardInterrupt:
             pass
         finally:
+            if _ls_cm is not None:
+                try:
+                    if hasattr(_ls_cm, "__aexit__"):
+                        assert _ls_loop is not None
+                        _ls_loop.run_until_complete(_ls_cm.__aexit__(None, None, None))
+                    elif hasattr(_ls_cm, "__exit__"):
+                        _ls_cm.__exit__(None, None, None)
+                except Exception:
+                    pass
+                finally:
+                    if _ls_loop is not None:
+                        _ls_loop.close()
             # Execute shutdown handlers (FastAPI on_event parity).
             for handler in self._shutdown_handlers:
                 try:
@@ -1880,6 +1911,10 @@ class JustAPIApp:
                         handler()
                 except Exception:
                     pass
+
+    def _serve(self, addr: str, max_body_size: int):
+        """Start the Rust server (split out so tests can stub it)."""
+        self._app.run(addr, max_body_size)
 
     def schedule(self, cron_expr, func, *args, **kwargs):
         """Register a cron job (native Rust scheduler).
