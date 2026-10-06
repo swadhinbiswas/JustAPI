@@ -122,6 +122,27 @@ jobs:
           command: check
           arguments: --all-features
 
+  fuzz-short:
+    name: Fuzz (short, PR gate)
+    runs-on: ubuntu-latest
+    needs: [check]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz
+
+      # Highest-risk parser surfaces, 60s each. The nightly cron
+      # (fuzz.yml) runs all 10 targets at 300s each.
+      - name: Fuzz body/headers/jwt
+        run: |
+          for t in fuzz_body fuzz_headers fuzz_jwt; do
+            cargo +nightly fuzz run $t -- -max_total_time=60
+          done
+
   # ============================================================
   # Stage 3: Python Integration Tests
   # ============================================================
