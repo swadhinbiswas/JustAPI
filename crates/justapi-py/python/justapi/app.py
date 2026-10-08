@@ -223,6 +223,17 @@ def _is_async_callable(obj):
     return call is not None and inspect.iscoroutinefunction(call)
 
 
+def _is_upload_list(annotation) -> bool:
+    """True for ``List[UploadFile]`` / ``list[UploadFile]`` annotations."""
+    try:
+        from .params import is_list_annotation, list_item_type
+        return is_list_annotation(annotation) and getattr(
+            list_item_type(annotation), "__name__", ""
+        ) == "UploadFile"
+    except Exception:
+        return False
+
+
 class Security(Depends):
     """`Security(dependency)` is `Depends(dependency)` with OAuth2 scope
     support, mirroring FastAPI's `Security`. The `scopes` are recorded for
@@ -789,11 +800,17 @@ class JustAPIApp:
                     val = request.cookies.get(alias)
                     if val is not None: found = True
                     
-                if not found and (param_type is File or param_type is Form or (hasattr(param.annotation, "__name__") and param.annotation.__name__ == "UploadFile")):
+                _upload_list = _is_upload_list(param.annotation)
+                if not found and (param_type is File or param_type is Form or _upload_list or (hasattr(param.annotation, "__name__") and param.annotation.__name__ == "UploadFile")):
                     form_data = request.get("form")
                     if form_data:
                         val = form_data.get(alias)
-                        if val is not None: found = True
+                        if val is not None:
+                            found = True
+                            if _upload_list and not isinstance(val, list):
+                                val = [val]
+                            elif not _upload_list and isinstance(val, list):
+                                val = val[0] if val else None
 
                 if not found and (param_type is Body or name == "body" or name == "payload"):
                     val = request.get("body")
@@ -947,11 +964,17 @@ class JustAPIApp:
                     val = request.cookies.get(alias)
                     if val is not None: found = True
 
-                if not found and (param_type is File or param_type is Form or (hasattr(param.annotation, "__name__") and param.annotation.__name__ == "UploadFile")):
+                _upload_list = _is_upload_list(param.annotation)
+                if not found and (param_type is File or param_type is Form or _upload_list or (hasattr(param.annotation, "__name__") and param.annotation.__name__ == "UploadFile")):
                     form_data = request.get("form")
                     if form_data:
                         val = form_data.get(alias)
-                        if val is not None: found = True
+                        if val is not None:
+                            found = True
+                            if _upload_list and not isinstance(val, list):
+                                val = [val]
+                            elif not _upload_list and isinstance(val, list):
+                                val = val[0] if val else None
                     
                 if not found and (param_type is Body or name == "body" or name == "payload"):
                     val = request.get("body")

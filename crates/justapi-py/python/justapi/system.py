@@ -56,6 +56,17 @@ def _ann_str(ann):
     return repr(ann).replace("typing.", "")
 
 
+def _is_upload_ann(ann) -> bool:
+    """True for ``UploadFile`` and ``List[UploadFile]`` annotations."""
+    import typing
+    if getattr(ann, "__name__", None) == "UploadFile":
+        return True
+    if typing.get_origin(ann) is list:
+        args = typing.get_args(ann)
+        return bool(args) and getattr(args[0], "__name__", None) == "UploadFile"
+    return False
+
+
 def _classify_param(name, param, hints, method, path):
     import enum
     import re
@@ -103,6 +114,10 @@ def _classify_param(name, param, hints, method, path):
             info["default"] = dflt
         return info
     ann_name = getattr(ann, "__name__", None)
+    if _is_upload_ann(ann):
+        info["in"] = "file"
+        info["required"] = param.default is inspect.Parameter.empty
+        return info
     if ann is Request or ann_name == "Request":
         info["in"] = "request"
         return info
