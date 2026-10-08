@@ -80,7 +80,7 @@ This adds:
 
 ## Multiple Middleware
 
-Middlewares are executed in registration order (first added is outermost):
+Middlewares follow Starlette/FastAPI ordering: **the last one added is the outermost** (it sees the request first and the response last):
 
 ```python
 @app.middleware("http")
@@ -99,14 +99,14 @@ async def middleware_two(request, call_next):
     return response
 ```
 
-Output for a single request:
+Output for a single request (middleware_two was added last, so it runs first):
 
 ```
-Before 1
 Before 2
+Before 1
 [handler executes]
-After 2
 After 1
+After 2
 ```
 
 ## Route-Level Middleware

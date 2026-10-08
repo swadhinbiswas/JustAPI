@@ -1005,8 +1005,10 @@ class JustAPIApp:
             all_middlewares.extend(route_middlewares)
             
         chain = base_handler
-        # apply in order: the first middleware added is the outermost
-        for mw in reversed(all_middlewares):
+        # Starlette/FastAPI ordering: the LAST middleware added is the
+        # outermost (it wraps everything before it). Wrapping in added order
+        # makes each later middleware wrap the previous chain.
+        for mw in all_middlewares:
             def make_wrapper(mw_func, next_func):
                 async def wrapped(request):
                     return await mw_func(request, next_func)
