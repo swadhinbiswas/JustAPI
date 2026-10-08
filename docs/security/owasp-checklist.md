@@ -45,8 +45,8 @@
 - [x] `cargo-deny` in CI (license + advisory checks)
 - [x] Dependabot for automated dependency updates
 - [x] Supply chain: lockfile committed, `deny.toml` configured
-- [ ] Trivy scanning in CI for Docker image vulnerabilities
-- [ ] SBOM generation for Docker images
+- [x] Trivy scanning in CI for Docker image vulnerabilities — `trivy` CI job scans the **filesystem** (vuln + secret + misconfig, HIGH/CRITICAL, fixed-only) on every PR; pinned binary with SHA256 verification (not `trivy-action`, compromised 2026-03)
+- [x] SBOM generation for Docker images — CycloneDX SBOM (`sbom.cdx.json`) produced by Trivy and uploaded as a CI artifact; Docker-image-level SBOM still open
 
 ## A07:2021 – Identification and Authentication Failures
 - [x] JWT authentication middleware with configurable validation

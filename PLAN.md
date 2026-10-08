@@ -1249,7 +1249,9 @@ not test issues:
 ### P2 — assurance
 - [x] CI: pytest gate runs `test_rate_limit` (skips w/o Redis) + `test_circuit_breaker` (flake fixed); per-PR short fuzz job (`fuzz_body/headers/jwt`, 60s each).
 - [x] JWT `aud`/`iss`: `set_jwt_auth(secret, alg, audience, issuer)` enforces as 401 via Rust builders (was warn-only); stale `app.pyi` entries for touched APIs synced.
-- [ ] Security posture: secure-headers default review, revisit ignored RUSTSEC, close OWASP tail or risk-accept in DECISIONS.md; full `app.pyi` stub audit (pre-existing drift: `lifespan`, `_serve`, `run` sig).
+- [x] Security posture: secure-headers default review (ADR-094: stays opt-in; scaffolds get them), JWT `aud`/`iss` enforced, dropped `rustls-pemfile` (RUSTSEC-2025-0134 gone), Trivy CI job (pinned+checksummed binary, HIGH/CRITICAL fixed-only, blocking) + CycloneDX SBOM artifact, docs_site lockfile patched (1 CRITICAL + 13 HIGH npm advisories → 0 HIGH/CRITICAL, site still builds 161 pages).
+- [ ] Remaining OWASP tail: per-route/per-user authz, key rotation, HTML sanitization, MFA/session, cosign/sigstore + SLSA provenance, plugin signing, centralized logs + 5xx alerts — risk-accept or schedule in DECISIONS.md.
+- [x] Full `app.pyi` stub audit: 12 missing JustAPIApp methods + `__init__`, full APIRouter surface, Security/Session/Mailer, Param/Depends factory typing (Any-returning), `_justapi.pyi` gaps (Scheduler/DbParam/logging/ValidatedStreamResponse), `__init__.pyi` exports synced. Locked by `mypy` CI step on `crates/justapi-py/tests/stub_surface_check.py`.
 - [ ] Benchmark gate: add p99 (currently RPS-only). Approach per `skills/benchmark-harness`: oha A/B (PR vs main, same runner) on hello-world, warn-only for 2 weeks (shared-runner noise), then fail-gate at >5% — release numbers stay on dedicated hardware.
 
 ### Exit criteria
