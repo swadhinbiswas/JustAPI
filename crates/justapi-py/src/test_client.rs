@@ -39,6 +39,9 @@ pub struct JustAPITestClient {
     test_client: Option<TestClient>,
     #[allow(dead_code)]
     db_pool: Option<AnyPool>,
+    /// Cookie jar persisted across requests (name, value). Mirrors the
+    /// FastAPI/httpx behaviour where a test client keeps `Set-Cookie` state.
+    cookies: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
 }
 
 #[pymethods]
@@ -163,12 +166,16 @@ impl JustAPITestClient {
         };
 
         let test_client = TestClient::new(handler);
-        Ok(Self { test_client: Some(test_client), db_pool })
+        Ok(Self { test_client: Some(test_client), db_pool, cookies: Default::default() })
     }
 
     fn get(&self, py: Python<'_>, path: &str) -> PyResult<Py<PyAny>> {
         let path = path.to_owned();
-        self.do_request(py, move |client, rt| rt.block_on(client.get(&path)))
+        let headers = self.merge_cookies(Vec::new());
+        self.do_request(py, move |client, rt| {
+            let hdr = header_refs(&headers);
+            rt.block_on(client.get_with(&path, &hdr))
+        })
     }
 
     /// GET with extra request headers (e.g. `Authorization`, custom `x-*`).
@@ -180,14 +187,20 @@ impl JustAPITestClient {
         headers: Vec<(String, String)>,
     ) -> PyResult<Py<PyAny>> {
         let path = path.to_owned();
-        let hdr: Vec<(&str, &str)> =
-            headers.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
-        self.do_request(py, move |client, rt| rt.block_on(client.get_with(&path, &hdr)))
+        let headers = self.merge_cookies(headers);
+        self.do_request(py, move |client, rt| {
+            let hdr = header_refs(&headers);
+            rt.block_on(client.get_with(&path, &hdr))
+        })
     }
 
     fn post(&self, py: Python<'_>, path: &str, body: Vec<u8>) -> PyResult<Py<PyAny>> {
         let path = path.to_owned();
-        self.do_request(py, move |client, rt| rt.block_on(client.post(&path, body)))
+        let headers = self.merge_cookies(Vec::new());
+        self.do_request(py, move |client, rt| {
+            let hdr = header_refs(&headers);
+            rt.block_on(client.post_with(&path, body, &hdr))
+        })
     }
 
     #[pyo3(signature = (path, body, headers))]
@@ -199,14 +212,20 @@ impl JustAPITestClient {
         headers: Vec<(String, String)>,
     ) -> PyResult<Py<PyAny>> {
         let path = path.to_owned();
-        let hdr: Vec<(&str, &str)> =
-            headers.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
-        self.do_request(py, move |client, rt| rt.block_on(client.post_with(&path, body, &hdr)))
+        let headers = self.merge_cookies(headers);
+        self.do_request(py, move |client, rt| {
+            let hdr = header_refs(&headers);
+            rt.block_on(client.post_with(&path, body, &hdr))
+        })
     }
 
     fn put(&self, py: Python<'_>, path: &str, body: Vec<u8>) -> PyResult<Py<PyAny>> {
         let path = path.to_owned();
-        self.do_request(py, move |client, rt| rt.block_on(client.put(&path, body)))
+        let headers = self.merge_cookies(Vec::new());
+        self.do_request(py, move |client, rt| {
+            let hdr = header_refs(&headers);
+            rt.block_on(client.put_with(&path, body, &hdr))
+        })
     }
 
     /// PUT with extra request headers.
@@ -219,14 +238,20 @@ impl JustAPITestClient {
         headers: Vec<(String, String)>,
     ) -> PyResult<Py<PyAny>> {
         let path = path.to_owned();
-        let hdr: Vec<(&str, &str)> =
-            headers.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
-        self.do_request(py, move |client, rt| rt.block_on(client.put_with(&path, body, &hdr)))
+        let headers = self.merge_cookies(headers);
+        self.do_request(py, move |client, rt| {
+            let hdr = header_refs(&headers);
+            rt.block_on(client.put_with(&path, body, &hdr))
+        })
     }
 
     fn patch(&self, py: Python<'_>, path: &str, body: Vec<u8>) -> PyResult<Py<PyAny>> {
         let path = path.to_owned();
-        self.do_request(py, move |client, rt| rt.block_on(client.patch(&path, body)))
+        let headers = self.merge_cookies(Vec::new());
+        self.do_request(py, move |client, rt| {
+            let hdr = header_refs(&headers);
+            rt.block_on(client.patch_with(&path, body, &hdr))
+        })
     }
 
     /// PATCH with extra request headers.
@@ -239,14 +264,20 @@ impl JustAPITestClient {
         headers: Vec<(String, String)>,
     ) -> PyResult<Py<PyAny>> {
         let path = path.to_owned();
-        let hdr: Vec<(&str, &str)> =
-            headers.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
-        self.do_request(py, move |client, rt| rt.block_on(client.patch_with(&path, body, &hdr)))
+        let headers = self.merge_cookies(headers);
+        self.do_request(py, move |client, rt| {
+            let hdr = header_refs(&headers);
+            rt.block_on(client.patch_with(&path, body, &hdr))
+        })
     }
 
     fn delete(&self, py: Python<'_>, path: &str) -> PyResult<Py<PyAny>> {
         let path = path.to_owned();
-        self.do_request(py, move |client, rt| rt.block_on(client.delete(&path)))
+        let headers = self.merge_cookies(Vec::new());
+        self.do_request(py, move |client, rt| {
+            let hdr = header_refs(&headers);
+            rt.block_on(client.delete_with(&path, &hdr))
+        })
     }
 
     /// DELETE with extra request headers.
@@ -258,15 +289,21 @@ impl JustAPITestClient {
         headers: Vec<(String, String)>,
     ) -> PyResult<Py<PyAny>> {
         let path = path.to_owned();
-        let hdr: Vec<(&str, &str)> =
-            headers.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
-        self.do_request(py, move |client, rt| rt.block_on(client.delete_with(&path, &hdr)))
+        let headers = self.merge_cookies(headers);
+        self.do_request(py, move |client, rt| {
+            let hdr = header_refs(&headers);
+            rt.block_on(client.delete_with(&path, &hdr))
+        })
     }
 
     /// Send an HTTP QUERY request (RFC 10008): safe, idempotent, body-carrying.
     fn query(&self, py: Python<'_>, path: &str, body: Vec<u8>) -> PyResult<Py<PyAny>> {
         let path = path.to_owned();
-        self.do_request(py, move |client, rt| rt.block_on(client.query(&path, body)))
+        let headers = self.merge_cookies(Vec::new());
+        self.do_request(py, move |client, rt| {
+            let hdr = header_refs(&headers);
+            rt.block_on(client.query_with(&path, body, &hdr))
+        })
     }
 
     /// QUERY with extra request headers (RFC 10008 requires a Content-Type).
@@ -279,13 +316,77 @@ impl JustAPITestClient {
         headers: Vec<(String, String)>,
     ) -> PyResult<Py<PyAny>> {
         let path = path.to_owned();
-        let hdr: Vec<(&str, &str)> =
-            headers.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
-        self.do_request(py, move |client, rt| rt.block_on(client.query_with(&path, body, &hdr)))
+        let headers = self.merge_cookies(headers);
+        self.do_request(py, move |client, rt| {
+            let hdr = header_refs(&headers);
+            rt.block_on(client.query_with(&path, body, &hdr))
+        })
+    }
+
+    /// Current cookie jar as a `{name: value}` dict.
+    fn cookies(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let d = pyo3::types::PyDict::new(py);
+        let jar = self.cookies.lock().unwrap_or_else(|e| e.into_inner());
+        for (k, v) in jar.iter() {
+            d.set_item(k, v)?;
+        }
+        Ok(d.into_any().unbind())
+    }
+
+    /// Forget all persisted cookies.
+    fn clear_cookies(&self) {
+        let mut jar = self.cookies.lock().unwrap_or_else(|e| e.into_inner());
+        jar.clear();
     }
 }
 
+/// Borrow `(String, String)` header pairs as `(&str, &str)` for the core client.
+fn header_refs(headers: &[(String, String)]) -> Vec<(&str, &str)> {
+    headers.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect()
+}
+
 impl JustAPITestClient {
+    /// Merge the persisted cookie jar into request headers (unless the caller
+    /// already supplied a `Cookie` header).
+    fn merge_cookies(&self, headers: Vec<(String, String)>) -> Vec<(String, String)> {
+        if headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("cookie")) {
+            return headers;
+        }
+        let jar = self.cookies.lock().unwrap_or_else(|e| e.into_inner());
+        if jar.is_empty() {
+            return headers;
+        }
+        let cookie = jar.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join("; ");
+        let mut out = headers;
+        out.push(("Cookie".to_string(), cookie));
+        out
+    }
+
+    /// Record `Set-Cookie` headers from a response. `Max-Age=0` / expired
+    /// `Expires` deletes the entry; everything else upserts name=value.
+    fn store_response_cookies(&self, resp: &justapi_core::testing::TestResponse) {
+        let mut jar = self.cookies.lock().unwrap_or_else(|e| e.into_inner());
+        for (k, v) in &resp.headers {
+            if !k.eq_ignore_ascii_case("set-cookie") {
+                continue;
+            }
+            let Some((pair, _attrs)) = v.split_once(';').or(Some((v.as_str(), ""))) else {
+                continue;
+            };
+            let Some((name, value)) = pair.split_once('=') else { continue };
+            let name = name.trim().to_string();
+            let value = value.trim().to_string();
+            let lower = v.to_ascii_lowercase();
+            if lower.contains("max-age=0") {
+                jar.retain(|(n, _)| n != &name);
+            } else if let Some(entry) = jar.iter_mut().find(|(n, _)| n == &name) {
+                entry.1 = value;
+            } else {
+                jar.push((name, value));
+            }
+        }
+    }
+
     fn do_request<F>(&self, py: Python<'_>, f: F) -> PyResult<Py<PyAny>>
     where
         F: FnOnce(
@@ -306,6 +407,7 @@ impl JustAPITestClient {
             })
             .map_err(|e: String| pyo3::exceptions::PyRuntimeError::new_err(e))?;
 
+        self.store_response_cookies(&resp);
         Ok(response_to_py(&resp))
     }
 }
