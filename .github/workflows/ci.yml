@@ -170,6 +170,11 @@ jobs:
         run: |
           PYTHONPATH=./crates/justapi-py/python uv run pytest -v --ignore=benchmarks --ignore=demo_shop --ignore=test_project --ignore=tests/ --ignore=crates/justapi-py/tests/
 
+      - name: Type-check public API (mypy)
+        run: |
+          uv pip install mypy
+          uv run mypy crates/justapi-py/tests/stub_surface_check.py
+
   pytest-freethreaded:
     name: Pytest (Free-threaded Python)
     runs-on: ubuntu-latest
