@@ -133,3 +133,76 @@ def test_upload_too_large(monkeypatch):
     body, ct = _build_multipart([("file", "big.txt", b"x" * 50, None)])
     resp = client.post_with("/upload", body, [("Content-Type", ct)])
     assert resp["status"] == 413
+
+
+def test_upload_multiple_files_list():
+    """`<input multiple>` parity: repeated field name → List[UploadFile]."""
+    from typing import List
+
+    app = JustAPIApp()
+
+    async def upload(files: List[UploadFile]):
+        out = []
+        for f in files:
+            data = await f.read()
+            out.append({"filename": f.filename, "content": data.decode()})
+        return {"count": len(files), "files": out}
+
+    app.post("/upload", upload)
+    client = JustAPITestClient(app)
+
+    body, ct = _build_multipart(
+        [
+            ("files", "a.txt", b"AAA", "text/plain"),
+            ("files", "b.txt", b"BBB", "text/plain"),
+        ]
+    )
+    resp = client.post_with("/upload", body, [("Content-Type", ct)])
+    assert resp["status"] == 200
+    data = json.loads(bytes(resp["body"]))
+    assert data["count"] == 2
+    assert [f["filename"] for f in data["files"]] == ["a.txt", "b.txt"]
+    assert [f["content"] for f in data["files"]] == ["AAA", "BBB"]
+
+
+def test_upload_list_with_single_file_wraps():
+    """List[UploadFile] with one part still receives a 1-element list."""
+    from typing import List
+
+    app = JustAPIApp()
+
+    async def upload(files: List[UploadFile]):
+        return {"count": len(files), "filename": files[0].filename}
+
+    app.post("/upload", upload)
+    client = JustAPITestClient(app)
+
+    body, ct = _build_multipart([("files", "only.txt", b"x", None)])
+    resp = client.post_with("/upload", body, [("Content-Type", ct)])
+    assert resp["status"] == 200
+    data = json.loads(bytes(resp["body"]))
+    assert data == {"count": 1, "filename": "only.txt"}
+
+
+def test_upload_single_annotation_with_multi_parts_gets_list():
+    """A single UploadFile annotation still works when multiple parts arrive
+    (dict value is a list; FastAPI hands the first)."""
+    from typing import List
+
+    app = JustAPIApp()
+
+    async def upload(file: UploadFile):
+        data = await file.read()
+        return {"filename": file.filename, "content": data.decode()}
+
+    app.post("/upload", upload)
+    client = JustAPITestClient(app)
+
+    body, ct = _build_multipart(
+        [("file", "a.txt", b"A", None), ("file", "b.txt", b"B", None)]
+    )
+    resp = client.post_with("/upload", body, [("Content-Type", ct)])
+    assert resp["status"] == 200
+    data = json.loads(bytes(resp["body"]))
+    # Single annotation receives the first file (list is unwrapped to first).
+    assert data["filename"] in ("a.txt", "b.txt")
