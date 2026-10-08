@@ -1,0 +1,114 @@
+name: p99 Latency Gate
+
+# A/B p99 latency check: PR vs main, same runner, same build profile.
+#
+# This is WARN-ONLY until 2026-10-23 (shared runners are noisy; we need two
+# weeks of data before letting latency block merges). To promote it to a hard
+# gate, remove the `continue-on-error: true` below and the explicit
+# `exit 0` after the comparison.
+#
+# Methodology (skills/benchmark-harness): warm up before measuring, measure
+# the default Python-handler path (not the native fast path), compare only
+# within the same run (main measured on the same machine, same session).
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  p99:
+    name: p99 regression (warn-only)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-p99-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Install oha
+        run: |
+          curl -fsSL https://github.com/hatoo/oha/releases/download/v1.14.0/oha-linux-amd64 \
+            -o /usr/local/bin/oha
+          chmod +x /usr/local/bin/oha
+          oha --version
+
+      - name: Measure PR p99
+        run: |
+          set -euo pipefail
+          cp benchmarks/extract_p99.py /tmp/extract_p99.py
+          uv venv --clear
+          uv pip install pydantic jinja2 maturin
+          uv run maturin develop --release -m crates/justapi-py/Cargo.toml
+
+          PYTHONPATH=./crates/justapi-py/python uv run python benchmarks/workloads_justapi.py 8099 &
+          SERVER_PID=$!
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:8099/hello >/dev/null && break || sleep 1
+          done
+
+          # Warmup then measure the Python-handler path.
+          oha -z 5s -c 100 --no-tui http://127.0.0.1:8099/hello >/dev/null 2>&1 || true
+          oha -z 15s -c 100 --no-tui http://127.0.0.1:8099/hello > /tmp/oha-pr.txt 2>&1 || true
+          kill "$SERVER_PID" 2>/dev/null || true
+          wait "$SERVER_PID" 2>/dev/null || true
+
+          PR_P99=$(python /tmp/extract_p99.py < /tmp/oha-pr.txt)
+          echo "PR_P99=$PR_P99" >> "$GITHUB_ENV"
+          echo "PR p99: $(echo "$PR_P99" | awk '{printf "%.3f ms", $1*1000}')"
+
+      - name: Measure main p99
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git checkout origin/main
+          uv run maturin develop --release -m crates/justapi-py/Cargo.toml
+
+          PYTHONPATH=./crates/justapi-py/python uv run python benchmarks/workloads_justapi.py 8099 &
+          SERVER_PID=$!
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:8099/hello >/dev/null && break || sleep 1
+          done
+
+          oha -z 5s -c 100 --no-tui http://127.0.0.1:8099/hello >/dev/null 2>&1 || true
+          oha -z 15s -c 100 --no-tui http://127.0.0.1:8099/hello > /tmp/oha-main.txt 2>&1 || true
+          kill "$SERVER_PID" 2>/dev/null || true
+          wait "$SERVER_PID" 2>/dev/null || true
+
+          MAIN_P99=$(python /tmp/extract_p99.py < /tmp/oha-main.txt)
+          echo "MAIN_P99=$MAIN_P99" >> "$GITHUB_ENV"
+          echo "main p99: $(echo "$MAIN_P99" | awk '{printf "%.3f ms", $1*1000}')"
+
+      - name: Compare (warn-only)
+        run: |
+          python - <<'EOF'
+          import os
+          pr = float(os.environ["PR_P99"])
+          main = float(os.environ["MAIN_P99"])
+          ratio = pr / main if main > 0 else 1.0
+          print(f"p99 A/B: PR {pr*1000:.3f} ms vs main {main*1000:.3f} ms (ratio {ratio:.3f})")
+          if ratio > 1.05:
+              pct = (ratio - 1) * 100
+              print(f"::warning title=p99 regression::p99 regressed {pct:.1f}% vs main (>5% threshold). See BENCHMARKS.md gate policy.")
+          else:
+              print("p99 within acceptable bounds (<=5%).")
+          # WARN-ONLY: never fail the job. Flip to `sys.exit(1)` when
+          # promoting this workflow to a hard gate (see header comment).
+          EOF
