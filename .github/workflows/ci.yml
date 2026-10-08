@@ -143,6 +143,46 @@ jobs:
             cargo +nightly fuzz run $t -- -max_total_time=60
           done
 
+  trivy:
+    name: Trivy (vuln + secrets + misconfig)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Deliberately NOT using aquasecurity/trivy-action: the Action and the
+      # v0.69.4 binary release were compromised in March 2026
+      # (CVE-2026-26189 / malicious release). Pin the release tarball by
+      # SHA256 instead.
+      - name: Install Trivy (pinned + checksum-verified)
+        run: |
+          TRIVY_VERSION=0.75.0
+          curl -fsSL -o trivy.tgz \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          echo "c6e65abddb348e25f10549df887045629cf28cc72453cd1c63acb717316b3f3f  trivy.tgz" | sha256sum -c -
+          tar -xzf trivy.tgz trivy
+          sudo install -m 0755 trivy /usr/local/bin/trivy
+          trivy --version
+
+      # Blocking gate: HIGH/CRITICAL only, and only when a fix exists
+      # (`--ignore-unfixed`) — an unfixable advisory cannot be actioned in CI.
+      - name: Scan filesystem (blocking)
+        run: |
+          trivy fs --scanners vuln,secret,misconfig \
+            --severity HIGH,CRITICAL --ignore-unfixed \
+            --exit-code 1 --no-progress .
+
+      - name: Generate SBOM (CycloneDX)
+        if: always()
+        run: trivy fs --format cyclonedx --output sbom.cdx.json --no-progress .
+
+      - name: Upload SBOM
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-cyclonedx
+          path: sbom.cdx.json
+          retention-days: 14
+
   # ============================================================
   # Stage 3: Python Integration Tests
   # ============================================================
