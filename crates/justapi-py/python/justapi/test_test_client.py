@@ -139,3 +139,66 @@ def test_test_client_schema_validation():
     assert resp["status"] == 422
     error_data = json.loads(bytes(resp["body"]))
     assert isinstance(error_data.get("detail"), str) and len(error_data["detail"]) > 0
+
+
+def test_test_client_cookie_jar():
+    """Cookies set by the server persist across requests (FastAPI parity)."""
+    from justapi import JSONResponse
+
+    app = JustAPIApp()
+
+    @app.get("/set")
+    def set_():
+        r = JSONResponse({"ok": True})
+        r.set_cookie("sid", "abc", httponly=True)
+        return r
+
+    @app.get("/read")
+    def read(request):
+        return {"sid": request.cookies.get("sid")}
+
+    @app.get("/del")
+    def del_():
+        r = JSONResponse({"bye": True})
+        r.delete_cookie("sid")
+        return r
+
+    c = JustAPITestClient(app)
+    assert c.cookies() == {}
+
+    c.get("/set")
+    assert c.cookies() == {"sid": "abc"}
+
+    resp = c.get("/read")
+    assert json.loads(bytes(resp["body"])) == {"sid": "abc"}
+
+    # Max-Age=0 removes the entry from the jar.
+    c.get("/del")
+    assert c.cookies() == {}
+
+    # Explicit clear
+    c.get("/set")
+    c.clear_cookies()
+    assert c.cookies() == {}
+
+
+def test_test_client_explicit_cookie_header_wins():
+    """A caller-supplied Cookie header is not overridden by the jar."""
+    from justapi import JSONResponse
+
+    app = JustAPIApp()
+
+    @app.get("/set")
+    def set_():
+        r = JSONResponse({"ok": True})
+        r.set_cookie("sid", "jar-value")
+        return r
+
+    @app.get("/read")
+    def read(request):
+        return {"sid": request.cookies.get("sid")}
+
+    c = JustAPITestClient(app)
+    c.get("/set")
+    resp = c.get_with("/read", [("Cookie", "sid=explicit")])
+    assert json.loads(bytes(resp["body"])) == {"sid": "explicit"}

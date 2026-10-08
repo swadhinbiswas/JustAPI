@@ -172,7 +172,6 @@ def test_list_query_params():
 @pytest.mark.asyncio
 async def test_async_client_headers():
     from justapi.testing import AsyncTestClient
-
     app = JustAPIApp()
 
     @app.post("/h")
@@ -199,3 +198,26 @@ async def test_async_client_headers():
         resp = await c.delete("/h", headers=[("user-agent", "async-del")])
         assert resp["status"] == 200
         assert _body(resp) == {"ua": "async-del"}
+
+
+@pytest.mark.asyncio
+async def test_async_client_cookies_persist():
+    from justapi import JSONResponse
+    from justapi.testing import AsyncTestClient
+
+    app = JustAPIApp()
+
+    @app.get("/set")
+    def set_():
+        r = JSONResponse({"ok": True})
+        r.set_cookie("sid", "async-cookie")
+        return r
+
+    @app.get("/read")
+    def read(request):
+        return {"sid": request.cookies.get("sid")}
+
+    async with AsyncTestClient(app) as c:
+        await c.get("/set")
+        resp = await c.get("/read")
+        assert _body(resp) == {"sid": "async-cookie"}
