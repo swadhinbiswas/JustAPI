@@ -89,7 +89,7 @@ cloud-native readiness.
 | 50 | RadixAttention Prefix Caching | 🟡 implemented / unverified | `RadixPrefixCache` wired into Scheduler; unit-tested, no real model |
 | 51 | Scheduler Serving Integration | 🟡 implemented / unverified | `SchedulerEngine` bridges Engine+Scheduler; **CPU fixture with instant-forward MockModel** |
 | **52** | **GPU Benchmark Gate** | **🔴 frozen** | **The only honest status for "LLM performance": no CUDA driver, no real-weight run (ADR-067). The claim "beats vLLM" is UNTESTED.** |
-| 53 | Beat FastAPI — parity + release | 🟡 in progress | P0: fix ops packaging (helm repo, compose mount, pyproject classifiers, Dockerfile deps/timeout). Next: Param constraints, OpenAPI components, lifespan, router/middleware parity; CI p99 + fuzz per-PR; then LLM verify post-2.0.8. |
+| 53 | Beat FastAPI — parity + release | 🟡 in progress | Done: ops packaging, Docker boot-verified, Helm NP+Job, params/OpenAPI/auth/lifespan/SSE parity, multi-file upload, TestClient headers+cookie jar, mypy stub gate, Trivy+SBOM, p99 A/B (warn-only), CI gates tightened, docs_site advisories patched. Left: PyPI publish (token), WS test helper, OWASP tail, LLM verify post-2.0.8. |
 
 ---
 
@@ -1244,7 +1244,9 @@ not test issues:
 - [x] SSE/WS metadata parity: `app.sse/websocket` + router methods accept tags/summary/deps, routes recorded, include_router merges prefix/tags, OpenAPI maps SSE→GET.
 - [x] Callbacks triage: native `callbacks=` kwarg deferred post-2.0.8 (10-signature change; `@app.webhooks` registry likewise) — the documented path via `openapi_extra={"callbacks": ...}` is verified working and locked by test.
 - [ ] `include_router` `callbacks` forwarding; middleware order review (currently first-added-outermost, documented in `docs_site/.../middleware.md:83` — deliberate deviation, keep).
-- [ ] `FileResponse` range/ETag; `TemplateResponse` return `Response`; TestClient `headers/cookies/auth/timeout` + WS helper.
+- [x] `FileResponse` ETag/last-modified/content-length; `TemplateResponse` stays a dict envelope (Starlette-compatible, tested); TestClient headers for all methods + **cookie jar** (persist `Set-Cookie`, merge `Cookie`, `Max-Age=0` deletes, `cookies()`/`clear_cookies()`).
+- [x] Multi-file upload: repeated multipart field names yield a Python list; `List[UploadFile]` resolver (wrap single / unwrap for single annotation); OpenAPI classifies uploads as `file`.
+- [ ] WS test helper deferred: `test_websocket.py` runs a real server process; an in-process WS client needs the TCP-peek upgrade path refactored behind a testable seam (post-2.0.8).
 
 ### P2 — assurance
 - [x] CI: pytest gate runs `test_rate_limit` (skips w/o Redis) + `test_circuit_breaker` (flake fixed); per-PR short fuzz job (`fuzz_body/headers/jwt`, 60s each).
@@ -1252,8 +1254,8 @@ not test issues:
 - [x] Security posture: secure-headers default review (ADR-094: stays opt-in; scaffolds get them), JWT `aud`/`iss` enforced, dropped `rustls-pemfile` (RUSTSEC-2025-0134 gone), Trivy CI job (pinned+checksummed binary, HIGH/CRITICAL fixed-only, blocking) + CycloneDX SBOM artifact, docs_site lockfile patched (1 CRITICAL + 13 HIGH npm advisories → 0 HIGH/CRITICAL, site still builds 161 pages).
 - [ ] Remaining OWASP tail: per-route/per-user authz, key rotation, HTML sanitization, MFA/session, cosign/sigstore + SLSA provenance, plugin signing, centralized logs + 5xx alerts — risk-accept or schedule in DECISIONS.md.
 - [x] Full `app.pyi` stub audit: 12 missing JustAPIApp methods + `__init__`, full APIRouter surface, Security/Session/Mailer, Param/Depends factory typing (Any-returning), `_justapi.pyi` gaps (Scheduler/DbParam/logging/ValidatedStreamResponse), `__init__.pyi` exports synced. Locked by `mypy` CI step on `crates/justapi-py/tests/stub_surface_check.py`.
-- [ ] Benchmark gate: add p99 (currently RPS-only). Approach per `skills/benchmark-harness`: oha A/B (PR vs main, same runner) on hello-world, warn-only for 2 weeks (shared-runner noise), then fail-gate at >5% — release numbers stay on dedicated hardware.
+- [x] Benchmark gate: p99 A/B workflow added (`.github/workflows/p99-gate.yml`) — oha vs main, same runner, warmup, `benchmarks/extract_p99.py` (unit-tested ns/µs/ms/s). **Warn-only until 2026-10-23**; promote by removing `continue-on-error` + exiting non-zero on >5%.
 
 ### Exit criteria
-- [x] `cargo test --workspace` 150 passed + 1 known flake (`scheduler_engine_batches...`, passes solo — frozen area, untouched); `clippy --workspace --tests -D warnings` clean; `fmt --check` clean; pytest 198 passed / 1 skipped on dev wheel. Note: `clippy --all-features` cannot run on this box (cudarc build script needs `nvcc`; no CUDA toolchain — same reason Phase 52 is frozen).
-- [ ] `git diff --cached --stat` <100 lines/commit (held for all 30 Phase-53 commits).
+- [x] `cargo test --workspace` 150 passed + 1 known flake (`scheduler_engine_batches...`, passes solo — frozen area, untouched); `clippy --workspace --tests -D warnings` clean; `fmt --check` clean; pytest **204 passed / 1 skipped** on dev wheel (2026-10-09). Note: `clippy --all-features` cannot run on this box (cudarc build script needs `nvcc`; no CUDA toolchain — same reason Phase 52 is frozen).
+- [x] `git diff --cached --stat` <100 lines/commit (auto-generated lockfiles excepted — `Cargo.lock`, `docs_site/package-lock.json`); 55 commits on the branch.
