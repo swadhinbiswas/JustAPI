@@ -6,7 +6,7 @@
 
 ## Current status
 
-- **Active phase:** 2.0.8 pre-release hardening — core ✅, AI/inference **unverified** (see honest phase table, 2026-08-06). Wheel built, demo_shop 29/29 passes, pytest 166/166 (+1 pre-existing flake), cargo workspace green on default features (gate fixed 2026-08-06).
+- **Active phase:** 53 — Beat FastAPI: parity + release (branch `phase-53/beat-fastapi-parity-release`). 2.0.9/2.0.10 are live on PyPI; Phase-53 content ships as 2.1.0. Core ✅, AI/inference **unverified** (ADR-067).
 - **Status:** All post-2.0.7 gaps closed (2026-07-25). **AI / inference / LLM work FROZEN until release 2.0.8** (ADR-067). Focus from 2026-07-25 session:
   - **HTTP QUERY method (RFC 10008) — end-to-end verified + testable (2026-08-06).** The route chain (Python `app.query()` → native `query()` → Rust router keyed on `justapi_core::query_method()`) already existed; the gaps were test coverage and client plumbing. Added: core `TestClient::query`/`query_with`, PyO3 `JustAPITestClient.query`/`query_with`, `AsyncTestClient.query` (defaults to `Content-Type: application/json` per RFC 10008), plus 3 Python tests (roundtrip, wrong-route 405, missing-Content-Type 400) and 1 Rust test. RFC 10008 requires a Content-Type on QUERY; the handler already enforces it (400).
   - **Differentiator sprint — one-command agent demo (2026-08-06).** `examples/agent_demo/run_demo.sh` starts the app, exercises all three Rust-owned differentiators (native MCP tools with Rust-inferred schemas, durable sessions, Rust-validated NDJSON streaming), and stops — no manual steps. Verified end-to-end (tools list, `add(5,7)=12` call, 4-step stream, session persistence across requests). `app.py` now accepts a port arg.
@@ -16,11 +16,11 @@
   - **ORJSON as optional Rust-level serializer** — ✅ complete. `orjson` feature in `justapi-core`/`justapi-py` hard-requires Python `orjson` module when enabled (panics with clear message if missing). `orjson>=3.10` added to pyproject.toml as `[orjson]` extra and included in `[full]`. 7 tests.
   - **Production panic hotspot audit** — ✅ complete. Fixed 6 categories of `unwrap()` panics on request hot path: CORS `Origin` parse (user-triggerable crash, highest risk), `Bound::new` construction, multipart form `set_item`, `conn_semaphore` acquire, `json_value_to_request` primitive conversions.
   - **GIL-pool concurrency bug (spurious 404s under load)** — ✅ fixed. `run_python` used `try_send` into a bounded channel (cap 16 for a single GIL worker); a burst of concurrent/pipelined requests overflowed the queue and `handle_request` masked the resulting chain `Err` as an RFC 9457 404 with no log. GIL pool now backpressures via `send().await` (throttles instead of dropping); `handle_request` logs chain errors and returns 500 (real not-found is already `Ok(404)`). Measured before: 4.1M/4.5M responses 404; after: 100% 200, ~110k rps. Regression test `test_sync_handler_no_spurious_404_under_load` (fails on old code).
-  - **PyPI wheel** — built (`manylinux_2_34_x86_64`, 32 MB). Unpublished — blocked on `MATURIN_PYPI_TOKEN`.
+  - **PyPI wheel** — published: 2.0.9 + 2.0.10 on PyPI (2026-08-08, OIDC trusted publishing). Next release carries Phase-53 work (2.1.0).
 - **Demo_shop stress test (2026-07-18) — all D1–D4 defects fixed.** All 23 endpoints pass; 29-assertion e2e test passes. Framework gotchas documented in demo_shop/README.md (both resolved in framework).
 - **Gates (2026-08-06, re-run on current code):** `cargo test --workspace` ✅ green on **default features** (integration-test feature guards fixed — previously `db_bridge`/`edge_cases` failed without `--all-features`); `cargo clippy --workspace --all-features --lib -- -D warnings` ✅; `cargo fmt --check` ✅; pytest **169 passed / 1 skipped / 0 failed** (the long-standing `test_circuit_breaker` flake is FIXED — it was a real fork-safety bug in the GIL pool, ADR-081: a forked child inherited the parent's initialized pool whose worker threads don't exist → every Python request hung → 504s. Pool now tracks its PID and rebuilds after fork); demo_shop `test_app.py` 29/29 ✅. **Write-path defect found + fixed (ADR-080):** Python-handler writes no longer collapse under concurrency (160→3 RPS at c=11 was a pool double-acquire bug; now flat ~150 RPS c=1..50).
 - **Documentation site (2026-07-25):** docs_site rebuilt to FastAPI-level depth — 141 pages across 13 sections, Astro + Starlight build passes, full-text search with Pagefind. Sections: Getting Started (5), Tutorial (36), Advanced (27), How-To (7), API Reference (17), Deployment (9), Security (4), Observability (4), Inference (4), Reference (6), Resources (3), Contributing (5), Examples (1).
-- **Blocker:** none. Outstanding: PyPI publish (needs OIDC trusted publisher / `MATURIN_PYPI_TOKEN` at pypi.org) — the single most important remaining item; **AI/inference claims remain unverified on real hardware (Phase 52 frozen)**.
+- **Blocker:** none. Next release: 2.1.0 (Phase-53 parity + stability work; includes the ADR-095 middleware-order behaviour change). **AI/inference claims remain unverified on real hardware (Phase 52 frozen)**.
 
 ## Mission
 
@@ -76,7 +76,7 @@ cloud-native readiness.
 | 37 | OTel Distributed Tracing | ✅ verified | OTLP, contextvars, 225 tests |
 | 38 | Hardware-Accelerated JWT & Security | ✅ verified | RS256/ES256, CORS builder, IpRateLimiter |
 | 39 | SAST, Fuzzing & Memory Safety | ✅ verified | 6 fuzz targets, miri, SAFETY comments |
-| 40 | The JustAPI 2.0 Release | 🟡 in progress | **PyPI upload still blocked (no token)** — see Next actions. AI/inference phases 41-52 are 🟡/🔴 (no real GPU run, ADR-067): the release narrative is the **fastest, most complete web framework** (2.4x Granian hello-world, 5.4x JSON echo, native SSE/CRUD/DB-awaits, HTTP/3, free-threaded wheels) — NOT unproven LLM-serving claims. |
+| 40 | The JustAPI 2.0 Release | ✅ shipped | 2.0.9 + 2.0.10 on PyPI (2026-08-08, OIDC). Next: 2.1.0 (Phase 53). AI/inference phases 41-52 are 🟡/🔴 (no real GPU run, ADR-067): the release narrative is the **fastest, most complete web framework** (2.4x Granian hello-world, 5.4x JSON echo, native SSE/CRUD/DB-awaits, HTTP/3, free-threaded wheels) — NOT unproven LLM-serving claims. |
 | 41 | Native Inference Engine Foundation | 🟡 implemented / unverified | Candle CPU; `Engine`/`Model` traits, 24 tests. **No real-weights run (MockModel only)** |
 | 42 | KV-Cache Manager (PagedAttention, Rust) | 🟡 implemented / unverified | `KvBlockPool`, `PrefixCache`; unit tests only, no real model |
 | 43 | Continuous-Batching Scheduler | 🟡 implemented / unverified | `Scheduler` prefill/decode interleave; **CPU MockModel only, 0.4% of naive on instant-forward (scheduler sleep dominates)** |
@@ -1232,7 +1232,8 @@ not test issues:
 ### P0 — release mechanics (in progress)
 - [x] Ops packaging fixes: helm `anomalyco` → `swadhinbiswas`, compose `./python` → `./crates/justapi-py/python`, drop stale 3.11 classifier (`requires-python>=3.12`), Dockerfile add `jinja2` + `timeout=5` healthcheck.
 - [x] Release wheel re-verified on Phase-53 tree (2026-10-06): `maturin build --release` → `twine check` PASSED (`justapi-2.0.10-cp311-abi3-manylinux_2_34_x86_64.whl`).
-- [ ] Publish (blocked: PyPI OIDC / `MATURIN_PYPI_TOKEN`); document PyPI OIDC setup; Dockerfile CMD (not ENTRYPOINT) so apps override.
+- [x] **Published** — 2.0.9 + 2.0.10 are on PyPI (2026-08-08, via OIDC trusted publishing in `wheels.yml`; 2.0.10 fixed the broken `justapi` CLI in the wheel). Phase-53 content is the next release → bump to **2.1.0** (contains one behaviour change: middleware order, ADR-095), tag push publishes automatically.
+- [ ] Release 2.1.0: version bump, `twine check` on rebuilt wheels, tag `v2.1.0` → OIDC publish; consolidate the stale pre-2.0.7 `[Unreleased]` block in CHANGELOG.
 - [x] Docker image boots standalone: `/live` 200 + `/async-demo` JSON from host. Build found 2 real bugs, both fixed: binary name `justapi-cli` (was `justapi`) + demo bound to 127.0.0.1 (now 0.0.0.0). Full `compose up` not run here — host port 5432 taken by unrelated postgres (environmental).
 - [x] Helm: NetworkPolicy (opt-in default-deny) + migration Job (pre-install/upgrade hook) added; verified with `helm lint` (0 failed) + `helm template` render (helm v3.16.3). Remaining: verify `readOnlyRootFilesystem` for uploads on a live cluster.
 
