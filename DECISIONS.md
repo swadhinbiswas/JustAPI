@@ -3665,3 +3665,34 @@ unconfigured (`middleware.rs:617-623`).
 
 **Evidence:** `test_auth.py::test_set_jwt_auth_with_audience_issuer` (config
 plumbing + backward-compat two-arg call); builders are jsonwebtoken-native.
+
+---
+
+## ADR-095 — 2026-10-09 — Middleware order flipped to Starlette semantics
+
+**Context:** JustAPI executed Python middlewares **first-added-outermost**; its
+own docs (`docs_site/.../middleware.md`) documented that order. Starlette —
+and therefore FastAPI — use the opposite: the **last** middleware added is the
+outermost. Verified empirically against starlette 0.52.1 (`add_middleware(A)`
+then `add_middleware(B)` → request order `B-req, A-req, handler, A-resp,
+B-resp`). Migration parity ("mirrors FastAPI") requires matching this; an app
+ported from FastAPI would silently invert its middleware stack.
+
+**Options considered:**
+1. Keep first-added-outermost (status quo) — rejected: violates the project's
+   core parity claim for a subtle, hard-to-debug behaviour.
+2. Match Starlette (last-added-outermost) — selected. One-line change in
+   `_apply_middlewares` (wrap in registration order); docs updated; ordering
+   locked by `test_middleware_order.py` (request + response phases, and
+   route-level middleware remaining outermost as an extension).
+
+**Decision:** Option 2. Route-level middlewares stay appended last (outermost
+of all) — they are a JustAPI extension with no FastAPI equivalent.
+
+**Impact:** Behaviour change for anyone relying on the old order. Shipping in
+the next minor release (2.1.0) with an explicit CHANGELOG entry; 2.0.x users
+are unaffected until they upgrade. No internal tests depended on the old order
+(full suite 206 passed after the flip).
+
+**Evidence:** empirical Starlette run (recorded above); `test_middleware_order.py`
+passes; `pytest` 206 passed / 1 skipped.

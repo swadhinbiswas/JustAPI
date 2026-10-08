@@ -5,6 +5,39 @@ All notable changes to JustAPI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+**FastAPI parity (Phase 53)**
+- `Param` constraints (`gt/ge/lt/le/min_length/max_length/pattern`) enforced as 422 for path/query/header/cookie params; `Header(convert_underscores=...)`; bool / int / float / Enum / `List[T]` coercion (sync + async handlers).
+- `JustAPIApp(lifespan=...)` — async or sync context manager entered before the server starts and exited on shutdown (`on_event` still supported).
+- Auth schemes: `HTTPBearer`, `HTTPBasic`, `APIKeyHeader`, `APIKeyQuery`, `APIKeyCookie` as `Depends` callables, with OpenAPI security schemes.
+- Multi-file uploads: repeated multipart field names yield a list; `List[UploadFile]` handlers receive every file.
+- `JustAPIApp.set_jwt_auth(..., audience=[...], issuer=...)` — `aud`/`iss` are now enforced (401) instead of warn-only.
+- TestClient: `get_with`/`put_with`/`patch_with`/`delete_with` headers, a persistent cookie jar (`cookies()`, `clear_cookies()`), and header support on `AsyncTestClient` for all methods.
+- OpenAPI: real parameter types + constraints, `enum` values, cookie parameters, `components.securitySchemes` + per-operation `security`, real `requestBody` from `Schema`/Pydantic models, and `info.servers/tags/contact/license/termsOfService` emission.
+- `justapi create` scaffolds now enable secure headers by default.
+
+### Fixed
+
+- **Middleware ordering now matches Starlette/FastAPI (ADR-095):** the **last** middleware added is the outermost (it sees the request first). JustAPI previously ran first-added-outermost — the opposite of FastAPI. Apps that relied on the old order should reverse their `@app.middleware("http")` registrations.
+- `FileResponse` sets `ETag`, `Last-Modified`, and `Content-Length` (honouring a caller `stat_result`).
+- SSE/WebSocket routes registered via `APIRouter` keep their prefix, tags, summary, and OpenAPI entry through `include_router`.
+- Docker: the image entrypoint no longer hard-codes `demo_app.py` (override with `docker run ... python your_app.py`), and the demo binds `0.0.0.0` so it is reachable from outside the container.
+
+### Security
+
+- Dropped `rustls-pemfile` (RUSTSEC-2025-0134) in favour of `rustls-pki-types` PEM loaders.
+- Trivy CI job (filesystem scan: vulnerabilities, secrets, misconfigurations; HIGH/CRITICAL, fixed-only) + CycloneDX SBOM artifact; pinned Trivy binary verified by SHA256 (the `trivy-action` was compromised in 2026).
+- Patched the docs-site lockfile (1 CRITICAL + 13 HIGH npm advisories).
+
+## [2.0.10] - 2026-08-08
+
+### Fixed
+
+- The `justapi` CLI binary is now shipped inside the PyPI wheel — `pip install justapi` previously left the `justapi` command broken.
+
 ## [2.0.9] - 2026-08-08
 
 ### Added
