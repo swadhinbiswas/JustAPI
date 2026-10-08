@@ -134,7 +134,23 @@ fn dispatch_python_handler(
         for (k, v) in form.fields.iter() {
             d.set_item(k, v).ok();
         }
+        // Group by field name, preserving first-seen order. A field that
+        // appears once is set as a single `UploadFile` (back-compat); a field
+        // that repeats (e.g. `<input type=file multiple>`) is set as a Python
+        // list so handlers annotated `List[UploadFile]` receive all files.
+        let mut order: Vec<&str> = Vec::new();
+        let mut groups: std::collections::HashMap<&str, Vec<&justapi_core::multipart::UploadFile>> =
+            std::collections::HashMap::new();
         for f in form.files.iter() {
+            if !groups.contains_key(f.field_name.as_str()) {
+                order.push(f.field_name.as_str());
+            }
+            groups.entry(f.field_name.as_str()).or_default().push(f);
+        }
+        fn build_upload<'py>(
+            py: Python<'py>,
+            f: &justapi_core::multipart::UploadFile,
+        ) -> Option<pyo3::Bound<'py, crate::multipart::UploadFile>> {
             let headers_dict = pyo3::types::PyDict::new(py);
             for (k, v) in f.headers.iter() {
                 headers_dict.set_item(k, v).ok();
@@ -146,10 +162,23 @@ fn dispatch_python_handler(
                 headers_dict.into(),
                 f.temp_path.clone(),
             );
-            let Ok(p) = pyo3::Bound::new(py, upload_file) else {
-                continue;
-            };
-            d.set_item(&f.field_name, p).ok();
+            pyo3::Bound::new(py, upload_file).ok()
+        }
+        for name in order {
+            let group = &groups[name];
+            if group.len() == 1 {
+                if let Some(p) = build_upload(py, group[0]) {
+                    d.set_item(name, p).ok();
+                }
+            } else {
+                let list = pyo3::types::PyList::empty(py);
+                for f in group.iter() {
+                    if let Some(p) = build_upload(py, f) {
+                        list.append(p).ok();
+                    }
+                }
+                d.set_item(name, list).ok();
+            }
         }
         form_dict_py = Some(d.into());
     }
