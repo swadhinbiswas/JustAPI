@@ -2058,3 +2058,45 @@ Two findings, both recorded honestly:
 were measured with a different harness and do not reproduce under
 `oha -c 100` keep-alive today (released wheel: 40k). Treat cross-entry Python
 path numbers as trend-only until a single harness is re-run end-to-end.
+
+## Real-weights inference smoke — FIRST REAL RUN (recorded 2026-10-10, CPU)
+
+First time real model weights have been executed end-to-end through
+`justapi-inference` (every prior inference number in this ledger was
+`MockModel`; ADR-067 froze Phase 52 for lack of a real run).
+
+- **Model:** TinyLlama-1.1B-Chat v1.0, Q4_K_M GGUF (669 MB, llama architecture)
+- **Hardware:** 13th Gen i5-13600K (20 threads), **CPU backend (candle)**, release build
+- **Prompt:** "The capital of France is" → tokens `[450, 7483, 310, 3444, 338]`
+  (canonical Llama tokenization — verified against the known ids)
+- **Sampling:** greedy (temperature 0.0), max_tokens=32
+
+| Metric | Value |
+|---|---:|
+| Model load | 0.58 s |
+| TTFT (prefill, 5-token prompt) | 0.14 s |
+| Decode throughput | **22.1 tok/s** |
+| Tokenizer roundtrip | exact |
+| Output quality | fluent continuation ("...a hub of innovation and creativity for centuries...") |
+
+Two real bugs were found and fixed by this smoke (`e3ed948`, `5f4e4fa`):
+
+1. **GGUF tokenizer was built as GPT-2 ByteLevel BPE.** Llama-family GGUFs are
+   SentencePiece (`tokenizer.ggml.model` = `llama`/`spm`); with ByteLevel every
+   space became a standalone `▁` token and generation was degenerate
+   ("Maria Maria Maria"). Now a Metaspace pre-tokenizer/decoder with
+   `unk_token=<unk>`, `fuse_unk`, `byte_fallback` is selected from the GGUF
+   model type.
+2. **`quantized_llama` returns `[b, s, vocab]` logits; the sampler expects
+   `[vocab]`.** The rank error was swallowed by `let _ =` in
+   `Engine::generate` (stream just closed with 0 tokens). Logits are now
+   rank-normalized per position and generation errors are surfaced.
+
+Also added: `Engine::encode/decode/generate_text` — real models were unusable
+from text through the public API (only `MockModel::tokenize` existed).
+
+**Scope, honestly:** CPU smoke only. NOT a GPU run, NOT a vLLM comparison —
+Phase 52's "beats vLLM" claim remains UNTESTED (no CUDA driver on this box).
+Known follow-ups: `openai.rs` still tokenizes with `MockModel` (needs
+`Engine::encode`), EOS/stop-token wiring from GGUF metadata, and decode
+throughput has no batching/KV-reuse tuning yet.
