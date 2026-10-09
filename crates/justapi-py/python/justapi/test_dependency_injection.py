@@ -104,7 +104,12 @@ def test_gil_pool_survives_fork():
 
         app2.run(f"127.0.0.1:{port}")
 
-    p = multiprocessing.Process(target=run_server)
+    # This test is specifically about fork(2) safety. On free-threaded 3.14t
+    # the default multiprocessing start method is forkserver, which pickles
+    # the target and cannot serialize a local function — request the fork
+    # context explicitly on every interpreter.
+    ctx = multiprocessing.get_context("fork")
+    p = ctx.Process(target=run_server)
     p.start()
     try:
         deadline = time.time() + 15
