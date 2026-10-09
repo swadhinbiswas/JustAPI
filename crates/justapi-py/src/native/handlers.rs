@@ -561,21 +561,32 @@ pub(crate) fn serialize_response(
                         s.into_bytes()
                     } else if let Ok(bt) = b.extract::<Vec<u8>>() {
                         bt
-                    } else if let Ok(dumps) = fast_dumps(py) {
-                        // Envelope body may be a dict/list: serialize as JSON.
-                        // (Previously `str()`'d into a Python repr with single
-                        // quotes, which is not valid JSON.)
-                        dumps
-                            .call1((b.clone(),))
-                            .ok()
-                            .and_then(|out| {
-                                out.extract::<Vec<u8>>()
-                                    .ok()
-                                    .or_else(|| out.extract::<String>().ok().map(String::into_bytes))
-                            })
-                            .unwrap_or_default()
                     } else {
-                        b.str().map(|s| s.to_string().into_bytes()).unwrap_or_default()
+                        // Envelope body may be a dict/list: serialize as JSON.
+                        // Try the fast (orjson/helper) path first; when the
+                        // `orjson` feature is on but the module is missing,
+                        // fall back to the helper's `_dumps` rather than a
+                        // Python repr (single quotes are not valid JSON).
+                        let dumped = fast_dumps(py)
+                            .ok()
+                            .and_then(|d| d.call1((b.clone(),)).ok())
+                            .or_else(|| {
+                                // `json` is always available; `fast_dumps` can
+                                // fail when the `orjson` feature is enabled but
+                                // the module is missing.
+                                py.import("json")
+                                    .ok()
+                                    .and_then(|m| m.getattr("dumps").ok())
+                                    .and_then(|d| d.call1((b.clone(),)).ok())
+                            });
+                        match dumped {
+                            Some(out) => out
+                                .extract::<Vec<u8>>()
+                                .ok()
+                                .or_else(|| out.extract::<String>().ok().map(String::into_bytes))
+                                .unwrap_or_default(),
+                            None => b.str().map(|s| s.to_string().into_bytes()).unwrap_or_default(),
+                        }
                     }
                 }
                 None => Vec::new(),
