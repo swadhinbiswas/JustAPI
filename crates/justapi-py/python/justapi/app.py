@@ -234,6 +234,37 @@ def _is_upload_list(annotation) -> bool:
         return False
 
 
+def _is_pydantic_model(annotation) -> bool:
+    """True for a Pydantic v2/v1 model class (body/form model params)."""
+    return inspect.isclass(annotation) and (
+        hasattr(annotation, "model_validate") or hasattr(annotation, "parse_obj")
+    )
+
+
+def _build_model(model, data, alias: str):
+    """Validate ``data`` (dict or raw JSON bytes) into a Pydantic model.
+
+    Raises RequestValidationError (422) on failure, mirroring FastAPI.
+    """
+    if isinstance(data, model):
+        return data
+    if isinstance(data, (bytes, bytearray)):
+        try:
+            data = json.loads(bytes(data).decode("utf-8"))
+        except (UnicodeDecodeError, ValueError) as e:
+            raise RequestValidationError(
+                [{"loc": [alias], "msg": f"invalid JSON body: {e}", "type": "value_error"}]
+            )
+    try:
+        if hasattr(model, "model_validate"):
+            return model.model_validate(data)
+        return model.parse_obj(data)
+    except Exception as e:
+        raise RequestValidationError(
+            [{"loc": [alias], "msg": str(e), "type": "value_error"}]
+        )
+
+
 class Security(Depends):
     """`Security(dependency)` is `Depends(dependency)` with OAuth2 scope
     support, mirroring FastAPI's `Security`. The `scopes` are recorded for
@@ -804,17 +835,35 @@ class JustAPIApp:
                 if not found and (param_type is File or param_type is Form or _upload_list or (hasattr(param.annotation, "__name__") and param.annotation.__name__ == "UploadFile")):
                     form_data = request.get("form")
                     if form_data:
-                        val = form_data.get(alias)
-                        if val is not None:
+                        if _is_pydantic_model(param.annotation):
+                            # Form + Pydantic model: every form field maps into
+                            # the model (FastAPI parity), no field-name lookup.
+                            val = _build_model(param.annotation, dict(form_data), alias)
                             found = True
-                            if _upload_list and not isinstance(val, list):
-                                val = [val]
-                            elif not _upload_list and isinstance(val, list):
-                                val = val[0] if val else None
+                        else:
+                            val = form_data.get(alias)
+                            if val is not None:
+                                found = True
+                                if _upload_list and not isinstance(val, list):
+                                    val = [val]
+                                elif not _upload_list and isinstance(val, list):
+                                    val = val[0] if val else None
 
-                if not found and (param_type is Body or name == "body" or name == "payload"):
+                if not found and (param_type is Body or name == "body" or name == "payload" or (param_type is None and _is_pydantic_model(param.annotation))):
                     val = request.get("body")
-                    if val is not None: found = True
+                    if val is not None:
+                        found = True
+                        if param_type is Body and getattr(param.default, "embed", False):
+                            # `Body(..., embed=True)`: read the body's nested key.
+                            if isinstance(val, (bytes, bytearray)):
+                                try:
+                                    val = json.loads(bytes(val).decode("utf-8"))
+                                except (UnicodeDecodeError, ValueError):
+                                    val = None
+                            val = val.get(alias) if isinstance(val, dict) else None
+                            found = val is not None
+                        if found and _is_pydantic_model(param.annotation):
+                            val = _build_model(param.annotation, val, alias)
                 
                 if not found and (name == "background_tasks" or (hasattr(param.annotation, "__name__") and param.annotation.__name__ == "BackgroundTasks")):
                     val = request.get("background_tasks")
@@ -828,7 +877,7 @@ class JustAPIApp:
                     except (ValueError, TypeError) as e:
                         raise RequestValidationError([{"loc": [alias], "msg": str(e), "type": "type_error"}])
                 else:
-                    if default is inspect.Parameter.empty:
+                    if default is inspect.Parameter.empty or default is ...:
                         raise RequestValidationError([{"loc": [alias], "msg": "field required", "type": "value_error.missing"}])
                     kwargs[name] = default
         return kwargs
@@ -968,17 +1017,35 @@ class JustAPIApp:
                 if not found and (param_type is File or param_type is Form or _upload_list or (hasattr(param.annotation, "__name__") and param.annotation.__name__ == "UploadFile")):
                     form_data = request.get("form")
                     if form_data:
-                        val = form_data.get(alias)
-                        if val is not None:
+                        if _is_pydantic_model(param.annotation):
+                            # Form + Pydantic model: every form field maps into
+                            # the model (FastAPI parity), no field-name lookup.
+                            val = _build_model(param.annotation, dict(form_data), alias)
                             found = True
-                            if _upload_list and not isinstance(val, list):
-                                val = [val]
-                            elif not _upload_list and isinstance(val, list):
-                                val = val[0] if val else None
+                        else:
+                            val = form_data.get(alias)
+                            if val is not None:
+                                found = True
+                                if _upload_list and not isinstance(val, list):
+                                    val = [val]
+                                elif not _upload_list and isinstance(val, list):
+                                    val = val[0] if val else None
                     
-                if not found and (param_type is Body or name == "body" or name == "payload"):
+                if not found and (param_type is Body or name == "body" or name == "payload" or (param_type is None and _is_pydantic_model(param.annotation))):
                     val = request.get("body")
-                    if val is not None: found = True
+                    if val is not None:
+                        found = True
+                        if param_type is Body and getattr(param.default, "embed", False):
+                            # `Body(..., embed=True)`: read the body's nested key.
+                            if isinstance(val, (bytes, bytearray)):
+                                try:
+                                    val = json.loads(bytes(val).decode("utf-8"))
+                                except (UnicodeDecodeError, ValueError):
+                                    val = None
+                            val = val.get(alias) if isinstance(val, dict) else None
+                            found = val is not None
+                        if found and _is_pydantic_model(param.annotation):
+                            val = _build_model(param.annotation, val, alias)
                 
                 if not found and (name == "background_tasks" or (hasattr(param.annotation, "__name__") and param.annotation.__name__ == "BackgroundTasks")):
                     val = request.get("background_tasks")
@@ -992,7 +1059,7 @@ class JustAPIApp:
                     except (ValueError, TypeError) as e:
                         raise RequestValidationError([{"loc": [alias], "msg": str(e), "type": "type_error"}])
                 else:
-                    if default is inspect.Parameter.empty:
+                    if default is inspect.Parameter.empty or default is ...:
                         raise RequestValidationError([{"loc": [alias], "msg": "field required", "type": "value_error.missing"}])
                     kwargs[name] = default
         return kwargs

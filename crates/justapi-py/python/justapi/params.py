@@ -15,6 +15,7 @@ class Param:
         min_length: Optional[int] = None,
         max_length: Optional[int] = None,
         pattern: Optional[str] = None,
+        embed: bool = False,
         title: Optional[str] = None,
         description: Optional[str] = None,
         deprecated: bool = False,
@@ -30,6 +31,7 @@ class Param:
         self.min_length = min_length
         self.max_length = max_length
         self.pattern = pattern
+        self.embed = embed
         self.title = title
         self.description = description
         self.deprecated = deprecated
