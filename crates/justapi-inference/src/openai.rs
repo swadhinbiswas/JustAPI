@@ -365,7 +365,9 @@ pub fn chat_completion_stream(
 ) -> impl futures::Stream<Item = Result<bytes::Bytes, anyhow::Error>> + 'static {
     let model = req.model.clone();
     let prompt = prompt_from_messages(&req.messages);
-    let tokens = MockModel::tokenize(&prompt);
+    // Use the registered model's tokenizer (real models need their loaded
+    // vocab; the mock falls back to its byte mapping via the trait default).
+    let tokens = engine.encode(&model, &prompt).unwrap_or_else(|_| MockModel::tokenize(&prompt));
     let params = SamplingParams {
         max_tokens: req.effective_max_tokens(),
         temperature: req.temperature.unwrap_or(1.0),
@@ -450,7 +452,9 @@ pub async fn chat_completion(
 ) -> Result<ChatCompletionResponse, ModelError> {
     let model = req.model.clone();
     let prompt = prompt_from_messages(&req.messages);
-    let tokens = MockModel::tokenize(&prompt);
+    // Use the registered model's tokenizer (real models need their loaded
+    // vocab; the mock falls back to its byte mapping via the trait default).
+    let tokens = engine.encode(&model, &prompt).unwrap_or_else(|_| MockModel::tokenize(&prompt));
     let prompt_tokens = tokens.len();
     let params = SamplingParams {
         max_tokens: req.effective_max_tokens(),
@@ -495,7 +499,8 @@ pub fn completion_stream(
     req: CompletionRequest,
 ) -> impl futures::Stream<Item = Result<bytes::Bytes, anyhow::Error>> + 'static {
     let model = req.model.clone();
-    let tokens = MockModel::tokenize(&req.prompt);
+    let tokens =
+        engine.encode(&req.model, &req.prompt).unwrap_or_else(|_| MockModel::tokenize(&req.prompt));
     let params = SamplingParams {
         max_tokens: req.max_tokens,
         temperature: req.temperature.unwrap_or(1.0),
@@ -561,7 +566,8 @@ pub async fn completion(
     req: CompletionRequest,
 ) -> Result<CompletionResponse, ModelError> {
     let model = req.model.clone();
-    let tokens = MockModel::tokenize(&req.prompt);
+    let tokens =
+        engine.encode(&req.model, &req.prompt).unwrap_or_else(|_| MockModel::tokenize(&req.prompt));
     let prompt_tokens = tokens.len();
     let params = SamplingParams {
         max_tokens: req.max_tokens,
@@ -632,7 +638,9 @@ pub async fn scheduled_chat_completion(
 ) -> Result<ChatCompletionResponse, ModelError> {
     let model = req.model.clone();
     let prompt = prompt_from_messages(&req.messages);
-    let tokens = MockModel::tokenize(&prompt);
+    // Use the registered model's tokenizer (real models need their loaded
+    // vocab; the mock falls back to its byte mapping via the trait default).
+    let tokens = engine.encode(&model, &prompt).unwrap_or_else(|_| MockModel::tokenize(&prompt));
     let prompt_tokens = tokens.len();
     let params = SamplingParams {
         max_tokens: req.effective_max_tokens(),
@@ -678,7 +686,9 @@ pub fn scheduled_chat_completion_stream(
 ) -> impl futures::Stream<Item = Result<bytes::Bytes, anyhow::Error>> + 'static {
     let model = req.model.clone();
     let prompt = prompt_from_messages(&req.messages);
-    let tokens = MockModel::tokenize(&prompt);
+    // Use the registered model's tokenizer (real models need their loaded
+    // vocab; the mock falls back to its byte mapping via the trait default).
+    let tokens = engine.encode(&model, &prompt).unwrap_or_else(|_| MockModel::tokenize(&prompt));
     let params = SamplingParams {
         max_tokens: req.effective_max_tokens(),
         temperature: req.temperature.unwrap_or(1.0),
@@ -761,7 +771,8 @@ pub async fn scheduled_completion(
     req: CompletionRequest,
 ) -> Result<CompletionResponse, ModelError> {
     let model = req.model.clone();
-    let tokens = MockModel::tokenize(&req.prompt);
+    let tokens =
+        engine.encode(&req.model, &req.prompt).unwrap_or_else(|_| MockModel::tokenize(&req.prompt));
     let prompt_tokens = tokens.len();
     let params = SamplingParams {
         max_tokens: req.max_tokens,
@@ -802,7 +813,8 @@ pub fn scheduled_completion_stream(
     req: CompletionRequest,
 ) -> impl futures::Stream<Item = Result<bytes::Bytes, anyhow::Error>> + 'static {
     let model = req.model.clone();
-    let tokens = MockModel::tokenize(&req.prompt);
+    let tokens =
+        engine.encode(&req.model, &req.prompt).unwrap_or_else(|_| MockModel::tokenize(&req.prompt));
     let params = SamplingParams {
         max_tokens: req.max_tokens,
         temperature: req.temperature.unwrap_or(1.0),

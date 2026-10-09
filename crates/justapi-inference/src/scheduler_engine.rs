@@ -86,6 +86,11 @@ impl SchedulerEngine {
         &self.engine
     }
 
+    /// Encode text with the named model's tokenizer (delegates to the engine).
+    pub fn encode(&self, name: &str, text: &str) -> Result<Vec<u32>, ModelError> {
+        self.engine.encode(name, text)
+    }
+
     /// Borrow the scheduler.
     pub fn scheduler(&self) -> &Arc<Mutex<Scheduler>> {
         &self.scheduler
