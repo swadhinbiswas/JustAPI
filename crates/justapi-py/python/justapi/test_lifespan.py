@@ -23,7 +23,7 @@ def test_lifespan_enter_exit_order():
         events.append("shutdown")
 
     # Don't bind a socket: stub the server start.
-    app._serve = lambda addr, max_body_size=None: None
+    app._serve = lambda addr, max_body_size=None, reuse_port=False: None
     app.run("127.0.0.1:0")
 
     assert events == ["startup", "enter", "exit", "shutdown"], events
@@ -37,6 +37,6 @@ def test_no_lifespan_still_runs_events():
     def _up():
         events.append("startup")
 
-    app._serve = lambda addr, max_body_size=None: None
+    app._serve = lambda addr, max_body_size=None, reuse_port=False: None
     app.run("127.0.0.1:0")
     assert events == ["startup"]

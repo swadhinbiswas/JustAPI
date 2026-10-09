@@ -2009,7 +2009,7 @@ class JustAPIApp:
         register_system_routes(self)
         return self
 
-    def run(self, addr: str = "127.0.0.1:8000", max_body_size: int = 50 * 1024 * 1024):
+    def run(self, addr: str = "127.0.0.1:8000", max_body_size: int = 50 * 1024 * 1024, reuse_port: bool = False):
         # Execute startup handlers (FastAPI on_event parity).
         for handler in self._startup_handlers:
             if inspect.iscoroutinefunction(handler):
@@ -2041,7 +2041,7 @@ class JustAPIApp:
 
         Scheduler().start()
         try:
-            self._serve(addr, max_body_size)
+            self._serve(addr, max_body_size, reuse_port)
         except KeyboardInterrupt:
             pass
         finally:
@@ -2068,9 +2068,13 @@ class JustAPIApp:
                 except Exception:
                     pass
 
-    def _serve(self, addr: str, max_body_size: int):
-        """Start the Rust server (split out so tests can stub it)."""
-        self._app.run(addr, max_body_size)
+    def _serve(self, addr: str, max_body_size: int, reuse_port: bool = False):
+        """Start the Rust server (split out so tests can stub it).
+
+        ``reuse_port=True`` binds with SO_REUSEPORT so several worker
+        processes can share one address (``justapi serve --workers N``).
+        """
+        self._app.run(addr, max_body_size, reuse_port)
 
     def schedule(self, cron_expr, func, *args, **kwargs):
         """Register a cron job (native Rust scheduler).

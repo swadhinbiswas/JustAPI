@@ -2811,6 +2811,7 @@ dependencies = [
  "serde_urlencoded",
  "sha1",
  "simd-json",
+ "socket2 0.5.10",
  "sqlx",
  "tempfile",
  "thiserror 1.0.69",

@@ -1747,8 +1747,14 @@ impl JustAPIApp {
     }
 
     /// Start the server and begin accepting requests.
-    #[pyo3(signature = (addr, max_body_size=50*1024*1024))]
-    fn run(slf: Py<Self>, py: Python<'_>, addr: &str, max_body_size: usize) -> PyResult<()> {
+    #[pyo3(signature = (addr, max_body_size=50*1024*1024, reuse_port=false))]
+    fn run(
+        slf: Py<Self>,
+        py: Python<'_>,
+        addr: &str,
+        max_body_size: usize,
+        reuse_port: bool,
+    ) -> PyResult<()> {
         let mut app = slf.borrow_mut(py);
         let addr: std::net::SocketAddr = addr.parse().map_err(|e| {
             pyo3::exceptions::PyValueError::new_err(format!("Invalid address: {}", e))
@@ -2172,6 +2178,7 @@ impl JustAPIApp {
 
                 let mut server = justapi_core::Server::new(addr)
                     .with_handler(handler)
+                    .with_reuse_port(reuse_port)
                     .with_shutdown(shutdown_signal);
                 if !health_checks.is_empty() {
                     let mut reg = justapi_core::health::HealthRegistry::new();

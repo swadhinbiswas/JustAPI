@@ -281,6 +281,9 @@ pub struct Server {
     /// Graceful shutdown drain timeout. Configurable via `with_shutdown_timeout`;
     /// defaults to 30 seconds.
     shutdown_timeout: std::time::Duration,
+    /// Bind with `SO_REUSEPORT` so several processes can share one address
+    /// (Python-side `justapi serve --workers N` prefork). Unix only.
+    reuse_port: bool,
 }
 
 impl Server {
@@ -325,6 +328,7 @@ impl Server {
             openapi_spec: None,
             max_body_size: DEFAULT_MAX_BODY_SIZE,
             shutdown_timeout: std::time::Duration::from_secs(30),
+            reuse_port: false,
         }
     }
 
@@ -349,6 +353,15 @@ impl Server {
     /// Defaults to 30 seconds.
     pub fn with_shutdown_timeout(mut self, timeout: std::time::Duration) -> Self {
         self.shutdown_timeout = timeout;
+        self
+    }
+
+    /// Bind with `SO_REUSEPORT` so multiple processes can serve the same
+    /// address with the kernel load-balancing accepts. Used by the Python
+    /// CLI's `justapi serve --workers N` prefork. No-op on non-Unix (the flag
+    /// is ignored and a plain bind is used).
+    pub fn with_reuse_port(mut self, reuse_port: bool) -> Self {
+        self.reuse_port = reuse_port;
         self
     }
 
@@ -805,7 +818,7 @@ impl Server {
 
         match &self.addr {
             ListenAddr::Tcp(a) => {
-                let listener = tokio::net::TcpListener::bind(*a).await?;
+                let listener = bind_tcp_listener(*a, self.reuse_port)?;
                 self.run_on(listener).await
             }
             ListenAddr::Unix(path) => {
@@ -1739,10 +1752,41 @@ async fn serve_http(
     .await
 }
 
+/// Bind a TCP listener for `Server::run`. With `reuse_port` (Unix only) the
+/// socket is created with `SO_REUSEPORT` so several processes can serve the
+/// same address and let the kernel load-balance accepts — the mechanism
+/// behind Python's `justapi serve --workers N` prefork.
+fn bind_tcp_listener(
+    addr: std::net::SocketAddr,
+    reuse_port: bool,
+) -> Result<tokio::net::TcpListener> {
+    #[cfg(unix)]
+    if reuse_port {
+        let domain = if addr.is_ipv6() { socket2::Domain::IPV6 } else { socket2::Domain::IPV4 };
+        let socket = socket2::Socket::new(domain, socket2::Type::STREAM, None)
+            .map_err(|e| anyhow::anyhow!("socket() failed: {e}"))?;
+        socket
+            .set_reuse_port(true)
+            .map_err(|e| anyhow::anyhow!("SO_REUSEPORT on {addr} failed: {e}"))?;
+        socket.set_nonblocking(true)?;
+        socket.bind(&addr.into()).map_err(|e| anyhow::anyhow!("bind {addr} failed: {e}"))?;
+        socket.listen(1024)?;
+        let std_listener: std::net::TcpListener = socket.into();
+        return tokio::net::TcpListener::from_std(std_listener)
+            .map_err(|e| anyhow::anyhow!("tokio listener: {e}"));
+    }
+    #[cfg(not(unix))]
+    let _ = reuse_port;
+
+    let std_listener = std::net::TcpListener::bind(addr)?;
+    std_listener.set_nonblocking(true)?;
+    tokio::net::TcpListener::from_std(std_listener)
+        .map_err(|e| anyhow::anyhow!("tokio listener: {e}"))
+}
+
 /// Bind a Unix domain socket, removing any stale socket file left from a
 /// previous run (a common footgun — `bind` fails with EADDRINUSE on an existing
 /// socket path). The socket file is unlinked when the listener is dropped.
-#[cfg(unix)]
 #[cfg(unix)]
 pub async fn bind_unix_listener(path: &std::path::Path) -> Result<tokio::net::UnixListener> {
     // Remove a leftover socket file so re-start doesn't fail with EADDRINUSE.
