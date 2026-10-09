@@ -19,7 +19,7 @@ import subprocess
 import sys
 import shutil
 
-__version__ = "2.0.10"
+__version__ = "2.1.0"
 
 RUST_BINARY = "justapi-cli"  # cargo install justapi-cli → binary name
 

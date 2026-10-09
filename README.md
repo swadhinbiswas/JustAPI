@@ -10,7 +10,7 @@
     <img src="https://github.com/swadhinbiswas/JustAPI/actions/workflows/wheels.yml/badge.svg" alt="Wheels & Release">
   </a>
   <a href="https://pypi.org/project/justapi/">
-    <img src="https://img.shields.io/badge/pypi-2.0.9-blue.svg?logo=pypi&logoColor=white" alt="PyPI">
+    <img src="https://img.shields.io/badge/pypi-2.1.0-blue.svg?logo=pypi&logoColor=white" alt="PyPI">
   </a>
   <a href="https://www.python.org/downloads/">
     <img src="https://img.shields.io/badge/python-3.11%20|%203.12%20|%203.13%20|%203.14-blue.svg?logo=python&logoColor=white" alt="Python">
@@ -120,7 +120,7 @@ More numbers, honestly:
 - **Native fast path requires a schema.** Routes without a `Schema` fall back to the Python handler path (~60k req/s). The ~700k numbers apply to routes with `native=True` + `Schema`.
 - **Python handler throughput is GIL-bound.** On GIL-locked CPython, the Python dispatch path caps at ~100-120k req/s on this hardware regardless of framework — that is the GIL, not a framework limitation. Free-threaded Python (3.14t) removes this ceiling.
 - **Light async handlers are loop-bound.** Async handlers that only sleep/echo (~4-12k req/s) are capped by the asyncio loop + thread hop. Three experiments (ADR-090/091/092) proved no coroutine driver, bridge, or multi-loop approach beats asyncio's own stepping. We win where it matters: real async workloads (1ms-sleep handlers: 3.9k vs Granian 2.9k RPS) and anything DB/SSE-heavy via native ops.
-- **LLM-serving claims are NOT part of this release.** Inference phases are unverified (no real GPU run, ADR-067) — the tested story is the web framework.
+- **LLM-serving claims are NOT part of this release.** The tested story is the web framework. Inference now runs real GGUF weights end-to-end on CPU (first run 2026-10-10, ADR-098: TinyLlama-1.1B Q4, 22.1 tok/s), but there is still **no real-GPU run** (ADR-067), so "beats vLLM" remains untested and unclaimed.
 
 ---
 

@@ -19,7 +19,7 @@ inference = ["justapi-core/inference", "dep:justapi-inference"]
 
 [dependencies]
 justapi-core = { workspace = true, features = ["db"] }
-justapi-inference = { version = "2.0.9", path = "../justapi-inference", optional = true }
+justapi-inference = { version = "2.1.0", path = "../justapi-inference", optional = true }
 tokio.workspace = true
 clap.workspace = true
 tracing.workspace = true
