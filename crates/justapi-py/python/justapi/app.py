@@ -199,9 +199,21 @@ def _infer_tool_schema(func):
     }
 
 
+class _CallableErrors(list):
+    """A list that is also callable (returns a copy of itself).
+
+    FastAPI's ``RequestValidationError`` exposes ``exc.errors()`` as a method;
+    JustAPI historically exposed ``exc.errors`` as an attribute. Supporting
+    both keeps FastAPI migrations working without breaking existing code.
+    """
+
+    def __call__(self):
+        return list(self)
+
+
 class RequestValidationError(Exception):
     def __init__(self, errors):
-        self.errors = errors
+        self.errors = _CallableErrors(errors)
         self.detail = errors
         super().__init__(str(errors))
 
@@ -677,6 +689,20 @@ class JustAPIApp:
 
     def add_exception_handler(self, exc_class, handler):
         self.exception_handlers[exc_class] = handler
+
+    def exception_handler(self, exc_class):
+        """FastAPI-style decorator form of :meth:`add_exception_handler`.
+
+        Usage::
+
+            @app.exception_handler(HTTPException)
+            def handle(request, exc):
+                return {"status": exc.status_code, "body": {...}}
+        """
+        def decorator(func):
+            self.exception_handlers[exc_class] = func
+            return func
+        return decorator
 
     def _handle_exception(self, request, exc):
         for cls in type(exc).mro():
