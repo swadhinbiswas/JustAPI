@@ -2236,6 +2236,17 @@ impl JustAPIApp {
                     server = server.add_middleware(coalescer);
                 }
 
+                // Wire CORS middleware into the Rust middleware chain FIRST so
+                // it is the outermost of the native middlewares: it must answer
+                // OPTIONS preflight before JWT (browsers send no credentials on
+                // preflight) and must decorate auth-error responses (401s) with
+                // `Access-Control-*` headers, which only happens when CORS wraps
+                // the middleware that produced the error.
+                if let Some(cors) = cors {
+                    tracing::info!("CORS middleware enabled");
+                    server = server.add_cors(cors);
+                }
+
                 if secure_headers {
                     let sh = secure_headers_config
                         .unwrap_or_else(|| justapi_core::middleware::SecurityHeaders::default().without_hsts());
@@ -2248,14 +2259,6 @@ impl JustAPIApp {
                 if let Some(jwt) = jwt_auth {
                     tracing::info!("JWT authentication middleware enabled");
                     server = server.add_jwt(jwt);
-                }
-
-                // Wire CORS middleware into the Rust middleware chain. When
-                // configured, this handles OPTIONS preflight (returning 204)
-                // and injects `Access-Control-*` headers on every response.
-                if let Some(cors) = cors {
-                    tracing::info!("CORS middleware enabled");
-                    server = server.add_cors(cors);
                 }
 
                 if let Some(path) = gateway_config_path {
