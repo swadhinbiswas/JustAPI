@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 **FastAPI parity (Phase 53)**
+- **Real-weights inference support (first real run, ADR-098):** `Engine::encode/decode/generate_text` — real models are now drivable from text; GGUF SentencePiece tokenizers are built correctly (Metaspace, `unk_token`, `fuse_unk`); `quantized_llama` logits are rank-normalized for the sampler; generation errors are surfaced instead of silently closing the stream. Verified: TinyLlama-1.1B Q4 on CPU — 22.1 tok/s, TTFT 0.14 s, fluent output (`JUSTAPI_REAL_MODEL_DIR=... cargo test -p justapi-inference --features real --test real_weights -- --ignored --nocapture`).
 - **`justapi serve --workers N`** — Python-app prefork: N workers share the address via `SO_REUSEPORT`, dead workers respawn, SIGTERM/SIGINT drain cleanly. **`justapi serve --reload`** — watches `*.py` files and restarts the app on change (combinable: `--reload --workers 4`).
 - **`app.enable_timeout(seconds)`** — per-request timeout (504) via the core `TimeoutMiddleware`, on both the real server and the TestClient chain.
 - `@app.exception_handler(ExcClass)` decorator (FastAPI form) alongside `add_exception_handler`; `RequestValidationError.errors()` works as a method (FastAPI) *and* as an attribute (historical JustAPI) — `exc.errors` and `exc.errors()` both return the list.

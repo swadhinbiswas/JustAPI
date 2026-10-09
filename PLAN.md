@@ -77,10 +77,10 @@ cloud-native readiness.
 | 38 | Hardware-Accelerated JWT & Security | ✅ verified | RS256/ES256, CORS builder, IpRateLimiter |
 | 39 | SAST, Fuzzing & Memory Safety | ✅ verified | 6 fuzz targets, miri, SAFETY comments |
 | 40 | The JustAPI 2.0 Release | ✅ shipped | 2.0.9 + 2.0.10 on PyPI (2026-08-08, OIDC). Next: 2.1.0 (Phase 53). AI/inference phases 41-52 are 🟡/🔴 (no real GPU run, ADR-067): the release narrative is the **fastest, most complete web framework** (2.4x Granian hello-world, 5.4x JSON echo, native SSE/CRUD/DB-awaits, HTTP/3, free-threaded wheels) — NOT unproven LLM-serving claims. |
-| 41 | Native Inference Engine Foundation | 🟡 implemented / unverified | Candle CPU; `Engine`/`Model` traits, 24 tests. **No real-weights run (MockModel only)** |
-| 42 | KV-Cache Manager (PagedAttention, Rust) | 🟡 implemented / unverified | `KvBlockPool`, `PrefixCache`; unit tests only, no real model |
+| 41 | Native Inference Engine Foundation | 🟡 CPU-verified | Candle CPU; `Engine`/`Model` traits, 24 tests. **First real-weights run 2026-10-10 (ADR-098): TinyLlama-1.1B Q4 GGUF on CPU — 22.1 tok/s, TTFT 0.14 s, fluent output.** No GPU run. |
+| 42 | KV-Cache Manager (PagedAttention, Rust) | 🟡 implemented / unverified | `KvBlockPool`, `PrefixCache`; GGUF real-weights path uses `quantized_llama`'s internal cache (smoke passed); paged KV not yet exercised with real weights |
 | 43 | Continuous-Batching Scheduler | 🟡 implemented / unverified | `Scheduler` prefill/decode interleave; **CPU MockModel only, 0.4% of naive on instant-forward (scheduler sleep dominates)** |
-| 44 | OpenAI-Compatible API Server | 🟡 implemented / unverified | `/v1/*` wired to inference (GIL-free); exercised with MockModel only |
+| 44 | OpenAI-Compatible API Server | 🟡 implemented / unverified | `/v1/*` wired to inference (GIL-free); **still tokenizes with `MockModel` — must use `Engine::encode` when real models are registered (follow-up)** |
 | 45 | Quantization + Multi-LoRA | 🟡 implemented / unverified | AWQ/GPTQ/FP8 + LoRA registry, feature-gated `real`; **never run with real weights** |
 | 46 | LLM Control Plane | 🟡 implemented / unverified | model registry, KV-aware routing, autoscaling; plumbing only |
 | 47 | FastAPI Parity (model-deploy essentials) | ✅ verified | ApiKeyAuth + OAuth2Password + multipart + Form/Cookie/Header + JsonResponse<T> (248 tests) |
