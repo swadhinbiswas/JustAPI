@@ -138,3 +138,52 @@ def test_websocket_exception_default_code():
     ws = FakeWebSocket()
     asyncio.run(handler(ws))
     assert ws.closed == (1000, None)
+
+
+def test_exception_handler_decorator_and_envelope_json():
+    """`@app.exception_handler` decorator + dict envelope bodies serialize as JSON.
+
+    Mirrors examples/06_error_handling.py (previously broken: the decorator
+    didn't exist and dict envelope bodies became Python reprs).
+    """
+    import json
+
+    from justapi import JustAPIApp, JustAPITestClient, HTTPException, RequestValidationError
+
+    app = JustAPIApp()
+
+    @app.exception_handler(HTTPException)
+    def http_exc(request, exc: HTTPException):
+        return {"status": exc.status_code, "body": {"error": "custom", "detail": exc.detail}}
+
+    @app.exception_handler(RequestValidationError)
+    def val_exc(request, exc: RequestValidationError):
+        return {"status": 422, "body": {"error": "invalid", "issues": exc.errors()}}
+
+    @app.get("/items/{item_id}")
+    def read_item(item_id: int):
+        if item_id == 3:
+            raise HTTPException(status_code=418, detail="teapot")
+        return {"item_id": item_id}
+
+    c = JustAPITestClient(app)
+    r = c.get("/items/3")
+    assert r["status"] == 418
+    assert json.loads(bytes(r["body"])) == {"error": "custom", "detail": "teapot"}
+
+    r = c.get("/items/abc")
+    assert r["status"] == 422
+    body = json.loads(bytes(r["body"]))
+    assert body["error"] == "invalid"
+    assert body["issues"][0]["loc"] == ["item_id"]
+
+
+def test_request_validation_error_errors_is_attribute_and_method():
+    from justapi import RequestValidationError
+
+    errs = [{"loc": ["q"], "msg": "required", "type": "value_error.missing"}]
+    exc = RequestValidationError(errs)
+    # FastAPI style: method call
+    assert exc.errors() == errs
+    # JustAPI historical style: attribute access
+    assert list(exc.errors) == errs
