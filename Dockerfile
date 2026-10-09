@@ -45,7 +45,7 @@ RUN pip install uv && uv pip install --system /tmp/wheels/*.whl && rm -rf /tmp/w
 # demo_app.py uses pydantic for request validation
 RUN pip install --no-cache-dir "pydantic>=2.0" "jinja2>=3.0"
 
-COPY demo_app.py /app/
+COPY demo_app.py /app/main.py
 
 EXPOSE 8080
 
@@ -57,9 +57,11 @@ USER justapi
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/live', timeout=5)"]
 
-# demo_app.py ends with app.run("0.0.0.0:8080") — 0.0.0.0 is required so the
-# server is reachable from outside the container (127.0.0.1 would only listen
-# on container loopback: in-container healthchecks pass, host traffic hangs).
-# CMD (not ENTRYPOINT) so your own app overrides it without --entrypoint:
-#   docker run -v ./myapp:/app/app:ro -p 8000:8080 justapi-app python app/main.py
-CMD ["python", "demo_app.py"]
+# `justapi serve` runs the app in the working directory (main.py above). The
+# Rust CLI (`justapi-cli`) is installed alongside for create/check/openapi.
+# Kubernetes/Helm overrides `args` (e.g. `serve --addr 0.0.0.0:8080`) — with
+# this ENTRYPOINT those args run through the `justapi` console script.
+# To run your own app instead: mount it as /app/main.py, or override the
+# entrypoint (`docker run --entrypoint python image app.py`).
+ENTRYPOINT ["justapi"]
+CMD ["serve", "--addr", "0.0.0.0:8080"]

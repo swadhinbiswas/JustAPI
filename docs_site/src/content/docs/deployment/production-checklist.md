@@ -89,11 +89,12 @@ Key signals: request count by route/status, p50/p95/p99 latency, error ratios.
 
 ## 8. Timeouts
 
-```bash
-justapi serve --timeout 30  # Request timeout in seconds
+```python
+app.enable_timeout(seconds=30)  # requests exceeding 30s get a 504
 ```
 
-Keep proxy and JustAPI timeouts aligned to avoid spurious 504s.
+Keep proxy and JustAPI timeouts aligned to avoid spurious 504s — whichever
+side is shorter gives up first.
 
 ## 9. Graceful Shutdown
 
