@@ -115,11 +115,30 @@ impl ForwardState {
             .map_err(|e| ModelError::Generation(e.to_string()))?;
         match self {
             ForwardState::Gguf(m) => {
-                m.forward(&t, index_pos).map_err(|e| ModelError::Generation(e.to_string()))
+                let out =
+                    m.forward(&t, index_pos).map_err(|e| ModelError::Generation(e.to_string()))?;
+                // `quantized_llama` returns [b, s, vocab]; reduce to the last
+                // position's logits as [vocab] so `LogitsProcessor::sample`
+                // and `to_vec1` work (the safetensors path already returns
+                // [b, vocab]).
+                let last = out.squeeze(0).map_err(|e| ModelError::Generation(e.to_string()))?;
+                let last = if last.dims().len() == 2 && last.dims()[0] > 1 {
+                    last.narrow(0, last.dims()[0] - 1, 1)
+                        .and_then(|t| t.squeeze(0))
+                        .map_err(|e| ModelError::Generation(e.to_string()))?
+                } else {
+                    last.squeeze(0).map_err(|e| ModelError::Generation(e.to_string()))?
+                };
+                last.to_dtype(DType::F32).map_err(|e| ModelError::Generation(e.to_string()))
             }
-            ForwardState::Safetensors { model, cache } => model
-                .forward(&t, index_pos, cache)
-                .map_err(|e| ModelError::Generation(e.to_string())),
+            ForwardState::Safetensors { model, cache } => {
+                let out = model
+                    .forward(&t, index_pos, cache)
+                    .map_err(|e| ModelError::Generation(e.to_string()))?;
+                out.squeeze(0)
+                    .and_then(|t| t.to_dtype(DType::F32))
+                    .map_err(|e| ModelError::Generation(e.to_string()))
+            }
         }
     }
 
@@ -327,6 +346,14 @@ fn build_processor(seed: u64, params: &SamplingParams) -> LogitsProcessor {
 impl Model for RealModel {
     fn vocab_size(&self) -> usize {
         self.config.vocab_size
+    }
+
+    fn encode(&self, text: &str) -> Result<Vec<u32>, ModelError> {
+        self.tokenizer.encode(text)
+    }
+
+    fn decode(&self, ids: &[u32]) -> Result<String, ModelError> {
+        self.tokenizer.decode(ids)
     }
 
     fn forward_logits(&self, context: &[u32]) -> Result<Vec<f32>, ModelError> {

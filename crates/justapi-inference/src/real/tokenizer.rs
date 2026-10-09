@@ -43,8 +43,21 @@ impl Tokenizer {
     /// metadata section under keys like `tokenizer.ggml.model`, `.tokens`,
     /// `.merges`, `.scores`. This function converts that metadata into a
     /// HuggingFace-compatible `tokenizer.json` and loads it in memory.
+    ///
+    /// Two families are supported, selected by `tokenizer.ggml.model`:
+    /// - `llama` / `spm` (SentencePiece, Llama family): `▁` space marker with
+    ///   a Metaspace pre-tokenizer/decoder. Using ByteLevel here silently
+    ///   tokenizes every space as a standalone `▁` token — wrong ids for the
+    ///   model, garbage output.
+    /// - `gpt2` (and anything else): GPT-2-style ByteLevel BPE (`Ġ`).
     pub fn from_gguf_metadata(metadata: &HashMap<String, Value>) -> Result<Self, ModelError> {
-        // GGUF "gpt2" / "llama" tokenizers are GPT-2-style BPE.
+        let model_type = metadata
+            .get("tokenizer.ggml.model")
+            .and_then(|v| v.to_string().ok())
+            .cloned()
+            .unwrap_or_default();
+        let is_spm = matches!(model_type.as_str(), "llama" | "spm");
+
         let tokens: Vec<String> = extract_string_array(metadata, "tokenizer.ggml.tokens");
         let merges: Vec<String> = extract_string_array(metadata, "tokenizer.ggml.merges");
 
@@ -54,31 +67,50 @@ impl Tokenizer {
             vocab.insert(token.clone(), serde_json::Value::Number(i.into()));
         }
 
-        // GPT-2 / Llama BPE uses ByteLevel pre-tokenizer + decoder and the
-        // `Ġ` sentinel for spaces in the vocab.
-        let model_json = serde_json::json!({
-            "type": "BPE",
-            "dropout": null,
-            "unk_token": null,
-            "continuing_subword_prefix": null,
-            "end_of_word_suffix": "",
-            "fuse_unk": false,
-            "byte_fallback": true,
-            "vocab": vocab,
-            "merges": merges,
-        });
+        let model_json = if is_spm {
+            serde_json::json!({
+                "type": "BPE",
+                "dropout": null,
+                "unk_token": "<unk>",
+                "continuing_subword_prefix": null,
+                "end_of_word_suffix": "",
+                "fuse_unk": true,
+                "byte_fallback": true,
+                "vocab": vocab,
+                "merges": merges,
+            })
+        } else {
+            serde_json::json!({
+                "type": "BPE",
+                "dropout": null,
+                "unk_token": null,
+                "continuing_subword_prefix": null,
+                "end_of_word_suffix": "",
+                "fuse_unk": false,
+                "byte_fallback": true,
+                "vocab": vocab,
+                "merges": merges,
+            })
+        };
 
-        let pre_tokenizer = serde_json::json!({
-            "type": "ByteLevel",
-            "add_prefix_space": false,
-            "trim_offsets": false,
-        });
-
-        let decoder = serde_json::json!({
-            "type": "ByteLevel",
-            "add_prefix_space": false,
-            "trim_offsets": false,
-        });
+        let (pre_tokenizer, decoder) = if is_spm {
+            // SentencePiece: `▁` (U+2581) marks word boundaries and a space is
+            // prepended to the first token, matching LlamaTokenizer behaviour.
+            let metaspace = serde_json::json!({
+                "type": "Metaspace",
+                "replacement": "▁",
+                "prepend_scheme": "always",
+                "split": true,
+            });
+            (metaspace.clone(), metaspace)
+        } else {
+            let byte_level = serde_json::json!({
+                "type": "ByteLevel",
+                "add_prefix_space": false,
+                "trim_offsets": false,
+            });
+            (byte_level.clone(), byte_level)
+        };
 
         let _bos = metadata.get("tokenizer.ggml.bos_token_id").and_then(|v| v.to_u32().ok());
         let _eos = metadata.get("tokenizer.ggml.eos_token_id").and_then(|v| v.to_u32().ok());
