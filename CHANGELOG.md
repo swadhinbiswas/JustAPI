@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`justapi serve` served nothing** — the Rust CLI never registered its default routes (every request, including `/live`, returned 404). Default routes now include `/hello`, `/echo`, `/health`, `/live`, `/ready`, `/metrics`, `/openapi.json`, `/events` and GraphQL; the CLI also gained a `ws` feature so the WebSocket echo route works.
+- **Python CLI `justapi serve`** no longer delegates to the Rust binary (which cannot load Python apps and would serve 404s); it always runs your `app.py`/`main.py` and now accepts `--addr`. The Docker image installs the Rust CLI as `justapi-cli` so the pip console script is not clobbered.
 - **CORS + JWT together:** OPTIONS preflight is no longer rejected with `401` (browsers send no credentials on preflight), and auth-error responses (`401`) now carry `Access-Control-*` headers so browsers can read them. CORS now runs outermost in the native middleware chain.
 - **Middleware ordering now matches Starlette/FastAPI (ADR-095):** the **last** middleware added is the outermost (it sees the request first). JustAPI previously ran first-added-outermost — the opposite of FastAPI. Apps that relied on the old order should reverse their `@app.middleware("http")` registrations.
 - `FileResponse` sets `ETag`, `Last-Modified`, and `Content-Length` (honouring a caller `stat_result`).
@@ -36,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### CI
 
 - **Free-threaded (3.14t) tests are now a real gate.** The job previously swallowed every failure with `|| true`; it now fails on any `FAILED`/`ERROR` and only tolerates the known interpreter-teardown segfault after a clean pass. The previously skipped websocket/GraphQL/hot-reload/max-body-size files now run on free-threaded (verified: 212 passed locally on 3.14t).
+- **Integration tests re-enabled.** The job was disabled after always failing (it curled a nonexistent `/` route and `justapi serve` found no app in CI). It now boots the Rust server, waits for readiness with retries, and exercises health, metrics, OpenAPI, echo and a real WebSocket round-trip.
 - Per-PR short fuzz gate (`fuzz_body`, `fuzz_headers`, `fuzz_jwt`).
 - p99 A/B latency workflow (warn-only until 2026-10-23).
 

@@ -1250,6 +1250,7 @@ not test issues:
 - [ ] WS test helper deferred: `test_websocket.py` runs a real server process; an in-process WS client needs the TCP-peek upgrade path refactored behind a testable seam (post-2.0.8).
 
 ### P2 — assurance
+- [x] Deployment/CLI correctness fixes (found by re-enabling the integration job): Rust `justapi serve` registered **zero routes** (404 for everything) → default routes + observability endpoints added; CLI gained `ws` feature; Python `justapi serve` no longer delegates to the Rust binary (cannot load Python apps) and accepts `--addr`; Docker installs the binary as `justapi-cli` so pip's console script isn't clobbered. Integration-tests CI job re-enabled (retry-based readiness, WS round-trip) — all validated locally against a real server.
 - [x] CI: pytest gate runs `test_rate_limit` (skips w/o Redis) + `test_circuit_breaker` (flake fixed); per-PR short fuzz job (`fuzz_body/headers/jwt`, 60s each).
 - [x] Free-threaded CI is now a real gate: verified locally on 3.14t (`.venv-ft`, ADR-084 build) — **212 passed / 2 skipped, exit 0**; un-ignored websocket/graphql/hot-reload/max-body-size (all pass on ft); fork test now requests the `fork` context explicitly (3.14t defaults to forkserver → unpicklable local target); `|| true` replaced by FAILED/ERROR detection + teardown-segfault tolerance.
 - [x] JWT `aud`/`iss`: `set_jwt_auth(secret, alg, audience, issuer)` enforces as 401 via Rust builders (was warn-only); stale `app.pyi` entries for touched APIs synced.
