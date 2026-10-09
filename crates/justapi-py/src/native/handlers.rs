@@ -561,6 +561,19 @@ pub(crate) fn serialize_response(
                         s.into_bytes()
                     } else if let Ok(bt) = b.extract::<Vec<u8>>() {
                         bt
+                    } else if let Ok(dumps) = fast_dumps(py) {
+                        // Envelope body may be a dict/list: serialize as JSON.
+                        // (Previously `str()`'d into a Python repr with single
+                        // quotes, which is not valid JSON.)
+                        dumps
+                            .call1((b.clone(),))
+                            .ok()
+                            .and_then(|out| {
+                                out.extract::<Vec<u8>>()
+                                    .ok()
+                                    .or_else(|| out.extract::<String>().ok().map(String::into_bytes))
+                            })
+                            .unwrap_or_default()
                     } else {
                         b.str().map(|s| s.to_string().into_bytes()).unwrap_or_default()
                     }

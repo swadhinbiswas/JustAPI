@@ -112,8 +112,14 @@ def wrap_result(result):
             )
         )
         if is_envelope:
-            if "body" in result and isinstance(result["body"], str):
-                result["body"] = result["body"].encode("utf-8")
+            if "body" in result:
+                b = result["body"]
+                if isinstance(b, str):
+                    result["body"] = b.encode("utf-8")
+                elif not isinstance(b, (bytes, bytearray)):
+                    # Envelope bodies may be dicts/lists — serialize as JSON
+                    # (previously str()'d into a Python repr, e.g. single quotes).
+                    result["body"] = _dumps(b)
             return result
 
     body = _dumps(result)
