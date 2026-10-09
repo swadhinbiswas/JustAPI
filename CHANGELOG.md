@@ -15,12 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Auth schemes: `HTTPBearer`, `HTTPBasic`, `APIKeyHeader`, `APIKeyQuery`, `APIKeyCookie` as `Depends` callables, with OpenAPI security schemes.
 - Multi-file uploads: repeated multipart field names yield a list; `List[UploadFile]` handlers receive every file.
 - `JustAPIApp.set_jwt_auth(..., audience=[...], issuer=...)` — `aud`/`iss` are now enforced (401) instead of warn-only.
-- TestClient: `get_with`/`put_with`/`patch_with`/`delete_with` headers, a persistent cookie jar (`cookies()`, `clear_cookies()`), and header support on `AsyncTestClient` for all methods.
+- TestClient: `get_with`/`put_with`/`patch_with`/`delete_with`/`options_with` headers, a persistent cookie jar (`cookies()`, `clear_cookies()`), the full native middleware pipeline (CORS, secure headers, JWT) and JWT claims via `request.auth`.
 - OpenAPI: real parameter types + constraints, `enum` values, cookie parameters, `components.securitySchemes` + per-operation `security`, real `requestBody` from `Schema`/Pydantic models, and `info.servers/tags/contact/license/termsOfService` emission.
 - `justapi create` scaffolds now enable secure headers by default.
 
 ### Fixed
 
+- **CORS + JWT together:** OPTIONS preflight is no longer rejected with `401` (browsers send no credentials on preflight), and auth-error responses (`401`) now carry `Access-Control-*` headers so browsers can read them. CORS now runs outermost in the native middleware chain.
 - **Middleware ordering now matches Starlette/FastAPI (ADR-095):** the **last** middleware added is the outermost (it sees the request first). JustAPI previously ran first-added-outermost — the opposite of FastAPI. Apps that relied on the old order should reverse their `@app.middleware("http")` registrations.
 - `FileResponse` sets `ETag`, `Last-Modified`, and `Content-Length` (honouring a caller `stat_result`).
 - SSE/WebSocket routes registered via `APIRouter` keep their prefix, tags, summary, and OpenAPI entry through `include_router`.
