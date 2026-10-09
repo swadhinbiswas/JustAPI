@@ -33,6 +33,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Trivy CI job (filesystem scan: vulnerabilities, secrets, misconfigurations; HIGH/CRITICAL, fixed-only) + CycloneDX SBOM artifact; pinned Trivy binary verified by SHA256 (the `trivy-action` was compromised in 2026).
 - Patched the docs-site lockfile (1 CRITICAL + 13 HIGH npm advisories).
 
+### CI
+
+- **Free-threaded (3.14t) tests are now a real gate.** The job previously swallowed every failure with `|| true`; it now fails on any `FAILED`/`ERROR` and only tolerates the known interpreter-teardown segfault after a clean pass. The previously skipped websocket/GraphQL/hot-reload/max-body-size files now run on free-threaded (verified: 212 passed locally on 3.14t).
+- Per-PR short fuzz gate (`fuzz_body`, `fuzz_headers`, `fuzz_jwt`).
+- p99 A/B latency workflow (warn-only until 2026-10-23).
+
 ## [2.0.10] - 2026-08-08
 
 ### Fixed

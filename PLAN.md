@@ -1251,6 +1251,7 @@ not test issues:
 
 ### P2 — assurance
 - [x] CI: pytest gate runs `test_rate_limit` (skips w/o Redis) + `test_circuit_breaker` (flake fixed); per-PR short fuzz job (`fuzz_body/headers/jwt`, 60s each).
+- [x] Free-threaded CI is now a real gate: verified locally on 3.14t (`.venv-ft`, ADR-084 build) — **212 passed / 2 skipped, exit 0**; un-ignored websocket/graphql/hot-reload/max-body-size (all pass on ft); fork test now requests the `fork` context explicitly (3.14t defaults to forkserver → unpicklable local target); `|| true` replaced by FAILED/ERROR detection + teardown-segfault tolerance.
 - [x] JWT `aud`/`iss`: `set_jwt_auth(secret, alg, audience, issuer)` enforces as 401 via Rust builders (was warn-only); stale `app.pyi` entries for touched APIs synced.
 - [x] Security posture: secure-headers default review (ADR-094: stays opt-in; scaffolds get them), JWT `aud`/`iss` enforced, dropped `rustls-pemfile` (RUSTSEC-2025-0134 gone), Trivy CI job (pinned+checksummed binary, HIGH/CRITICAL fixed-only, blocking) + CycloneDX SBOM artifact, docs_site lockfile patched (1 CRITICAL + 13 HIGH npm advisories → 0 HIGH/CRITICAL, site still builds 161 pages).
 - [x] OWASP tail closed or risk-accepted (ADR-096): verified-stale items closed (per-route authz, sessions, size/depth limits, default-deny CORS, autoescape, header CI check, log/alert docs, SSRF surface); 7 items explicitly accepted/scheduled (per-user rate limit, key hot-rotation, MFA, cosign/SLSA, plugin signing, outbound URL validation, 1 docs-site MEDIUM). Checklist refreshed 2026-10-09.
