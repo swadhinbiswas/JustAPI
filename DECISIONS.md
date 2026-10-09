@@ -3775,3 +3775,42 @@ across worker processes needs either SO_REUSEPORT or fd passing.
 `--reload` picks up a code change and restarts; `--reload --workers 2`
 combined works. `socket2` justification: standard socket-configuration crate,
 already in-tree, avoids hand-rolled `libc::setsockopt` + sockaddr plumbing.
+
+---
+
+## ADR-098 — 2026-10-10 — Phase-52 partial un-freeze: real-weights CPU smoke
+
+**Context:** Every inference number in BENCHMARKS.md was `MockModel`; ADR-067
+froze Phase 52 because no real-weights run had ever happened. A GPU run is
+still impossible on this box (no CUDA driver), but a **CPU** real-weights run
+is not — and it exercises the whole pipeline (GGUF load, tokenizer, forward
+pass, sampling, streaming) that the frozen phases claim to implement.
+
+**Decision:** Partially un-freeze: verify the pipeline on real weights on CPU
+and record the result honestly as a smoke (not a benchmark vs vLLM).
+
+**What the smoke found (all fixed):**
+1. GGUF tokenizer was GPT-2 ByteLevel BPE — wrong for Llama-family
+   SentencePiece GGUFs; every space became a standalone `▁` token and output
+   was degenerate. Fixed by selecting Metaspace + `unk_token=<unk>` +
+   `fuse_unk` + `byte_fallback` from `tokenizer.ggml.model`.
+2. `quantized_llama` logits are `[b, s, vocab]`; the sampler needs `[vocab]`.
+   The rank error was silently swallowed (`let _ =` in `Engine::generate`) —
+   errors are now surfaced, and logits are rank-normalized.
+3. Real models could not be driven from text (`Engine::generate` takes token
+   ids; only `MockModel::tokenize` existed) — added
+   `Engine::encode/decode/generate_text`.
+
+**Result (TinyLlama-1.1B-Chat Q4_K_M, CPU, release):** load 0.58 s, TTFT
+0.14 s, **22.1 tok/s**, exact tokenizer roundtrip, fluent output. Recorded in
+BENCHMARKS.md.
+
+**Status changes:** Phases 41/42/43/44 move from "no real-weights run" to
+"CPU real-weights smoke verified (2026-10-10)". **Phase 52 (GPU benchmark
+gate) stays frozen** — "beats vLLM" is still untested; CUDA remains the
+missing prerequisite. Follow-ups recorded in BENCHMARKS.md: OpenAI handlers
+still use `MockModel::tokenize`, EOS wiring from GGUF metadata, decode
+tuning.
+
+**Evidence:** `crates/justapi-inference/tests/real_weights.rs` (ignored test,
+`JUSTAPI_REAL_MODEL_DIR`), BENCHMARKS.md entry 2026-10-10.
