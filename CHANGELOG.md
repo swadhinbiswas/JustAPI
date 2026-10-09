@@ -32,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 
 - Dropped `rustls-pemfile` (RUSTSEC-2025-0134) in favour of `rustls-pki-types` PEM loaders.
+- Bumped `h2` → 0.4.20 (RUSTSEC-2026-0258), `rustls` → 0.23.45 (RUSTSEC-2026-0285) and `wasmtime` → 49.0.2 (five RUSTSEC-2026 advisories: fuel accounting, GC heap corruption, stack overflow in async-lifted callbacks). `cargo deny check` is green again — no ignored advisories remain.
 - Trivy CI job (filesystem scan: vulnerabilities, secrets, misconfigurations; HIGH/CRITICAL, fixed-only) + CycloneDX SBOM artifact; pinned Trivy binary verified by SHA256 (the `trivy-action` was compromised in 2026).
 - Patched the docs-site lockfile (1 CRITICAL + 13 HIGH npm advisories).
 

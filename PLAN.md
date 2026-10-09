@@ -64,7 +64,7 @@ cloud-native readiness.
 | 25 | Ultimate Scale (1M RPS tuning) | 🟡 implemented / unverified | Native fast path hits 430-724k on fixture; **1M RPS never measured — the phase title overclaims** |
 | 26 | Zero-Copy AI Data Boundary | 🟡 implemented / unverified | Arrow/DLPack via PyO3 buffer protocol; no real-model integration test |
 | 27 | Adaptive Batching Router | 🟡 implemented / unverified | `adaptive_batch` decorator exists; no real-model throughput proof |
-| 28 | WASM Middleware Engine | 🟡 implemented / unverified | wasmtime embedded; no real-world workload proof |
+| 28 | WASM Middleware Engine | 🟡 implemented / unverified | wasmtime 49 embedded; **protocol-level tests added 2026-10-09** (WAT round-trip, oversize guard, missing-memory guard); no real-world workload proof |
 | 29 | High-Throughput LLM Streaming (SSE 2.0) | ✅ verified | TokenStreamResponse, tests pass (framework-level) |
 | 30 | Layered Dependency Injection | ✅ verified | Litestar-style DI, tests |
 | 31 | Class-Based Controllers & Route Composition | ✅ verified | @controller classes, tests |
@@ -1251,6 +1251,7 @@ not test issues:
 
 ### P2 — assurance
 - [x] Deployment/CLI correctness fixes (found by re-enabling the integration job): Rust `justapi serve` registered **zero routes** (404 for everything) → default routes + observability endpoints added; CLI gained `ws` feature; Python `justapi serve` no longer delegates to the Rust binary (cannot load Python apps) and accepts `--addr`; Docker installs the binary as `justapi-cli` so pip's console script isn't clobbered. Integration-tests CI job re-enabled (retry-based readiness, WS round-trip) — all validated locally against a real server.
+- [x] Supply-chain gate re-verified (2026-10-09): `cargo deny check` **green with zero ignored advisories** — h2 0.4.20 (RUSTSEC-2026-0258), rustls 0.23.45 (RUSTSEC-2026-0285), wasmtime 49.0.2 (5×RUSTSEC-2026: fuel/GC/stack-overflow). WASM middleware gained its first tests (WAT round-trip + oversize/memory guards) — Phase 28 moves from "implemented/unverified" to unit-verified.
 - [x] CI: pytest gate runs `test_rate_limit` (skips w/o Redis) + `test_circuit_breaker` (flake fixed); per-PR short fuzz job (`fuzz_body/headers/jwt`, 60s each).
 - [x] Free-threaded CI is now a real gate: verified locally on 3.14t (`.venv-ft`, ADR-084 build) — **212 passed / 2 skipped, exit 0**; un-ignored websocket/graphql/hot-reload/max-body-size (all pass on ft); fork test now requests the `fork` context explicitly (3.14t defaults to forkserver → unpicklable local target); `|| true` replaced by FAILED/ERROR detection + teardown-segfault tolerance.
 - [x] JWT `aud`/`iss`: `set_jwt_auth(secret, alg, audience, issuer)` enforces as 401 via Rust builders (was warn-only); stale `app.pyi` entries for touched APIs synced.
