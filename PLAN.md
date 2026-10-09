@@ -1259,5 +1259,6 @@ not test issues:
 - [x] Benchmark gate: p99 A/B workflow added (`.github/workflows/p99-gate.yml`) — oha vs main, same runner, warmup, `benchmarks/extract_p99.py` (unit-tested ns/µs/ms/s). **Warn-only until 2026-10-23**; promote by removing `continue-on-error` + exiting non-zero on >5%.
 
 ### Exit criteria
-- [x] `cargo test --workspace` 150 passed + 1 known flake (`scheduler_engine_batches...`, passes solo — frozen area, untouched); `clippy --workspace --tests -D warnings` clean; `fmt --check` clean; pytest **204 passed / 1 skipped** on dev wheel (2026-10-09). Note: `clippy --all-features` cannot run on this box (cudarc build script needs `nvcc`; no CUDA toolchain — same reason Phase 52 is frozen).
+- [x] `cargo test --workspace` 150 passed + 1 known flake (`scheduler_engine_batches...`, passes solo — frozen area, untouched); `clippy --workspace --tests -D warnings` clean; `fmt --check` clean; pytest **207 passed / 1 skipped** on dev wheel (2026-10-09). Note: `clippy --all-features` cannot run on this box (cudarc build script needs `nvcc`; no CUDA toolchain — same reason Phase 52 is frozen).
+- [x] Memory-safety gate re-run on Phase-53 core changes (2026-10-09): `bash scripts/sanitize.sh` green — ASan 300 passed, Miri (memory.rs) 9 passed.
 - [x] `git diff --cached --stat` <100 lines/commit (auto-generated lockfiles excepted — `Cargo.lock`, `docs_site/package-lock.json`); 55 commits on the branch.
