@@ -12,6 +12,7 @@ path = "src/main.rs"
 [features]
 default = []
 tls = ["justapi-core/tls"]
+ws = ["justapi-core/ws"]
 compression = ["justapi-core/compression"]
 opentelemetry = ["justapi-core/opentelemetry"]
 inference = ["justapi-core/inference", "dep:justapi-inference"]

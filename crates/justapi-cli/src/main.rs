@@ -1239,7 +1239,11 @@ fn build_server(
     >,
     token: tokio_util::sync::CancellationToken,
 ) -> justapi_core::Server {
-    let mut server = justapi_core::Server::new(listen_addr.clone()).with_shutdown(token);
+    // Default routes (/hello, /echo, /health, /live, /ready, /metrics,
+    // /openapi.json, SSE /events, WS echo) — `justapi serve` must actually
+    // serve something out of the box; static dirs and TLS layer on top.
+    let mut server =
+        justapi_core::Server::new(listen_addr.clone()).with_default_routes().with_shutdown(token);
 
     if let Some(dir) = static_dir.clone() {
         server = server.with_static_dir(dir);
