@@ -148,3 +148,6 @@ benchmarks/gdb_out.txt
 .wrangler/
 
 .venv-p53/
+
+# Test artifacts written into CWD by gateway/hot-reload tests
+test_gateway.json
