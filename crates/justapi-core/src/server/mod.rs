@@ -424,6 +424,14 @@ impl Server {
         router.insert(Method::GET, "/events", Handler::Sse).expect("valid");
         router.insert(Method::GET, "/graphql", Handler::GraphQL).expect("valid");
         router.insert(Method::POST, "/graphql", Handler::GraphQL).expect("valid");
+        // Observability endpoints: `justapi serve` must expose health probes,
+        // Prometheus metrics and the OpenAPI document out of the box (README
+        // and the Docker/K8s deployment guides rely on them).
+        router.insert(Method::GET, "/health", Handler::Health).expect("valid");
+        router.insert(Method::GET, "/live", Handler::Live).expect("valid");
+        router.insert(Method::GET, "/ready", Handler::Ready).expect("valid");
+        router.insert(Method::GET, "/metrics", Handler::Prometheus).expect("valid");
+        router.insert(Method::GET, "/openapi.json", Handler::OpenApiJson).expect("valid");
         router.set_fallback(Handler::Static { status: StatusCode::NOT_FOUND, body: "not found" });
         self.router = Some(router);
         self.default_routes_set = true;
