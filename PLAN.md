@@ -6,7 +6,7 @@
 
 ## Current status
 
-- **Active phase:** 53 — Beat FastAPI: parity + release (branch `phase-53/beat-fastapi-parity-release`). 2.0.9/2.0.10 are live on PyPI; Phase-53 content ships as 2.1.0. Core ✅, AI/inference **unverified** (ADR-067).
+- **Active phase:** 53 — Beat FastAPI: parity + release — **release-ready (2.1.0)**. Version bumped to 2.1.0 everywhere; CHANGELOG/RELEASE_NOTES written; wheel builds + `twine check` verified. **Ship: `git tag v2.1.0 && git push origin v2.1.0`** → OIDC publishes all wheels + GitHub Release.
 - **Status:** All post-2.0.7 gaps closed (2026-07-25). **AI / inference / LLM work FROZEN until release 2.0.8** (ADR-067). Focus from 2026-07-25 session:
   - **HTTP QUERY method (RFC 10008) — end-to-end verified + testable (2026-08-06).** The route chain (Python `app.query()` → native `query()` → Rust router keyed on `justapi_core::query_method()`) already existed; the gaps were test coverage and client plumbing. Added: core `TestClient::query`/`query_with`, PyO3 `JustAPITestClient.query`/`query_with`, `AsyncTestClient.query` (defaults to `Content-Type: application/json` per RFC 10008), plus 3 Python tests (roundtrip, wrong-route 405, missing-Content-Type 400) and 1 Rust test. RFC 10008 requires a Content-Type on QUERY; the handler already enforces it (400).
   - **Differentiator sprint — one-command agent demo (2026-08-06).** `examples/agent_demo/run_demo.sh` starts the app, exercises all three Rust-owned differentiators (native MCP tools with Rust-inferred schemas, durable sessions, Rust-validated NDJSON streaming), and stops — no manual steps. Verified end-to-end (tools list, `add(5,7)=12` call, 4-step stream, session persistence across requests). `app.py` now accepts a port arg.
@@ -89,7 +89,7 @@ cloud-native readiness.
 | 50 | RadixAttention Prefix Caching | 🟡 implemented / unverified | `RadixPrefixCache` wired into Scheduler; unit-tested, no real model |
 | 51 | Scheduler Serving Integration | 🟡 implemented / unverified | `SchedulerEngine` bridges Engine+Scheduler; **CPU fixture with instant-forward MockModel** |
 | **52** | **GPU Benchmark Gate** | **🔴 frozen** | **The only honest status for "LLM performance": no CUDA driver, no real-weight run (ADR-067). The claim "beats vLLM" is UNTESTED.** |
-| 53 | Beat FastAPI — parity + release | 🟡 in progress | Done: ops packaging, Docker boot-verified, Helm NP+Job, params/OpenAPI/auth/lifespan/SSE parity, multi-file upload, TestClient headers+cookie jar, mypy stub gate, Trivy+SBOM, p99 A/B (warn-only), CI gates tightened, docs_site advisories patched. Left: PyPI publish (token), WS test helper, OWASP tail, LLM verify post-2.0.8. |
+| 53 | Beat FastAPI — parity + release | ✅ release-ready (2.1.0) | Parity: Pydantic body/form models, params+metadata, auth schemes, lifespan, uploads, cookie jar, TestClient full chain, exception handlers. Ops: `--workers`/`--reload`, Docker/K8s entrypoint verified, Trivy+SBOM, advisories zero, first real-weights run (ADR-098). **Publish: push tag `v2.1.0` (OIDC auto-publishes).** |
 
 ---
 

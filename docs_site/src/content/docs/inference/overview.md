@@ -6,7 +6,7 @@ keywords: inference engine, LLM serving, FastAPI alternative, Rust web framework
 
 JustAPI includes a Rust-native inference engine (`justapi-inference`) built on the [Candle](https://github.com/huggingface/candle) ML framework. It provides efficient LLM serving with continuous batching, PagedAttention KV-cache, prefix caching, and speculative decoding.
 
-> **Status:** The inference engine is feature-complete but **frozen** (no real-GPU run as of 2.0.9, ADR-067). GPU benchmarks with real weights are deferred. CPU-based structural benchmarks pass.
+> **Status:** The inference engine is feature-complete; the **first real-weights run** (TinyLlama-1.1B Q4, CPU) happened on 2026-10-10 (ADR-098: 22.1 tok/s, TTFT 0.14 s). A **real-GPU** run is still deferred (ADR-067) — no CUDA on the dev box — so "beats vLLM" remains untested.
 
 ## Architecture
 
@@ -92,7 +92,7 @@ When the inference feature is enabled, JustAPI serves an OpenAI-compatible API:
 
 ## Status
 
-The inference engine is fully implemented and structurally benchmarked. Real GPU validation with actual model weights is deferred (no real-GPU run as of 2.0.9).
+The inference engine is fully implemented and structurally benchmarked, and now runs real GGUF weights end-to-end on CPU (2026-10-10, ADR-098). Real **GPU** validation is still deferred (no CUDA driver on the dev box).
 
 ## See Also
 

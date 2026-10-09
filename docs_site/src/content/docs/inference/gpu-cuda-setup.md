@@ -4,7 +4,7 @@ description: Configure GPU acceleration for LLM inference with CUDA on JustAPI â
 keywords: GPU acceleration, CUDA, LLM inference, FastAPI alternative, Rust web framework
 ---
 
-> **Note:** GPU inference is feature-gated behind `cuda` and `real` features. Real GPU benchmarks are deferred (no real-GPU run as of 2.0.9, ADR-067). Structural CPU benchmarks pass.
+> **Note:** GPU inference is feature-gated behind `cuda` and `real` features. Real **GPU** benchmarks are deferred (no CUDA driver on the dev box, ADR-067). Real-weights CPU runs work â€” see `crates/justapi-inference/tests/real_weights.rs` (ADR-098).
 
 ## Building with CUDA Support
 
