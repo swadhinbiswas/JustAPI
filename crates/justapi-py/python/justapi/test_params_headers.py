@@ -221,3 +221,53 @@ async def test_async_client_cookies_persist():
         await c.get("/set")
         resp = await c.get("/read")
         assert _body(resp) == {"sid": "async-cookie"}
+
+
+def test_multiple_of_and_metadata():
+    from justapi import Path, Query
+    from justapi.system import build_openapi
+
+    app = JustAPIApp()
+
+    @app.get("/grid/{pos}")
+    def grid(pos: int = Path(..., multiple_of=10, description="Multiple of 10")):
+        return {"pos": pos}
+
+    @app.get("/search")
+    def search(
+        q: str = Query(..., title="Search Query", description="The search term"),
+        legacy: bool = Query(False, deprecated=True),
+        internal: str = Query(None, include_in_schema=False),
+    ):
+        return {"q": q, "legacy": legacy, "internal": internal}
+
+    c = JustAPITestClient(app)
+    assert c.get("/grid/20")["status"] == 200
+    assert c.get("/grid/25")["status"] == 422
+    # include_in_schema=False only hides from docs; runtime still works.
+    assert _body(c.get("/search?q=x&internal=secret"))["internal"] == "secret"
+
+    doc = build_openapi(app)
+    params = doc["paths"]["/search"]["get"]["parameters"]
+    by_name = {p["name"]: p for p in params}
+    assert "internal" not in by_name
+    assert by_name["q"]["schema"]["title"] == "Search Query"
+    assert by_name["q"]["description"] == "The search term"
+    assert by_name["legacy"]["deprecated"] is True
+    grid_p = doc["paths"]["/grid/{pos}"]["get"]["parameters"][0]
+    assert grid_p["schema"]["multipleOf"] == 10
+    assert grid_p["description"] == "Multiple of 10"
+
+
+def test_float_multiple_of():
+    from justapi import Query
+
+    app = JustAPIApp()
+
+    @app.get("/price")
+    def price(p: float = Query(1.0, multiple_of=0.5)):
+        return {"p": p}
+
+    c = JustAPITestClient(app)
+    assert c.get("/price?p=1.5")["status"] == 200
+    assert c.get("/price?p=1.3")["status"] == 422
