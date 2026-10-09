@@ -3696,3 +3696,52 @@ are unaffected until they upgrade. No internal tests depended on the old order
 
 **Evidence:** empirical Starlette run (recorded above); `test_middleware_order.py`
 passes; `pytest` 206 passed / 1 skipped.
+
+---
+
+## ADR-096 — 2026-10-09 — OWASP checklist tail: fixed, accepted, or scheduled
+
+**Context:** The 2026-10-06 audit listed 9+ unchecked OWASP items. Before the
+2.1.0 release we verified each against the codebase and either closed it,
+risk-accepted it with rationale, or scheduled it. Checklist updated in
+`docs/security/owasp-checklist.md`.
+
+**Closed by verification (previously stale entries):**
+- Per-route authorization: route-level `dependencies=[...]` run before the
+  handler; core `JwtAuth.require_for(prefix, requirement)`.
+- Sessions: server-side sessions exist (`enable_sessions()`, `Session`, Rust
+  session store) — the "stateless JWT only" note was outdated.
+- Request size + depth limits: `max_body_size` (default 50 MiB) plus path/
+  header/query caps; `serde_json` recursion limit on body parsing, exercised
+  by `fuzz_body`.
+- Default-deny CORS: `Cors` defaults to an empty origin list (`permissive()`
+  is explicit opt-in); allow/deny now covered by real tests.
+- HTML sanitization: `Jinja2Templates` enables `autoescape=True`.
+- Command injection: no process spawning on the request path.
+- Security-header CI check: `test_secure_headers.py`.
+- Log aggregation + 5xx alert: both documented (`structured-logging.md`,
+  `metrics-monitoring.md` `HighErrorRate` rule).
+- SSRF surface: the framework performs no request-driven outbound fetches;
+  gateway upstreams and alerting webhooks are operator-configured.
+
+**Risk-accepted / scheduled (explicit, not silent):**
+1. **Per-authenticated-user rate limiting** — ships per-IP and per-route
+   limiting; claim-keyed limiting is application policy (roles/scopes differ
+   per app). Scheduled post-2.1.
+2. **JWT key rotation without restart** — restart-based rotation is the
+   documented path; hot reload of signing keys scheduled.
+3. **MFA** — application concern; framework ships OTP primitives
+   (`mail/otp.rs`) and OAuth2 flows. No framework MFA opinion planned.
+4. **cosign / SLSA provenance** — PyPI releases already publish via OIDC
+   trusted publishing (no long-lived tokens). Container-image signing and
+   `actions/attest-build-provenance` are scheduled follow-ups.
+5. **Plugin signing** — the plugin API is in-process code (Python/Rust), not
+   a distribution channel; signing becomes meaningful when a plugin registry
+   exists.
+6. **URL-validation middleware (SSRF)** — application concern; documented
+   that outbound endpoints are operator-configured.
+7. **One MEDIUM npm advisory** in `docs_site` (postcss-selector-parser,
+   parent-pinned) — docs site only, tracked by Dependabot.
+
+**Evidence:** updated checklist (2026-10-09); `test_cors.py` (real CORS +
+preflight + JWT regression); `test_secure_headers.py`.
