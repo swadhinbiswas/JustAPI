@@ -54,9 +54,13 @@ def cmd_version(args: argparse.Namespace) -> None:
 
 
 def cmd_serve(args: argparse.Namespace) -> None:
-    """Run the app in the current directory."""
-    if _delegate_or([f"--addr={args.addr}"]):
-        return
+    """Run the app in the current directory.
+
+    Deliberately does NOT delegate to the Rust CLI: the Rust binary cannot
+    load a Python application (it only serves its built-in routes / static
+    files), so delegation would silently serve 404s instead of the user's
+    app. Use `justapi-cli serve` directly for static-only serving.
+    """
     app_file = _find_app_file()
     if app_file is None:
         print("error: no app.py or main.py found in the current directory", file=sys.stderr)
@@ -135,6 +139,7 @@ def main(argv: list[str] | None = None) -> None:
 
     p_serve = sub.add_parser("serve", help="Run the app in the current directory")
     p_serve.add_argument("addr", nargs="?", default="127.0.0.1:8000", help="Address to bind (default 127.0.0.1:8000)")
+    p_serve.add_argument("--addr", dest="addr_flag", default=None, help="Address to bind (flag form, overrides positional)")
 
     p_create = sub.add_parser("create", help="Scaffold a new project (requires Rust CLI)")
     p_create.add_argument("name", help="Project name")
@@ -153,6 +158,8 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     if args.command == "serve":
+        if args.addr_flag:
+            args.addr = args.addr_flag
         cmd_serve(args)
     elif args.command == "create":
         cmd_create(args)
