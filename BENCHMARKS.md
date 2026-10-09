@@ -1999,3 +1999,62 @@ HTTP, sqlite, slow query (2M-row recursive CTE ≈ 200ms), c=16:
 
 **53× faster on slow queries.** Fast sqlite queries (~sub-ms): parity (~4-4.7k
 RPS both, loop-dispatch bound). The async path is the safe choice for real DBs.
+
+## Phase 53 — release-build A/B + Python prefork scaling (recorded 2026-10-10)
+
+Hardware: 13th Gen Intel Core i5-13600K (20 threads), 31 GB RAM, CachyOS,
+kernel 7.2.9. Tooling: `oha 1.14.0`, Python 3.12.12, release builds
+(`maturin develop --release`), `oha -z 10s -c 100` (keep-alive), warmup 5s,
+3 runs, median of 3.
+
+### Python handler path + native fast path (branch HEAD)
+
+| Workload | RPS | p99 | runs |
+|---|---:|---:|---|
+| python handler `/hello` (1 process) | 34,813 | 3.00 ms | 34,666 / 34,813 / 34,891 |
+| native fast path `/validate_native` | **418,473** | 1.03 ms | 418,325 / 418,473 / 420,185 |
+
+Native fast path reproduces the 2026-08-06 ledger (~430k) within 3%.
+
+### NEW: `justapi serve --workers N` for Python apps (fills the 2026-08-07 gap)
+
+The 2026-08-07 entry noted "Python apps scale via N OS processes behind a
+shared socket (documented; not benchmarked here)". With ADR-097
+(SO_REUSEPORT prefork) this is now measured — same app, same build:
+
+| Workers | RPS | p99 | runs | Δ |
+|---|---:|---:|---|---:|
+| 1 | 34,259 | 3.15 ms | 34,157 / 34,259 / 34,351 | baseline |
+| 4 | **109,809** | **2.11 ms** | 109,484 / 109,809 / 110,325 | **3.20×** |
+
+4 Python workers scale 3.2× and p99 *improves* 33% (queueing per worker
+drops). This is the recommended way to saturate cores for Python apps.
+
+### Honesty check — released 2.0.10 vs branch, and a toolchain finding
+
+Interleaved A/B (A,B,A,B ×4, `-z 8s -c 100`), same machine, same session:
+
+| Build | RPS | Note |
+|---|---:|---|
+| **PyPI 2.0.10 wheel (CI-built)** | **~40,000** | reference artifact |
+| v2.0.10 tag built locally (same toolchain as branch) | ~35,650 | |
+| branch HEAD built locally | ~34,200 | −4.2% vs local 2.0.10 baseline |
+
+Two findings, both recorded honestly:
+
+1. **Toolchain/build artifact:** the CI-built wheel is ~11–12% faster than a
+   local release build of the *identical source* (v2.0.10). Benchmarks must
+   compare like-for-like builds; absolute numbers from local builds are not
+   comparable to the PyPI artifact.
+2. **Residual −4.2% on the Python handler path** for branch HEAD vs a locally
+   built v2.0.10 (under the AGENTS >5% p99/RPS gate; p99 within noise, and the
+   workers path is +3.2× new capability). Wrapper micro-benchmarks attribute
+   only ~13 ns/call of the delta to Python resolver changes; the rest is
+   consistent with build/layout variance between the two binaries. Flagged for
+   the next full benchmark pass — if it persists on identical CI builds,
+   `git bisect` the Phase-53 commits.
+
+**Methodology note:** the older "~110k RPS Python path" figures in this ledger
+were measured with a different harness and do not reproduce under
+`oha -c 100` keep-alive today (released wheel: 40k). Treat cross-entry Python
+path numbers as trend-only until a single harness is re-run end-to-end.
