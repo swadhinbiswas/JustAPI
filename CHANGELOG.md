@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **FastAPI parity (Phase 53)**
 - **`justapi serve --workers N`** — Python-app prefork: N workers share the address via `SO_REUSEPORT`, dead workers respawn, SIGTERM/SIGINT drain cleanly. **`justapi serve --reload`** — watches `*.py` files and restarts the app on change (combinable: `--reload --workers 4`).
+- **`app.enable_timeout(seconds)`** — per-request timeout (504) via the core `TimeoutMiddleware`, on both the real server and the TestClient chain.
 - `@app.exception_handler(ExcClass)` decorator (FastAPI form) alongside `add_exception_handler`; `RequestValidationError.errors()` works as a method (FastAPI) *and* as an attribute (historical JustAPI) — `exc.errors` and `exc.errors()` both return the list.
 - Envelope response bodies may be dicts/lists: `{"status": 418, "body": {...}}` now serializes the body as JSON instead of a Python repr.
 - `Param` constraints (`gt/ge/lt/le/multiple_of/min_length/max_length/pattern`) enforced as 422 for path/query/header/cookie params; `Header(convert_underscores=...)`; bool / int / float / Enum / `List[T]` coercion (sync + async handlers). Param metadata (`title`, `description`, `deprecated`, `include_in_schema`) now works and is emitted in OpenAPI (`multipleOf`, `title`, parameter `description`/`deprecated`; hidden params still function at runtime).
@@ -32,7 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Middleware ordering now matches Starlette/FastAPI (ADR-095):** the **last** middleware added is the outermost (it sees the request first). JustAPI previously ran first-added-outermost — the opposite of FastAPI. Apps that relied on the old order should reverse their `@app.middleware("http")` registrations.
 - `FileResponse` sets `ETag`, `Last-Modified`, and `Content-Length` (honouring a caller `stat_result`).
 - SSE/WebSocket routes registered via `APIRouter` keep their prefix, tags, summary, and OpenAPI entry through `include_router`.
-- Docker: the image entrypoint no longer hard-codes `demo_app.py` (override with `docker run ... python your_app.py`), and the demo binds `0.0.0.0` so it is reachable from outside the container.
+- Docker: the image now uses `ENTRYPOINT ["justapi"]` + `CMD ["serve", "--addr", "0.0.0.0:8080"]` with the demo mounted as `/app/main.py`, so Kubernetes/Helm `args` (`serve --addr ...`) work end to end — previously they tried to exec a nonexistent `serve` binary. Mount your app as `/app/main.py`, or override the entrypoint to run it directly.
 
 ### Security
 

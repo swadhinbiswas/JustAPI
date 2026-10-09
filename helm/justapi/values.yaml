@@ -9,7 +9,8 @@ image:
   repository: ghcr.io/swadhinbiswas/justapi
   tag: latest
   pullPolicy: IfNotPresent
-  # Override the image's entrypoint command
+  # Empty = the image's ENTRYPOINT (`justapi`). `args` replace the image CMD
+  # and are run through the `justapi` console script, e.g. `serve --addr ...`.
   command: []
   args:
     - serve
