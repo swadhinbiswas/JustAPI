@@ -111,7 +111,7 @@ def filter_items(
     return {"tags": tags}
 ```
 
-Each tag must be between 1 and 10 characters.
+`min_length` / `max_length` apply to the **number of values** (the list length), not to each tag. `Query(None)` keeps the parameter optional.
 
 ## Metadata in Docs
 
