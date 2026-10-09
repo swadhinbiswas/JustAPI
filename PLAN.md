@@ -1238,7 +1238,7 @@ not test issues:
 - [x] Helm: NetworkPolicy (opt-in default-deny) + migration Job (pre-install/upgrade hook) added; verified with `helm lint` (0 failed) + `helm template` render (helm v3.16.3). Remaining: verify `readOnlyRootFilesystem` for uploads on a live cluster.
 
 ### P1 — FastAPI parity (in progress)
-- [x] `Param` constraints (`gt/ge/lt/le/min/max_length/pattern`) enforced as 422 + Header `convert_underscores` + bool/int/float/Enum/`List[T]` coercion (sync+async); OpenAPI `enum` values + array types.
+- [x] `Param` constraints (`gt/ge/lt/le/multiple_of/min_length/max_length/pattern`) enforced as 422 + Header `convert_underscores` + bool/int/float/Enum/`List[T]` coercion (sync+async); OpenAPI `enum` values + array types; param metadata (`title`/`description`/`deprecated`/`include_in_schema`) now honored in OpenAPI (docs pages previously promised these — now true).
 - [x] OpenAPI: real param types + constraints, `cookie` params, `info/servers/tags/contact/license/termsOfService`, real `requestBody` from `Schema`/Pydantic, `components.securitySchemes` + per-op `security` from `Security()`.
 - [x] Auth schemes `HTTPBearer/HTTPBasic/APIKeyHeader/Query/Cookie` as `Depends` callables with `.model`; TestClient `get_with` (Rust) + `AsyncTestClient.get(headers=)`; `JustAPIApp(lifespan=...)` async/sync CM.
 - [x] TestClient `put/patch/delete_with` (core Rust + PyO3) + `AsyncTestClient` headers for all methods; CI pytest gate un-excludes `test_rate_limit` (skips w/o Redis) + `test_circuit_breaker` (flake fixed).

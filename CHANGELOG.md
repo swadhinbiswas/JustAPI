@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 **FastAPI parity (Phase 53)**
-- `Param` constraints (`gt/ge/lt/le/min_length/max_length/pattern`) enforced as 422 for path/query/header/cookie params; `Header(convert_underscores=...)`; bool / int / float / Enum / `List[T]` coercion (sync + async handlers).
+- `Param` constraints (`gt/ge/lt/le/multiple_of/min_length/max_length/pattern`) enforced as 422 for path/query/header/cookie params; `Header(convert_underscores=...)`; bool / int / float / Enum / `List[T]` coercion (sync + async handlers). Param metadata (`title`, `description`, `deprecated`, `include_in_schema`) now works and is emitted in OpenAPI (`multipleOf`, `title`, parameter `description`/`deprecated`; hidden params still function at runtime).
 - `JustAPIApp(lifespan=...)` — async or sync context manager entered before the server starts and exited on shutdown (`on_event` still supported).
 - Auth schemes: `HTTPBearer`, `HTTPBasic`, `APIKeyHeader`, `APIKeyQuery`, `APIKeyCookie` as `Depends` callables, with OpenAPI security schemes.
 - Multi-file uploads: repeated multipart field names yield a list; `List[UploadFile]` handlers receive every file.
