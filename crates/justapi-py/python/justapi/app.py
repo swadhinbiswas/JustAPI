@@ -1613,6 +1613,14 @@ class JustAPIApp:
         """
         self._app.enable_circuit_breaker(failure_threshold, reset_timeout_ms)
 
+    def enable_timeout(self, seconds: float = 30.0):
+        """Per-request timeout: requests exceeding ``seconds`` get a 504.
+
+        Keep this aligned with your reverse-proxy timeout to avoid spurious
+        504s (whichever side is shorter gives up first).
+        """
+        self._app.enable_timeout(float(seconds))
+
     def enable_request_coalescing(self, headers: typing.List[str] = None):
         """
         Enable request coalescing (singleflight).

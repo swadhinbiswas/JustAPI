@@ -177,6 +177,12 @@ impl JustAPITestClient {
             chain.add(jwt.clone());
         }
 
+        if let Some(secs) = app_ref.timeout_secs {
+            chain.add(justapi_core::resilience::TimeoutMiddleware::new(
+                std::time::Duration::from_secs_f64(secs),
+            ));
+        }
+
         let handler: HandlerFn = Arc::new(move |req| {
             let c = chain.clone();
             Box::pin(async move { c.run(req).await })

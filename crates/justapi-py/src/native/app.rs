@@ -81,6 +81,9 @@ pub struct JustAPIApp {
     pub wasm_bytes: Option<Vec<u8>>,
     pub gateway_config: Option<String>,
     pub circuit_breaker_config: Option<(usize, u64)>,
+    /// Per-request timeout in seconds (`app.enable_timeout`). When set, the
+    /// core `TimeoutMiddleware` returns 504 after this duration.
+    pub timeout_secs: Option<f64>,
     pub coalesce_headers: Option<Vec<String>>,
     /// HTTP/3 (QUIC) TLS certificate/key paths, set via `enable_http3(...)`.
     /// When Some, `run()` also starts a UDP/QUIC listener serving the same
@@ -485,6 +488,7 @@ impl JustAPIApp {
             wasm_bytes: None,
             gateway_config: None,
             circuit_breaker_config: None,
+            timeout_secs: None,
             coalesce_headers: None,
             http3_cert: None,
             http3_key: None,
@@ -652,6 +656,12 @@ impl JustAPIApp {
     #[pyo3(name = "enable_circuit_breaker")]
     fn enable_circuit_breaker(&mut self, failure_threshold: usize, reset_timeout_ms: u64) {
         self.circuit_breaker_config = Some((failure_threshold, reset_timeout_ms));
+    }
+
+    /// Per-request timeout (seconds). Requests exceeding it get a 504.
+    #[pyo3(name = "enable_timeout")]
+    fn enable_timeout(&mut self, seconds: f64) {
+        self.timeout_secs = Some(seconds);
     }
 
     /// Enable request coalescing (singleflight). When many concurrent, identical
@@ -1903,6 +1913,7 @@ impl JustAPIApp {
         let wasm_bytes = app.wasm_bytes.take();
         let gateway_config_path = app.gateway_config.take();
         let cb_config = app.circuit_breaker_config.take();
+        let timeout_secs = app.timeout_secs;
         let coalesce_headers = app.coalesce_headers.take();
         let health_checks = std::mem::take(&mut app.health_checks);
         let secure_headers = app.secure_headers;
@@ -2212,6 +2223,15 @@ impl JustAPIApp {
                         ..Default::default()
                     };
                     server = server.add_circuit_breaker(config);
+                }
+
+                if let Some(secs) = timeout_secs {
+                    tracing::info!("Enabling request timeout: {}s", secs);
+                    server = server.add_middleware(
+                        justapi_core::resilience::TimeoutMiddleware::new(
+                            std::time::Duration::from_secs_f64(secs),
+                        ),
+                    );
                 }
 
                 if let Some(headers) = coalesce_headers {
