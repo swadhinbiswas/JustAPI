@@ -53,6 +53,25 @@ def cmd_version(args: argparse.Namespace) -> None:
     print(f"Python {sys.version.split()[0]} · PyPI package")
 
 
+def _load_and_run(app_file: str, addr: str, reuse_port: bool = False) -> None:
+    """Import the app module and start the server (blocking).
+
+    ``reuse_port`` binds with SO_REUSEPORT so several worker processes can
+    share one address (`justapi serve --workers N`).
+    """
+    # Import the app module — its `app.run(...)` (or `if __name__`) starts the server.
+    module_name = os.path.splitext(app_file)[0].replace("/", ".")
+    spec = importlib.util.spec_from_file_location(module_name, app_file)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.argv = [app_file, addr]
+    spec.loader.exec_module(module)
+    # If the module only defines `app` without calling run(), call it for the user.
+    app = getattr(module, "app", None)
+    if app is not None and not getattr(module, "_justapi_ran", False):
+        app.run(addr, reuse_port=reuse_port)
+
+
 def cmd_serve(args: argparse.Namespace) -> None:
     """Run the app in the current directory.
 
@@ -60,23 +79,141 @@ def cmd_serve(args: argparse.Namespace) -> None:
     load a Python application (it only serves its built-in routes / static
     files), so delegation would silently serve 404s instead of the user's
     app. Use `justapi-cli serve` directly for static-only serving.
+
+    Supports ``--workers N`` (prefork, SO_REUSEPORT) and ``--reload``
+    (watch-and-restart supervisor) for Python apps.
     """
     app_file = _find_app_file()
     if app_file is None:
         print("error: no app.py or main.py found in the current directory", file=sys.stderr)
         sys.exit(1)
+
+    workers = max(int(args.workers or 1), 1)
+    if args.reload:
+        _serve_with_reload(args, app_file, workers)
+        return
+    if workers > 1:
+        _serve_prefork(args, app_file, workers)
+        return
+
     print(f"justapi {__version__} — serving {app_file} on {args.addr}")
-    # Import the app module — its `app.run(...)` (or `if __name__`) starts the server.
-    module_name = os.path.splitext(app_file)[0].replace("/", ".")
-    spec = importlib.util.spec_from_file_location(module_name, app_file)
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    sys.argv = [app_file, args.addr]
-    spec.loader.exec_module(module)
-    # If the module only defines `app` without calling run(), call it for the user.
-    app = getattr(module, "app", None)
-    if app is not None and not getattr(module, "_justapi_ran", False):
-        app.run(args.addr)
+    _load_and_run(app_file, args.addr)
+
+
+def _serve_prefork(args: argparse.Namespace, app_file: str, workers: int) -> None:
+    """Run N worker processes sharing one address via SO_REUSEPORT.
+
+    Workers that die unexpectedly are respawned (matching the Rust CLI
+    supervisor). Unix-only: relies on fork(2).
+    """
+    import multiprocessing
+    import signal
+    import time
+
+    try:
+        ctx = multiprocessing.get_context("fork")
+    except ValueError:
+        print(
+            "error: --workers requires a fork-capable platform (Unix)",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    print(f"justapi {__version__} — serving {app_file} on {args.addr} with {workers} workers")
+    children: list = []
+    stop = {"flag": False}
+
+    def _spawn():
+        proc = ctx.Process(target=_load_and_run, args=(app_file, args.addr, True))
+        proc.start()
+        return proc
+
+    def _shutdown(_signum, _frame):
+        stop["flag"] = True
+        for proc in children:
+            if proc.is_alive():
+                proc.terminate()
+
+    signal.signal(signal.SIGTERM, _shutdown)
+    signal.signal(signal.SIGINT, _shutdown)
+
+    children.extend(_spawn() for _ in range(workers))
+    try:
+        while not stop["flag"]:
+            time.sleep(0.2)
+            for idx, proc in enumerate(children):
+                if not proc.is_alive() and not stop["flag"]:
+                    children[idx] = _spawn()
+    finally:
+        _shutdown(None, None)
+        for proc in children:
+            proc.join(timeout=10)
+
+
+def _snapshot_tree(root: str) -> dict:
+    """`{path: (mtime_ns, size)}` for *.py files under ``root`` (skip noise)."""
+    skip = {".git", ".venv", "venv", "__pycache__", "node_modules", ".venv-ft", ".venv-p53"}
+    out: dict = {}
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in skip and not d.startswith(".")]
+        for name in filenames:
+            if name.endswith(".py"):
+                full = os.path.join(dirpath, name)
+                try:
+                    st = os.stat(full)
+                except OSError:
+                    continue
+                out[full] = (st.st_mtime_ns, st.st_size)
+    return out
+
+
+def _serve_with_reload(args: argparse.Namespace, app_file: str, workers: int) -> None:
+    """Supervise a child ``justapi serve`` and restart it when *.py files change."""
+    import signal
+    import subprocess
+    import time
+
+    cmd = [sys.executable, "-m", "justapi", "serve", args.addr]
+    if workers > 1:
+        cmd += ["--workers", str(workers)]
+    print(f"justapi {__version__} — serving {app_file} on {args.addr} (reload enabled)")
+
+    stop = {"flag": False}
+
+    def _shutdown(_signum, _frame):
+        stop["flag"] = True
+
+    signal.signal(signal.SIGTERM, _shutdown)
+    signal.signal(signal.SIGINT, _shutdown)
+
+    child = subprocess.Popen(cmd)
+    state = _snapshot_tree(os.getcwd())
+    try:
+        while not stop["flag"]:
+            time.sleep(0.4)
+            if child.poll() is not None:
+                sys.exit(child.returncode)
+            new_state = _snapshot_tree(os.getcwd())
+            if new_state != state:
+                print("justapi — change detected, restarting...")
+                child.terminate()
+                try:
+                    child.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    child.kill()
+                    child.wait()
+                child = subprocess.Popen(cmd)
+                state = new_state
+    finally:
+        # Terminate the child on any exit path (SIGTERM/SIGINT included), so
+        # the port is released and no orphan keeps serving.
+        if child.poll() is None:
+            child.terminate()
+            try:
+                child.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                child.kill()
+                child.wait()
 
 
 def cmd_create(args: argparse.Namespace) -> None:
@@ -128,8 +265,8 @@ def cmd_openapi(args: argparse.Namespace) -> None:
     print(json.dumps(spec_dict, indent=2))
 
 
-def main(argv: list[str] | None = None) -> None:
-    argv = argv if argv is not None else sys.argv[1:]
+def build_parser() -> argparse.ArgumentParser:
+    """Construct the CLI parser (exposed for tests)."""
     parser = argparse.ArgumentParser(
         prog="justapi",
         description="JustAPI — Python web framework with a Rust core.",
@@ -140,6 +277,8 @@ def main(argv: list[str] | None = None) -> None:
     p_serve = sub.add_parser("serve", help="Run the app in the current directory")
     p_serve.add_argument("addr", nargs="?", default="127.0.0.1:8000", help="Address to bind (default 127.0.0.1:8000)")
     p_serve.add_argument("--addr", dest="addr_flag", default=None, help="Address to bind (flag form, overrides positional)")
+    p_serve.add_argument("--workers", type=int, default=1, help="Number of worker processes (prefork, SO_REUSEPORT)")
+    p_serve.add_argument("--reload", action="store_true", help="Watch *.py files and restart on change")
 
     p_create = sub.add_parser("create", help="Scaffold a new project (requires Rust CLI)")
     p_create.add_argument("name", help="Project name")
@@ -151,6 +290,12 @@ def main(argv: list[str] | None = None) -> None:
     p_openapi = sub.add_parser("openapi", help="Print the OpenAPI spec")
     p_openapi.add_argument("file", nargs="?", help="App file (default: auto-detect)")
 
+    return parser
+
+
+def main(argv: list[str] | None = None) -> None:
+    argv = argv if argv is not None else sys.argv[1:]
+    parser = build_parser()
     args = parser.parse_args(argv)
 
     if args.version:
