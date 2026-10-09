@@ -275,23 +275,11 @@ jobs:
     name: Integration Tests
     runs-on: ubuntu-latest
     needs: [check, pytest]
-    if: false  # Disabled: flaky server startup in CI
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-
-      - name: Install Python (for PyO3)
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
-
-      - name: Install maturin
-        run: pip install maturin
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -304,48 +292,54 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-integration-
 
-      - name: Build justapi
-        run: cargo build --release -p justapi-cli --features tls,compression
-
-      - name: Build Python wheel
-        run: maturin build -m crates/justapi-py/Cargo.toml --release -o wheels/
-
-      - name: Install wheel
-        run: pip install wheels/*.whl --break-system-packages
+      - name: Build Rust CLI
+        run: cargo build --release -p justapi-cli --features tls,compression,ws
 
       - name: Start server
         run: |
-          justapi serve --addr 127.0.0.1:8080 &
-          sleep 3
-          
-      - name: Health check
+          ./target/release/justapi-cli serve --addr 127.0.0.1:8080 > /tmp/server.log 2>&1 &
+          # Retry instead of a fixed sleep: CI runners start servers at
+          # variable speed and this was the original source of flakiness.
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8080/live > /dev/null; then
+              echo "server ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "server failed to start; log:"
+          cat /tmp/server.log
+          exit 1
+
+      - name: Health + observability endpoints
         run: |
-          curl -f http://127.0.0.1:8080/health || exit 1
-          curl -f http://127.0.0.1:8080/live || exit 1
-          curl -f http://127.0.0.1:8080/ready || exit 1
-          
-      - name: Test endpoints
+          for ep in /live /ready /health /metrics /openapi.json; do
+            curl -f "http://127.0.0.1:8080$ep" > /dev/null
+          done
+
+      - name: Routes (GET /hello, POST /echo)
         run: |
-          # Hello world
-          curl -f http://127.0.0.1:8080/ || exit 1
-          
-          # Metrics
-          curl -f http://127.0.0.1:8080/metrics || exit 1
-          
-          # OpenAPI
-          curl -f http://127.0.0.1:8080/openapi.json || exit 1
-          
-      - name: Test WebSocket
+          curl -f http://127.0.0.1:8080/hello > /dev/null
+          curl -f -X POST -H 'Content-Type: application/json' \
+            -d '{"x": 1}' http://127.0.0.1:8080/echo > /dev/null
+
+      - name: WebSocket echo
         run: |
-          # Install websocat
-          cargo install websocat
-          
-          # Test WebSocket echo
-          echo "hello" | websocat -t ws://127.0.0.1:8080/ws || true
-          
+          python3 -m pip install --user websockets
+          python3 - <<'EOF'
+          import asyncio, websockets
+
+          async def main():
+              async with websockets.connect("ws://127.0.0.1:8080/ws") as ws:
+                  await ws.send("hello")
+                  assert await ws.recv() == "hello", "ws echo mismatch"
+
+          asyncio.run(main())
+          EOF
+
       - name: Stop server
         if: always()
-        run: pkill -f "justapi serve" || true
+        run: pkill -f "justapi-cli serve" || true
 
   # ============================================================
   # Stage 5: Code Quality Gates
@@ -470,9 +464,7 @@ jobs:
   docker:
     name: Build Docker Image
     runs-on: ubuntu-latest
-    # integration-tests is disabled (if: false), so depend only on the jobs
-    # that actually run: rust checks + pytest.
-    needs: [check, pytest]
+    needs: [check, pytest, integration-tests]
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     steps:
       - uses: actions/checkout@v4
