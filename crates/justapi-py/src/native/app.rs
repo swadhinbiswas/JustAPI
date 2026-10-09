@@ -128,7 +128,7 @@ pub struct JustAPIApp {
     /// ``JwtAuth`` middleware validates every request (skipping routes
     /// explicitly opted out). Decoded claims are bridged into
     /// ``request["auth"]``.
-    pub jwt_auth: Option<justapi_core::middleware::JwtAuth>,
+    pub jwt_auth: Option<std::sync::Arc<justapi_core::middleware::JwtAuth>>,
     /// Per-authenticated-user rate limit (`app.enable_user_rate_limit`):
     /// requests per second, keyed on the JWT `sub` claim.
     pub user_rate_limit: Option<u32>,
@@ -542,9 +542,24 @@ impl JustAPIApp {
         if let Some(iss) = issuer.as_ref() {
             auth = auth.with_issuer(iss);
         }
-        self.jwt_auth = Some(auth);
+        self.jwt_auth = Some(std::sync::Arc::new(auth));
         let _ = py;
         Ok(())
+    }
+
+    /// Replace the JWT verification secret at runtime — no restart. The
+    /// running middleware (which shares this handle) picks it up immediately.
+    #[pyo3(name = "rotate_jwt_secret")]
+    fn rotate_jwt_secret(&self, secret: String) -> PyResult<()> {
+        match self.jwt_auth.as_ref() {
+            Some(jwt) => {
+                jwt.rotate_secret(secret.as_bytes());
+                Ok(())
+            }
+            None => Err(pyo3::exceptions::PyRuntimeError::new_err(
+                "rotate_jwt_secret: JWT auth is not enabled (call set_jwt_auth first)",
+            )),
+        }
     }
 
     /// Configure CORS from Python. ``allow_origins`` etc. are the same
@@ -2297,7 +2312,7 @@ impl JustAPIApp {
                 // and bridged into `Request.state["auth"]` in the handler dispatch.
                 if let Some(jwt) = jwt_auth {
                     tracing::info!("JWT authentication middleware enabled");
-                    server = server.add_jwt(jwt);
+                    server = server.add_middleware(jwt);
                 }
 
                 if let Some(rps) = user_rate_limit {

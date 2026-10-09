@@ -131,3 +131,31 @@ def test_set_jwt_auth_with_audience_issuer():
     app2 = JustAPIApp()
     app2.set_jwt_auth("my-secret")
     assert app2._app is not None
+
+
+def test_rotate_jwt_secret_without_restart():
+    """`app.rotate_jwt_secret` swaps the verification key on the live chain."""
+    import time
+
+    from justapi import JustAPIApp, JustAPITestClient, JwtAuth
+
+    app = JustAPIApp()
+    app.set_jwt_auth("old-secret", "HS256")
+
+    @app.get("/me")
+    def me(request):
+        return {"sub": request.auth["sub"]}
+
+    def tok(secret):
+        return JwtAuth(secret=secret, algorithm="HS256").encode(
+            {"sub": "u1", "exp": int(time.time()) + 60}
+        )
+
+    c = JustAPITestClient(app)
+    assert c.get_with("/me", [("Authorization", f"Bearer {tok('old-secret')}")])["status"] == 200
+    assert c.get_with("/me", [("Authorization", f"Bearer {tok('new-secret')}")])["status"] == 401
+
+    app.rotate_jwt_secret("new-secret")
+
+    assert c.get_with("/me", [("Authorization", f"Bearer {tok('old-secret')}")])["status"] == 401
+    assert c.get_with("/me", [("Authorization", f"Bearer {tok('new-secret')}")])["status"] == 200

@@ -78,6 +78,16 @@ impl<B> Clone for MiddlewareChain<B> {
     }
 }
 
+/// Middleware implemented for a shared handle: lets callers keep an `Arc` to a
+/// middleware (e.g. `JwtAuth` for runtime key rotation) while the chain holds
+/// its own clone.
+#[async_trait]
+impl<B: Send + 'static, T: Middleware<B> + ?Sized> Middleware<B> for std::sync::Arc<T> {
+    async fn handle(&self, req: Request<B>, next: Next<'_, B>) -> Result<Response<ResponseBody>> {
+        (**self).handle(req, next).await
+    }
+}
+
 impl<B> MiddlewareChain<B> {
     pub fn new(handler: HandlerFn<B>) -> Self {
         Self { middlewares: Vec::new(), handler }
@@ -434,7 +444,9 @@ pub enum JwtRequirement {
 
 pub struct JwtAuth {
     validation: jsonwebtoken::Validation,
-    decoding_key: jsonwebtoken::DecodingKey,
+    /// Verification key, swappable at runtime via [`JwtAuth::rotate_secret`]
+    /// (no restart). `ArcSwap` keeps the per-request read lock-free.
+    decoding_key: std::sync::Arc<arc_swap::ArcSwap<jsonwebtoken::DecodingKey>>,
     route_rules: Vec<(String, JwtRequirement)>,
     default_requirement: JwtRequirement,
     warned_aud_iss: std::sync::atomic::AtomicBool,
@@ -466,7 +478,9 @@ impl JwtAuth {
     pub fn from_secret(secret: &[u8]) -> Self {
         Self {
             validation: jsonwebtoken::Validation::default(),
-            decoding_key: jsonwebtoken::DecodingKey::from_secret(secret),
+            decoding_key: std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(
+                jsonwebtoken::DecodingKey::from_secret(secret),
+            )),
             route_rules: Vec::new(),
             default_requirement: JwtRequirement::Required,
             warned_aud_iss: std::sync::atomic::AtomicBool::new(false),
@@ -483,7 +497,7 @@ impl JwtAuth {
         ];
         Ok(Self {
             validation,
-            decoding_key,
+            decoding_key: std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(decoding_key)),
             route_rules: Vec::new(),
             default_requirement: JwtRequirement::Required,
             warned_aud_iss: std::sync::atomic::AtomicBool::new(false),
@@ -497,7 +511,7 @@ impl JwtAuth {
             vec![jsonwebtoken::Algorithm::ES256, jsonwebtoken::Algorithm::ES384];
         Ok(Self {
             validation,
-            decoding_key,
+            decoding_key: std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(decoding_key)),
             route_rules: Vec::new(),
             default_requirement: JwtRequirement::Required,
             warned_aud_iss: std::sync::atomic::AtomicBool::new(false),
@@ -514,7 +528,7 @@ impl JwtAuth {
         ];
         Self {
             validation,
-            decoding_key,
+            decoding_key: std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(decoding_key)),
             route_rules: Vec::new(),
             default_requirement: JwtRequirement::Required,
             warned_aud_iss: std::sync::atomic::AtomicBool::new(false),
@@ -528,7 +542,7 @@ impl JwtAuth {
             vec![jsonwebtoken::Algorithm::ES256, jsonwebtoken::Algorithm::ES384];
         Self {
             validation,
-            decoding_key,
+            decoding_key: std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(decoding_key)),
             route_rules: Vec::new(),
             default_requirement: JwtRequirement::Required,
             warned_aud_iss: std::sync::atomic::AtomicBool::new(false),
@@ -553,6 +567,30 @@ impl JwtAuth {
     pub fn with_audience(mut self, audience: &[&str]) -> Self {
         self.validation.aud = Some(audience.iter().map(|a| a.to_string()).collect());
         self
+    }
+
+    /// Replace the HMAC verification secret at runtime — **no restart**.
+    ///
+    /// In-flight requests pick the new key up immediately; the algorithm set
+    /// is unchanged. Issue tokens with the new secret before rotating if you
+    /// need zero-downtime key rollover.
+    pub fn rotate_secret(&self, secret: &[u8]) {
+        self.decoding_key
+            .store(std::sync::Arc::new(jsonwebtoken::DecodingKey::from_secret(secret)));
+    }
+
+    /// Replace an RSA PEM verification key at runtime (no restart).
+    pub fn rotate_rsa_pem(&self, pem: &str) -> anyhow::Result<()> {
+        let key = jsonwebtoken::DecodingKey::from_rsa_pem(pem.as_bytes())?;
+        self.decoding_key.store(std::sync::Arc::new(key));
+        Ok(())
+    }
+
+    /// Replace an EC PEM verification key at runtime (no restart).
+    pub fn rotate_ec_pem(&self, pem: &str) -> anyhow::Result<()> {
+        let key = jsonwebtoken::DecodingKey::from_ec_pem(pem.as_bytes())?;
+        self.decoding_key.store(std::sync::Arc::new(key));
+        Ok(())
     }
 
     /// Require JWT validation for requests whose path starts with the given prefix.
@@ -660,8 +698,8 @@ impl<B: Send + 'static> Middleware<B> for JwtAuth {
             }
         };
 
-        match jsonwebtoken::decode::<serde_json::Value>(token, &self.decoding_key, &self.validation)
-        {
+        let decoding_key = self.decoding_key.load();
+        match jsonwebtoken::decode::<serde_json::Value>(token, &decoding_key, &self.validation) {
             Ok(token_data) => {
                 if let Err(msg) = check_claims(&token_data.claims, requirement) {
                     return Ok(json_error(StatusCode::FORBIDDEN, msg));
@@ -1385,7 +1423,9 @@ impl OAuth2Password {
         }
         JwtAuth {
             validation,
-            decoding_key: self.decoding_key.clone(),
+            decoding_key: std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(
+                self.decoding_key.clone(),
+            )),
             route_rules: Vec::new(),
             default_requirement: JwtRequirement::Required,
             warned_aud_iss: std::sync::atomic::AtomicBool::new(false),
@@ -1507,6 +1547,45 @@ mod tests {
         );
         let resp = chain.run(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    /// Skipped under Miri: ring FFI not supported by Miri.
+    #[cfg(not(miri))]
+    #[tokio::test]
+    async fn test_jwt_rotate_secret_without_restart() {
+        let handler: HandlerFn<TestBody> = Arc::new(|_req: Request<TestBody>| {
+            Box::pin(async { Ok(json_response(StatusCode::OK, "hi")) })
+        });
+        let jwt = std::sync::Arc::new(JwtAuth::from_secret(b"old-secret"));
+        let mut chain = MiddlewareChain::new(handler);
+        chain.add(jwt.clone());
+
+        let token_for = |secret: &[u8]| {
+            jsonwebtoken::encode(
+                &jsonwebtoken::Header::default(),
+                &serde_json::json!({"sub": "123", "exp": 9999999999u64}),
+                &jsonwebtoken::EncodingKey::from_secret(secret),
+            )
+            .unwrap()
+        };
+        let run = |token: &str| {
+            let req = test_req_with_header(
+                Method::GET,
+                "/hello",
+                "authorization",
+                &format!("Bearer {token}"),
+            );
+            let chain = chain.clone();
+            async move { chain.run(req).await.unwrap().status() }
+        };
+
+        assert_eq!(run(&token_for(b"old-secret")).await, StatusCode::OK);
+        assert_eq!(run(&token_for(b"new-secret")).await, StatusCode::UNAUTHORIZED);
+
+        // Rotate in place — no restart, the chain's Arc sees the new key.
+        jwt.rotate_secret(b"new-secret");
+        assert_eq!(run(&token_for(b"old-secret")).await, StatusCode::UNAUTHORIZED);
+        assert_eq!(run(&token_for(b"new-secret")).await, StatusCode::OK);
     }
 
     #[tokio::test]

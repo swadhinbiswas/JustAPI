@@ -1678,6 +1678,15 @@ class JustAPIApp:
         """
         self._app._set_jwt_auth(secret, algorithm, audience, issuer)
 
+    def rotate_jwt_secret(self, secret: str):
+        """Replace the JWT verification secret at runtime — no restart.
+
+        The running middleware picks the new key up immediately. For
+        zero-downtime rollover: start issuing tokens signed with the new
+        secret, rotate, then stop issuing with the old one.
+        """
+        self._app.rotate_jwt_secret(secret)
+
     def register_health_check(self, name: str, check: typing.Callable[[], bool]):
         """
         Register a dependency readiness probe used by the ``/ready`` endpoint.
