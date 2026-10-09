@@ -3745,3 +3745,33 @@ risk-accepted it with rationale, or scheduled it. Checklist updated in
 
 **Evidence:** updated checklist (2026-10-09); `test_cors.py` (real CORS +
 preflight + JWT regression); `test_secure_headers.py`.
+
+---
+
+## ADR-097 — 2026-10-09 — `socket2` for SO_REUSEPORT; Python prefork design
+
+**Context:** Python apps had no multi-worker story: the Rust CLI's prefork
+supervisor cannot load Python apps, and the Python CLI ran single-process —
+while the README promises `justapi serve --workers N`. Sharing one address
+across worker processes needs either SO_REUSEPORT or fd passing.
+
+**Options considered:**
+1. **fd passing** (Rust CLI already re-execs workers with `--worker-fd`):
+   expose `run_on_fd(fd)` through PyO3. Requires refactoring the large
+   `run()` server-construction path into a reusable listener-injection API.
+2. **SO_REUSEPORT + `socket2`** — selected. Each worker binds the same
+   address with `SO_REUSEPORT`; the kernel load-balances accepts. `socket2`
+   is already a transitive dependency (tokio/hyper/sqlx use it), so the tree
+   does not grow. Unix-only; Windows falls back to a plain bind (no-op flag).
+
+**Decision:** Option 2. Core gains `Server::with_reuse_port(bool)` +
+`bind_tcp_listener()`; PyO3 `run(addr, max_body_size, reuse_port=False)`;
+`JustAPIApp.run(..., reuse_port=)`. The Python CLI implements `--workers N`
+(fork-based supervisor with respawn, matching the Rust CLI semantics) and
+`--reload` (mtime-snapshot watcher that restarts a child `justapi serve`).
+
+**Evidence:** end-to-end scripts verified: 2 workers serving distinct PIDs
+(kernel split 4/2), killed worker respawned, SIGTERM → no orphans;
+`--reload` picks up a code change and restarts; `--reload --workers 2`
+combined works. `socket2` justification: standard socket-configuration crate,
+already in-tree, avoids hand-rolled `libc::setsockopt` + sockaddr plumbing.
