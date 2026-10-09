@@ -67,6 +67,25 @@ def _is_upload_ann(ann) -> bool:
     return False
 
 
+def _copy_param_meta(info: dict, default) -> None:
+    """Copy Param constraints/metadata into a descriptor entry."""
+    if not isinstance(default, _PARAM_TYPES):
+        return
+    info["alias"] = getattr(default, "alias", None)
+    for _c in ("gt", "ge", "lt", "le", "multiple_of", "min_length", "max_length", "pattern"):
+        _v = getattr(default, _c, None)
+        if _v is not None:
+            info[_c] = _v
+    for _c in ("title", "description"):
+        _v = getattr(default, _c, None)
+        if _v is not None:
+            info[_c] = _v
+    if getattr(default, "deprecated", False):
+        info["deprecated"] = True
+    if getattr(default, "include_in_schema", True) is False:
+        info["include_in_schema"] = False
+
+
 def _classify_param(name, param, hints, method, path):
     import enum
     import re
@@ -87,6 +106,7 @@ def _classify_param(name, param, hints, method, path):
     if path_in_tmpl:
         info["in"] = "path"
         info["required"] = True
+        _copy_param_meta(info, default)
         return info
     if hasattr(default, "dependency"):
         info["in"] = "security"
@@ -102,11 +122,7 @@ def _classify_param(name, param, hints, method, path):
         return info
     if isinstance(default, _PARAM_TYPES):
         info["in"] = _PARAM_KINDS[type(default).__name__]
-        info["alias"] = getattr(default, "alias", None)
-        for _c in ("gt", "ge", "lt", "le", "min_length", "max_length", "pattern"):
-            _v = getattr(default, _c, None)
-            if _v is not None:
-                info[_c] = _v
+        _copy_param_meta(info, default)
         dflt = getattr(default, "default", inspect.Parameter.empty)
         if dflt is inspect.Parameter.empty:
             info["required"] = True
@@ -327,17 +343,29 @@ def build_openapi(app):
         parameters = []
         request_body = None
         for p in d["parameters"]:
+            if p.get("include_in_schema") is False:
+                continue
             name = p.get("alias") or p["name"]
             schema = _openapi_type(p.get("annotation", ""))
             if p.get("enum") is not None:
                 schema["enum"] = p["enum"]
-            for _c, _k in (("gt", "exclusiveMinimum"), ("ge", "minimum"), ("lt", "exclusiveMaximum"), ("le", "maximum"), ("min_length", "minLength"), ("max_length", "maxLength"), ("pattern", "pattern")):
+            if p.get("title") is not None:
+                schema["title"] = p["title"]
+            for _c, _k in (("gt", "exclusiveMinimum"), ("ge", "minimum"), ("lt", "exclusiveMaximum"), ("le", "maximum"), ("multiple_of", "multipleOf"), ("min_length", "minLength"), ("max_length", "maxLength"), ("pattern", "pattern")):
                 if p.get(_c) is not None:
                     schema[_k] = p[_c]
             if p["in"] == "path":
-                parameters.append({"name": name, "in": "path", "required": True, "schema": schema})
+                param = {"name": name, "in": "path", "required": True, "schema": schema}
             elif p["in"] in ("query", "header", "cookie"):
-                parameters.append({"name": name, "in": p["in"], "required": p.get("required", False), "schema": schema})
+                param = {"name": name, "in": p["in"], "required": p.get("required", False), "schema": schema}
+            else:
+                param = None
+            if param is not None:
+                if p.get("description") is not None:
+                    param["description"] = p["description"]
+                if p.get("deprecated"):
+                    param["deprecated"] = True
+                parameters.append(param)
             elif p["in"] in ("body", "form", "file"):
                 body_schema = _route_body_schema(d)
                 request_body = {"content": {"application/json": {"schema": body_schema or {"type": "object"}}}}

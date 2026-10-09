@@ -11,9 +11,14 @@ class Param:
         ge: Any = None,
         lt: Any = None,
         le: Any = None,
+        multiple_of: Any = None,
         min_length: Optional[int] = None,
         max_length: Optional[int] = None,
         pattern: Optional[str] = None,
+        title: Optional[str] = None,
+        description: Optional[str] = None,
+        deprecated: bool = False,
+        include_in_schema: bool = True,
     ):
         self.default = default
         self.alias = alias
@@ -21,9 +26,14 @@ class Param:
         self.ge = ge
         self.lt = lt
         self.le = le
+        self.multiple_of = multiple_of
         self.min_length = min_length
         self.max_length = max_length
         self.pattern = pattern
+        self.title = title
+        self.description = description
+        self.deprecated = deprecated
+        self.include_in_schema = include_in_schema
 
 class Path(Param): pass
 class Query(Param): pass
@@ -33,8 +43,9 @@ class Header(Param):
         default: Any = ...,
         alias: Optional[str] = None,
         convert_underscores: bool = True,
+        **kwargs: Any,
     ):
-        super().__init__(default, alias)
+        super().__init__(default, alias, **kwargs)
         self.convert_underscores = convert_underscores
 
 
@@ -109,6 +120,11 @@ def _check_constraints(val: Any, spec: Any, alias: str) -> None:
             raise ValueError(f"{alias} must be < {lt}")
         if le is not None and not val <= le:
             raise ValueError(f"{alias} must be <= {le}")
+        multiple_of = getattr(spec, "multiple_of", None)
+        if multiple_of is not None:
+            remainder = abs(val % multiple_of)
+            if not (remainder < 1e-9 or abs(remainder - multiple_of) < 1e-9):
+                raise ValueError(f"{alias} must be a multiple of {multiple_of}")
     if min_length is not None and len(val) < min_length:
         raise ValueError(f"{alias} length must be >= {min_length}")
     if max_length is not None and len(val) > max_length:
