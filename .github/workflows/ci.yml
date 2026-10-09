@@ -240,9 +240,32 @@ jobs:
       - name: Run pytest with the GIL disabled
         run: |
           . .venv-ft/bin/activate
-          # Tests pass but Python may segfault during cleanup (known free-threaded issue)
-          PYTHON_GIL=0 PYTHONPATH=./crates/justapi-py/python pytest -v --ignore=benchmarks --ignore=demo_shop --ignore=test_project --ignore=crates/justapi-py/python/justapi/test_rate_limit.py --ignore=crates/justapi-py/python/justapi/test_websocket.py --ignore=crates/justapi-py/test_graphql.py --ignore=crates/justapi-py/test_hot_reload.py --ignore=crates/justapi-py/test_max_body_size.py --ignore=crates/justapi-py/tests/ --ignore=tests/ || true
-          echo "Free-threaded pytest completed (exit code ignored due to known cleanup segfault)"
+          set +e
+          PYTHON_GIL=0 PYTHONPATH=./crates/justapi-py/python pytest -v \
+            --ignore=benchmarks --ignore=demo_shop --ignore=test_project \
+            --ignore=crates/justapi-py/tests/ --ignore=tests/ \
+            > /tmp/ft.log 2>&1
+          code=$?
+          set -e
+          tail -60 /tmp/ft.log
+
+          # Real failures always fail the job (previously masked by `|| true`).
+          if grep -qE "^(FAILED|ERROR)" /tmp/ft.log; then
+            echo "Free-threaded tests failed"
+            exit 1
+          fi
+
+          # Known 3.14t issue: the interpreter can segfault during teardown
+          # AFTER a clean pass. Tolerate a non-zero exit only when the summary
+          # reports a clean run; anything else fails.
+          if [ "$code" -ne 0 ]; then
+            if tail -3 /tmp/ft.log | grep -qE "[0-9]+ passed" \
+               && ! tail -3 /tmp/ft.log | grep -qE "[0-9]+ (failed|error)"; then
+              echo "::warning::pytest exited $code after a clean pass (known 3.14t teardown segfault)"
+            else
+              exit "$code"
+            fi
+          fi
 
   # ============================================================
   # Stage 4: Integration Tests
