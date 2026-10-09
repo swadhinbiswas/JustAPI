@@ -129,6 +129,9 @@ pub struct JustAPIApp {
     /// explicitly opted out). Decoded claims are bridged into
     /// ``request["auth"]``.
     pub jwt_auth: Option<justapi_core::middleware::JwtAuth>,
+    /// Per-authenticated-user rate limit (`app.enable_user_rate_limit`):
+    /// requests per second, keyed on the JWT `sub` claim.
+    pub user_rate_limit: Option<u32>,
     /// Optional CORS configuration. When set, the Rust ``Cors`` middleware
     /// handles OPTIONS preflight requests and injects CORS response headers.
     /// Configured from Python via ``app.add_cors(...)``.
@@ -505,6 +508,7 @@ impl JustAPIApp {
             tools: Vec::new(),
             sessions: Mutex::new(HashMap::new()),
             jwt_auth: None,
+            user_rate_limit: None,
             cors: None,
         }
     }
@@ -662,6 +666,13 @@ impl JustAPIApp {
     #[pyo3(name = "enable_timeout")]
     fn enable_timeout(&mut self, seconds: f64) {
         self.timeout_secs = Some(seconds);
+    }
+
+    /// Per-authenticated-user rate limit (requests per second), keyed on the
+    /// JWT `sub` claim. Requires `set_jwt_auth` for per-user buckets.
+    #[pyo3(name = "enable_user_rate_limit")]
+    fn enable_user_rate_limit(&mut self, requests_per_second: u32) {
+        self.user_rate_limit = Some(requests_per_second);
     }
 
     /// Enable request coalescing (singleflight). When many concurrent, identical
@@ -1914,6 +1925,7 @@ impl JustAPIApp {
         let gateway_config_path = app.gateway_config.take();
         let cb_config = app.circuit_breaker_config.take();
         let timeout_secs = app.timeout_secs;
+        let user_rate_limit = app.user_rate_limit;
         let coalesce_headers = app.coalesce_headers.take();
         let health_checks = std::mem::take(&mut app.health_checks);
         let secure_headers = app.secure_headers;
@@ -2286,6 +2298,13 @@ impl JustAPIApp {
                 if let Some(jwt) = jwt_auth {
                     tracing::info!("JWT authentication middleware enabled");
                     server = server.add_jwt(jwt);
+                }
+
+                if let Some(rps) = user_rate_limit {
+                    tracing::info!("Per-user rate limit enabled: {} req/s (keyed on JWT sub)", rps);
+                    server = server.add_middleware(
+                        justapi_core::middleware::UserRateLimiter::per_second(rps),
+                    );
                 }
 
                 if let Some(path) = gateway_config_path {

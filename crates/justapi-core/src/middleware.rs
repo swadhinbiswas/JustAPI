@@ -739,14 +739,20 @@ impl IpRateLimiter {
             );
         let limiter = std::sync::Arc::new(governor::RateLimiter::keyed(quota));
 
-        let limiter_clone = limiter.clone();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
-            loop {
-                interval.tick().await;
-                limiter_clone.retain_recent();
-            }
-        });
+        // Periodic eviction of idle keys. Only possible when a tokio runtime
+        // is running (the server path); constructing the limiter outside one
+        // (e.g. a synchronous test-client chain build) skips it — keys then
+        // live for the process lifetime, which is fine for tests.
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            let limiter_clone = limiter.clone();
+            handle.spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+                loop {
+                    interval.tick().await;
+                    limiter_clone.retain_recent();
+                }
+            });
+        }
 
         Self { limiter }
     }
@@ -766,6 +772,93 @@ impl<B: Send + 'static> Middleware<B> for IpRateLimiter {
             .unwrap_or_else(|| "unknown".to_string());
 
         match self.limiter.check_key(&ip) {
+            Ok(()) => next.run(req).await,
+            Err(negative) => {
+                let clock = governor::clock::DefaultClock::default();
+                let now = clock.now();
+                let wait = negative.wait_time_from(now);
+                let retry_after_secs = wait.as_secs().max(1);
+                let mut resp = json_error(StatusCode::TOO_MANY_REQUESTS, "rate limit exceeded");
+                let retry_val = HeaderValue::from_str(&retry_after_secs.to_string())
+                    .map_err(|e| anyhow::anyhow!("invalid retry-after: {e}"))?;
+                resp.headers_mut().insert("retry-after", retry_val.clone());
+                resp.headers_mut().insert("x-ratelimit-reset", retry_val);
+                Ok(resp)
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Per-user (claim-keyed) rate limiting
+// ---------------------------------------------------------------------------
+
+/// Per-authenticated-user rate limiter. Keys on the JWT `sub` claim that
+/// `JwtAuth` inserts into request extensions. Requests without claims fall
+/// back to the client IP, then to a shared `anonymous` bucket — dropping the
+/// token must not bypass the limit.
+pub struct UserRateLimiter {
+    limiter: std::sync::Arc<
+        governor::RateLimiter<
+            String,
+            governor::state::keyed::DefaultKeyedStateStore<String>,
+            governor::clock::DefaultClock,
+        >,
+    >,
+}
+
+impl UserRateLimiter {
+    /// `max_burst` requests per `duration` per user (key).
+    pub fn new(duration: std::time::Duration, max_burst: u32) -> Self {
+        let quota = governor::Quota::with_period(duration)
+            .expect("valid rate-limit duration for UserRateLimiter")
+            .allow_burst(
+                NonZeroU32::new(max_burst).expect("max_burst must be > 0 for UserRateLimiter"),
+            );
+        let limiter = std::sync::Arc::new(governor::RateLimiter::keyed(quota));
+
+        // Periodic eviction of idle keys. Only possible when a tokio runtime
+        // is running (the server path); constructing the limiter outside one
+        // (e.g. a synchronous test-client chain build) skips it — keys then
+        // live for the process lifetime, which is fine for tests.
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            let limiter_clone = limiter.clone();
+            handle.spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+                loop {
+                    interval.tick().await;
+                    limiter_clone.retain_recent();
+                }
+            });
+        }
+
+        Self { limiter }
+    }
+
+    pub fn per_second(max_burst: u32) -> Self {
+        Self::new(std::time::Duration::from_secs(1), max_burst)
+    }
+
+    /// Rate-limit key: `user:<sub>` from JWT claims, else `ip:<addr>`, else
+    /// `anonymous`.
+    fn key_for<B>(req: &Request<B>) -> String {
+        if let Some(claims) = req.extensions().get::<serde_json::Value>() {
+            if let Some(sub) = claims.get("sub").and_then(|v| v.as_str()) {
+                return format!("user:{sub}");
+            }
+        }
+        if let Some(addr) = req.extensions().get::<SocketAddr>() {
+            return format!("ip:{}", addr.ip());
+        }
+        "anonymous".to_string()
+    }
+}
+
+#[async_trait]
+impl<B: Send + 'static> Middleware<B> for UserRateLimiter {
+    async fn handle(&self, req: Request<B>, next: Next<'_, B>) -> Result<Response<ResponseBody>> {
+        let key = Self::key_for(&req);
+        match self.limiter.check_key(&key) {
             Ok(()) => next.run(req).await,
             Err(negative) => {
                 let clock = governor::clock::DefaultClock::default();
@@ -2093,5 +2186,30 @@ mod tests {
         let req = test_req(Method::GET, "/other/path");
         let resp = chain.run(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    /// Skipped under Miri: governor uses raw_cpuid (inline assembly) not supported by Miri.
+    #[cfg(not(miri))]
+    #[tokio::test]
+    async fn user_rate_limit_keys_on_sub_claim() {
+        let rl = UserRateLimiter::per_second(1);
+        let handler: HandlerFn<TestBody> =
+            Arc::new(|_| Box::pin(async { Ok(json_response(StatusCode::OK, r#"{"ok":true}"#)) }));
+        let mut chain = MiddlewareChain::new(handler);
+        chain.add(rl);
+
+        // Alice: first request passes, second is limited.
+        let mut req = test_req(Method::GET, "/x");
+        req.extensions_mut().insert(serde_json::json!({"sub": "alice"}));
+        assert_eq!(chain.run(req).await.unwrap().status(), StatusCode::OK);
+
+        let mut req = test_req(Method::GET, "/x");
+        req.extensions_mut().insert(serde_json::json!({"sub": "alice"}));
+        assert_eq!(chain.run(req).await.unwrap().status(), StatusCode::TOO_MANY_REQUESTS);
+
+        // Bob has his own bucket.
+        let mut req = test_req(Method::GET, "/x");
+        req.extensions_mut().insert(serde_json::json!({"sub": "bob"}));
+        assert_eq!(chain.run(req).await.unwrap().status(), StatusCode::OK);
     }
 }

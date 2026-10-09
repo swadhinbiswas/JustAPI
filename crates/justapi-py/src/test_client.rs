@@ -177,6 +177,10 @@ impl JustAPITestClient {
             chain.add(jwt.clone());
         }
 
+        if let Some(rps) = app_ref.user_rate_limit {
+            chain.add(justapi_core::middleware::UserRateLimiter::per_second(rps));
+        }
+
         if let Some(secs) = app_ref.timeout_secs {
             chain.add(justapi_core::resilience::TimeoutMiddleware::new(
                 std::time::Duration::from_secs_f64(secs),

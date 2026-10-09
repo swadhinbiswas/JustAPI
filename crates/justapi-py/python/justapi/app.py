@@ -1621,6 +1621,16 @@ class JustAPIApp:
         """
         self._app.enable_timeout(float(seconds))
 
+    def enable_user_rate_limit(self, requests_per_second: int = 10):
+        """Per-authenticated-user rate limit, keyed on the JWT ``sub`` claim.
+
+        Requires ``set_jwt_auth(...)`` for per-user buckets; requests without
+        a token fall back to the client IP (then a shared anonymous bucket),
+        so dropping the token cannot bypass the limit. Exceeding it returns
+        ``429`` with ``Retry-After``.
+        """
+        self._app.enable_user_rate_limit(int(requests_per_second))
+
     def enable_request_coalescing(self, headers: typing.List[str] = None):
         """
         Enable request coalescing (singleflight).
