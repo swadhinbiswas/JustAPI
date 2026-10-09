@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 **FastAPI parity (Phase 53)**
+- **`justapi serve --workers N`** — Python-app prefork: N workers share the address via `SO_REUSEPORT`, dead workers respawn, SIGTERM/SIGINT drain cleanly. **`justapi serve --reload`** — watches `*.py` files and restarts the app on change (combinable: `--reload --workers 4`).
 - `@app.exception_handler(ExcClass)` decorator (FastAPI form) alongside `add_exception_handler`; `RequestValidationError.errors()` works as a method (FastAPI) *and* as an attribute (historical JustAPI) — `exc.errors` and `exc.errors()` both return the list.
 - Envelope response bodies may be dicts/lists: `{"status": 418, "body": {...}}` now serializes the body as JSON instead of a Python repr.
 - `Param` constraints (`gt/ge/lt/le/multiple_of/min_length/max_length/pattern`) enforced as 422 for path/query/header/cookie params; `Header(convert_underscores=...)`; bool / int / float / Enum / `List[T]` coercion (sync + async handlers). Param metadata (`title`, `description`, `deprecated`, `include_in_schema`) now works and is emitted in OpenAPI (`multipleOf`, `title`, parameter `description`/`deprecated`; hidden params still function at runtime).
