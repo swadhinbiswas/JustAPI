@@ -103,6 +103,16 @@ fn handle_ok_result(
     serialize_response(py, res, helper)
 }
 
+/// Parse an `application/x-www-form-urlencoded` body into `(name, value)`
+/// pairs. Returns `None` for other content types or unparseable bodies.
+fn parse_urlencoded_form(content_type: Option<&str>, body: &[u8]) -> Option<Vec<(String, String)>> {
+    let ct = content_type.unwrap_or("");
+    if !ct.starts_with("application/x-www-form-urlencoded") {
+        return None;
+    }
+    serde_urlencoded::from_bytes::<Vec<(String, String)>>(body).ok()
+}
+
 /// Build the Python `Request` + multipart form dict and invoke the handler.
 /// Shared by the sync (GIL-pool) and async (parallel pool) dispatch paths
 /// (ADR-087).
@@ -119,6 +129,7 @@ fn dispatch_python_handler(
     db_url: Option<&str>,
     trace_ctx: Option<(String, String)>,
     multipart_form_res: Option<justapi_core::multipart::MultipartForm>,
+    urlencoded_form: Option<Vec<(String, String)>>,
     method: &str,
     path: &str,
     scheme: String,
@@ -179,6 +190,15 @@ fn dispatch_python_handler(
                 }
                 d.set_item(name, list).ok();
             }
+        }
+        form_dict_py = Some(d.into());
+    } else if let Some(pairs) = urlencoded_form {
+        // application/x-www-form-urlencoded → same `request["form"]` surface
+        // as multipart text fields, so `Form(...)` params and Pydantic form
+        // models work identically on both encodings.
+        let d = pyo3::types::PyDict::new(py);
+        for (k, v) in pairs.iter() {
+            d.set_item(k, v).ok();
         }
         form_dict_py = Some(d.into());
     }
@@ -958,7 +978,7 @@ where
 
             let req_body = req.into_body();
             let (body_bytes, multipart_form_res) = if is_multipart {
-                let ct = content_type.unwrap();
+                let ct = content_type.clone().unwrap();
                 match justapi_core::multipart::parse_multipart(req_body, &ct).await {
                     Ok(form) => (Bytes::new(), Some(form)),
                     Err(e) => {
@@ -1024,6 +1044,8 @@ where
             };
 
             let handler_id = *matched.handler;
+
+            let urlencoded_form = parse_urlencoded_form(content_type.as_deref(), &body_bytes);
 
             let path_params: Vec<(String, String)> =
                 matched.params.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
@@ -1163,6 +1185,7 @@ where
                         db_url_str.as_deref(),
                         trace_ctx,
                         multipart_form_res.clone(),
+                        urlencoded_form.clone(),
                         method.as_str(),
                         &path,
                         req_scheme.clone(),
@@ -1189,6 +1212,7 @@ where
                         db_url_str.as_deref(),
                         trace_ctx,
                         multipart_form_res.clone(),
+                        urlencoded_form.clone(),
                         method.as_str(),
                         &path,
                         req_scheme.clone(),
@@ -1319,7 +1343,7 @@ where
 
             let multipart_form_res: Option<justapi_core::multipart::MultipartForm> = if is_multipart
             {
-                let ct = content_type.unwrap();
+                let ct = content_type.clone().unwrap();
                 match justapi_core::multipart::parse_multipart(
                     http_body_util::Full::new(body_bytes.clone()),
                     &ct,
@@ -1403,6 +1427,8 @@ where
                 }
             }
 
+            let urlencoded_form = parse_urlencoded_form(content_type.as_deref(), &body_bytes);
+
             let path_params: Vec<(String, String)> =
                 matched.params.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
 
@@ -1437,6 +1463,7 @@ where
                         db_url_str.as_deref(),
                         trace_ctx,
                         multipart_form_res.clone(),
+                        urlencoded_form.clone(),
                         method_clone.as_str(),
                         &path_clone,
                         req_scheme.clone(),
@@ -1463,6 +1490,7 @@ where
                         db_url_str.as_deref(),
                         trace_ctx,
                         multipart_form_res.clone(),
+                        urlencoded_form.clone(),
                         method_clone.as_str(),
                         &path_clone,
                         req_scheme.clone(),
