@@ -1298,6 +1298,11 @@ where
             let is_multipart =
                 content_type.as_deref().unwrap_or("").starts_with("multipart/form-data");
 
+            // Extract JWT claims from the Rust middleware before consuming the
+            // request body (mirrors the server dispatch path).
+            let auth_claims: Option<String> =
+                req.extensions().get::<serde_json::Value>().map(|v| v.to_string());
+
             let body_bytes = match http_body_util::Limited::new(req.into_body(), max_body_size)
                 .collect()
                 .await
@@ -1439,7 +1444,7 @@ where
                         app.as_ref().as_ref().map(|a| a.clone_ref(py)),
                         needs_request_clone[handler_id],
                         http_version.clone(),
-                        None,
+                        auth_claims.clone(),
                     )
                 })
                 .await
@@ -1465,7 +1470,7 @@ where
                         app.as_ref().as_ref().map(|a| a.clone_ref(py)),
                         needs_request_clone[handler_id],
                         http_version.clone(),
-                        None,
+                        auth_claims.clone(),
                     )
                 })
                 .await

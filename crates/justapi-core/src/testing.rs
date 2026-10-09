@@ -92,6 +92,16 @@ impl TestClient {
         self.request(Method::DELETE, path, Vec::new(), &[]).await
     }
 
+    /// OPTIONS with extra request headers (e.g. a CORS preflight's
+    /// `Origin` + `Access-Control-Request-Method`).
+    pub async fn options_with(
+        &self,
+        path: &str,
+        headers: &[(&str, &str)],
+    ) -> Result<TestResponse, anyhow::Error> {
+        self.request(Method::OPTIONS, path, Vec::new(), headers).await
+    }
+
     /// DELETE with extra request headers.
     pub async fn delete_with(
         &self,

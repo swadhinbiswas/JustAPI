@@ -51,7 +51,7 @@ impl JustAPITestClient {
     fn new(app: Py<JustAPIApp>, py: Python<'_>, database: Option<String>) -> PyResult<Self> {
         // Surface the app object on `request.app`.
         let app_py: Option<Py<PyAny>> = Some(app.clone_ref(py).into_bound(py).into_any().unbind());
-        let mut app_ref = app.borrow_mut(py);
+        let app_ref = app.borrow(py);
         // Clone (don't take) the routing tables: the test client should not
         // consume the app, otherwise a second JustAPITestClient built from the
         // same app sees an empty router and returns 404 for every route. The
@@ -140,30 +140,47 @@ impl JustAPITestClient {
             50 * 1024 * 1024,
         );
 
-        // Apply request coalescing (singleflight) if the app enabled it, so the
-        // test client exercises the same pipeline as the real server.
-        let coalesce_headers = app_ref.coalesce_headers.take();
-        let handler: HandlerFn = match coalesce_headers {
-            Some(headers) => {
-                let mut coalescer = RequestCoalescer::new();
-                if !headers.is_empty() {
-                    let mut names = Vec::new();
-                    for h in &headers {
-                        if let Ok(n) = HeaderName::from_bytes(h.as_bytes()) {
-                            names.push(n);
-                        }
+        // Mirror the server's native middleware chain so the test client
+        // exercises the same pipeline: coalescing -> CORS -> secure headers
+        // -> JWT. Configs are cloned (never taken) so the same app can still
+        // run() afterwards or serve several test clients.
+        let mut chain = MiddlewareChain::new(handler);
+
+        if let Some(headers) = app_ref.coalesce_headers.as_ref() {
+            let mut coalescer = RequestCoalescer::new();
+            if !headers.is_empty() {
+                let mut names = Vec::new();
+                for h in headers {
+                    if let Ok(n) = HeaderName::from_bytes(h.as_bytes()) {
+                        names.push(n);
                     }
-                    coalescer = coalescer.with_headers(&names);
                 }
-                let mut chain = MiddlewareChain::new(handler);
-                chain.add(coalescer);
-                Arc::new(move |req| {
-                    let c = chain.clone();
-                    Box::pin(async move { c.run(req).await })
-                })
+                coalescer = coalescer.with_headers(&names);
             }
-            None => handler,
-        };
+            chain.add(coalescer);
+        }
+
+        // CORS outermost of the native middlewares: it must answer OPTIONS
+        // preflight before JWT and decorate auth-error responses.
+        if let Some(cors) = app_ref.cors.as_ref() {
+            chain.add(cors.clone());
+        }
+
+        if app_ref.secure_headers {
+            let sh = app_ref.secure_headers_config.clone().unwrap_or_else(|| {
+                justapi_core::middleware::SecurityHeaders::default().without_hsts()
+            });
+            chain.add(sh);
+        }
+
+        if let Some(jwt) = app_ref.jwt_auth.as_ref() {
+            chain.add(jwt.clone());
+        }
+
+        let handler: HandlerFn = Arc::new(move |req| {
+            let c = chain.clone();
+            Box::pin(async move { c.run(req).await })
+        });
 
         let test_client = TestClient::new(handler);
         Ok(Self { test_client: Some(test_client), db_pool, cookies: Default::default() })
@@ -293,6 +310,22 @@ impl JustAPITestClient {
         self.do_request(py, move |client, rt| {
             let hdr = header_refs(&headers);
             rt.block_on(client.delete_with(&path, &hdr))
+        })
+    }
+
+    /// OPTIONS with extra request headers (CORS preflight testing).
+    #[pyo3(signature = (path, headers))]
+    fn options_with(
+        &self,
+        py: Python<'_>,
+        path: &str,
+        headers: Vec<(String, String)>,
+    ) -> PyResult<Py<PyAny>> {
+        let path = path.to_owned();
+        let headers = self.merge_cookies(headers);
+        self.do_request(py, move |client, rt| {
+            let hdr = header_refs(&headers);
+            rt.block_on(client.options_with(&path, &hdr))
         })
     }
 
