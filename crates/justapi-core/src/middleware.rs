@@ -153,6 +153,7 @@ impl<B: Send + 'static> Middleware<B> for AccessLogger {
     }
 }
 
+#[derive(Clone)]
 pub struct Cors {
     allow_origins: Vec<String>,
     allow_methods: String,
@@ -325,6 +326,7 @@ impl<B: Send + 'static> Middleware<B> for Cors {
     }
 }
 
+#[derive(Clone)]
 pub struct SecurityHeaders {
     hsts: String,
     csp_directives: Vec<String>,
@@ -444,6 +446,19 @@ impl std::fmt::Debug for JwtAuth {
             .field("default_requirement", &self.default_requirement)
             .field("route_rules", &self.route_rules)
             .finish()
+    }
+}
+
+impl Clone for JwtAuth {
+    fn clone(&self) -> Self {
+        Self {
+            validation: self.validation.clone(),
+            decoding_key: self.decoding_key.clone(),
+            route_rules: self.route_rules.clone(),
+            default_requirement: self.default_requirement.clone(),
+            // Fresh flag: the clone re-warns if aud/iss stay unconfigured.
+            warned_aud_iss: std::sync::atomic::AtomicBool::new(false),
+        }
     }
 }
 
