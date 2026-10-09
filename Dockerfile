@@ -17,7 +17,7 @@ RUN python3 -m venv /opt/venv && \
     pip install maturin uv
 ENV PATH="/opt/venv/bin:$PATH"
 
-RUN cargo build --release -p justapi-cli --features tls,compression
+RUN cargo build --release -p justapi-cli --features tls,compression,ws
 RUN strip target/release/justapi-cli
 
 RUN maturin build -m crates/justapi-py/Cargo.toml --release -o wheels/
@@ -33,7 +33,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-COPY --from=builder /app/target/release/justapi-cli /usr/local/bin/justapi
+# The Rust CLI is installed under its real binary name so the Python console
+# script (`justapi`) can delegate create/check/openapi to it. Naming it
+# `justapi` here would be overwritten by the pip console script (and silently
+# break `justapi serve` for Python apps — the Rust binary cannot load them).
+COPY --from=builder /app/target/release/justapi-cli /usr/local/bin/justapi-cli
 COPY --from=builder /app/wheels /tmp/wheels
 
 RUN pip install uv && uv pip install --system /tmp/wheels/*.whl && rm -rf /tmp/wheels
