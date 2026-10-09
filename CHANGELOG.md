@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Pydantic body models work now (the flagship FastAPI pattern).** `def create_item(item: Item)` previously returned `422 field required` — the repository's own `demo_app.py` was broken. Plain model params, `Body(..., embed=True)`, and `Form(...)` with Pydantic models (multipart *and* urlencoded) all parse into validated model instances now, with `422` + field details on validation errors.
+- **`Query(...)` / `Body(...)` required params no longer leak `Ellipsis`.** A missing required parameter returned `200` with the literal `Ellipsis` as its value; it now returns `422 field required`.
 - **`justapi serve` served nothing** — the Rust CLI never registered its default routes (every request, including `/live`, returned 404). Default routes now include `/hello`, `/echo`, `/health`, `/live`, `/ready`, `/metrics`, `/openapi.json`, `/events` and GraphQL; the CLI also gained a `ws` feature so the WebSocket echo route works.
 - **Python CLI `justapi serve`** no longer delegates to the Rust binary (which cannot load Python apps and would serve 404s); it always runs your `app.py`/`main.py` and now accepts `--addr`. The Docker image installs the Rust CLI as `justapi-cli` so the pip console script is not clobbered.
 - **CORS + JWT together:** OPTIONS preflight is no longer rejected with `401` (browsers send no credentials on preflight), and auth-error responses (`401`) now carry `Access-Control-*` headers so browsers can read them. CORS now runs outermost in the native middleware chain.
