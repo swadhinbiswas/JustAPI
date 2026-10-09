@@ -84,3 +84,57 @@ impl WasmEngine {
         Ok(out_str)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A minimal middleware module: `allocate` hands out a fixed buffer,
+    /// `process_request` returns a pointer/length pair into a preloaded
+    /// static response — enough to exercise the whole host<->wasm protocol.
+    const STATIC_RESPONSE: &str = r#"(module
+      (memory (export "memory") 1)
+      (data (i32.const 16) "{\"ok\":true}")
+      (func (export "allocate") (param i32) (result i32) i32.const 64)
+      (func (export "process_request") (param i32 i32) (result i64)
+        ;; (16 << 32) | 11  -> pointer 16, length 11
+        i64.const 68719476747)
+    )"#;
+
+    #[tokio::test]
+    async fn executes_wat_module_and_reads_response() {
+        let engine = WasmEngine::new(STATIC_RESPONSE.as_bytes()).unwrap();
+        let out = engine.execute_middleware("{\"path\":\"/x\"}").await.unwrap();
+        assert_eq!(out, r#"{"ok":true}"#);
+    }
+
+    #[tokio::test]
+    async fn rejects_oversized_output_length() {
+        // Returns pointer 0 / length 1_000_000 — far past the memory size.
+        let wat = r#"(module
+          (memory (export "memory") 1)
+          (func (export "allocate") (param i32) (result i32) i32.const 64)
+          (func (export "process_request") (param i32 i32) (result i64)
+            i64.const 1000000)
+        )"#;
+        let engine = WasmEngine::new(wat.as_bytes()).unwrap();
+        let err = engine.execute_middleware("{}").await.unwrap_err();
+        assert!(err.to_string().contains("exceeds max safe"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn rejects_module_without_memory_export() {
+        let wat = r#"(module
+          (func (export "allocate") (param i32) (result i32) i32.const 0)
+          (func (export "process_request") (param i32 i32) (result i64) i64.const 0)
+        )"#;
+        let engine = WasmEngine::new(wat.as_bytes()).unwrap();
+        let err = engine.execute_middleware("{}").await.unwrap_err();
+        assert!(err.to_string().contains("Failed to find memory"), "{err}");
+    }
+
+    #[test]
+    fn rejects_invalid_wasm_bytes() {
+        assert!(WasmEngine::new(b"not wasm").is_err());
+    }
+}
