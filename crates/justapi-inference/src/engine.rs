@@ -216,9 +216,46 @@ impl Engine {
         let (tx, rx) = mpsc::unbounded_channel();
         let prompt = prompt.to_vec();
         std::thread::spawn(move || {
-            let _ = model.generate(&prompt, &params, &|token| tx.send(token).is_ok());
+            // Surface generation errors instead of silently closing the
+            // stream with zero tokens (which looks like a hang to callers).
+            if let Err(e) = model.generate(&prompt, &params, &|token| tx.send(token).is_ok()) {
+                eprintln!("[justapi-inference] generation failed: {e}");
+                tracing::error!(error = %e, "generation failed");
+            }
         });
         Ok(rx)
+    }
+
+    /// Encode text into token ids with the named model's tokenizer.
+    pub fn encode(&self, name: &str, text: &str) -> Result<Vec<u32>, ModelError> {
+        let model = {
+            let reg = self.registry.lock().unwrap();
+            reg.get(name).ok_or_else(|| ModelError::NotFound(name.to_string()))?
+        };
+        model.encode(text)
+    }
+
+    /// Decode token ids back into text with the named model's tokenizer.
+    pub fn decode(&self, name: &str, ids: &[u32]) -> Result<String, ModelError> {
+        let model = {
+            let reg = self.registry.lock().unwrap();
+            reg.get(name).ok_or_else(|| ModelError::NotFound(name.to_string()))?
+        };
+        model.decode(ids)
+    }
+
+    /// Generate from a **text** prompt: encodes with the model's tokenizer and
+    /// streams tokens like [`Engine::generate`]. Real models are only usable
+    /// end-to-end through this method (their vocabularies need the loaded
+    /// tokenizer, not the mock byte mapping).
+    pub fn generate_text(
+        &self,
+        name: &str,
+        prompt: &str,
+        params: SamplingParams,
+    ) -> Result<mpsc::UnboundedReceiver<GeneratedToken>, ModelError> {
+        let ids = self.encode(name, prompt)?;
+        self.generate(name, &ids, params)
     }
 
     /// List registered model names.

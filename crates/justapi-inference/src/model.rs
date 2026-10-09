@@ -100,6 +100,19 @@ pub trait Model: Send + Sync {
     /// from [`Model::generate`]'s behavior, but real models should compute true
     /// logits from a single forward pass.
     fn forward_logits(&self, context: &[u32]) -> Result<Vec<f32>, ModelError>;
+
+    /// Encode text into token ids.
+    ///
+    /// Real models use their loaded tokenizer; the default is the mock's
+    /// deterministic byte mapping so existing callers keep working.
+    fn encode(&self, text: &str) -> Result<Vec<u32>, ModelError> {
+        Ok(MockModel::tokenize(text))
+    }
+
+    /// Decode token ids back into text.
+    fn decode(&self, ids: &[u32]) -> Result<String, ModelError> {
+        Ok(MockModel::detokenize(ids))
+    }
 }
 
 /// Deterministic, weight-free model for tests, demos, and CI on CPU-only boxes.
