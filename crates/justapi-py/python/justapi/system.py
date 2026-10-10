@@ -86,6 +86,20 @@ def _copy_param_meta(info: dict, default) -> None:
         info["include_in_schema"] = False
 
 
+def _attach_model_schema(info, ann):
+    """Attach a Pydantic model's JSON Schema to a body-param descriptor."""
+    if not inspect.isclass(ann):
+        return
+    fn = getattr(ann, "model_json_schema", None) or getattr(ann, "schema", None)
+    if not callable(fn):
+        return
+    try:
+        info["json_schema"] = fn()
+        info["model_name"] = getattr(ann, "__name__", None)
+    except Exception:
+        pass
+
+
 def _classify_param(name, param, hints, method, path):
     import enum
     import re
@@ -124,10 +138,12 @@ def _classify_param(name, param, hints, method, path):
         info["in"] = _PARAM_KINDS[type(default).__name__]
         _copy_param_meta(info, default)
         dflt = getattr(default, "default", inspect.Parameter.empty)
-        if dflt is inspect.Parameter.empty:
+        if dflt is inspect.Parameter.empty or dflt is ...:
             info["required"] = True
         else:
             info["default"] = dflt
+        if info["in"] == "body":
+            _attach_model_schema(info, ann)
         return info
     ann_name = getattr(ann, "__name__", None)
     if _is_upload_ann(ann):
@@ -144,6 +160,7 @@ def _classify_param(name, param, hints, method, path):
     if method in write_methods and param.default is inspect.Parameter.empty:
         info["in"] = "body"
         info["required"] = True
+        _attach_model_schema(info, ann)
         return info
     if param.default is not inspect.Parameter.empty:
         info["in"] = "query"
@@ -368,6 +385,22 @@ def build_openapi(app):
                 parameters.append(param)
             elif p["in"] in ("body", "form", "file"):
                 body_schema = _route_body_schema(d)
+                model_name = None
+                if body_schema is not None:
+                    # Explicit `body_schema=`/`schema=` was passed to the route.
+                    explicit = d.get("body_schema") or d.get("schema")
+                    model_name = getattr(explicit, "__name__", None)
+                else:
+                    # Body detected from a handler parameter's annotation.
+                    for cand in d["parameters"]:
+                        if cand.get("json_schema") is not None:
+                            body_schema = cand["json_schema"]
+                            model_name = cand.get("model_name")
+                            break
+                if body_schema is not None and model_name:
+                    schemas = components.setdefault("schemas", {})
+                    schemas.setdefault(model_name, body_schema)
+                    body_schema = {"$ref": f"#/components/schemas/{model_name}"}
                 request_body = {"content": {"application/json": {"schema": body_schema or {"type": "object"}}}}
         if parameters:
             op["parameters"] = parameters

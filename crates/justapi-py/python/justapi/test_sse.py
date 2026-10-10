@@ -59,3 +59,31 @@ def test_router_sse_include_prefix_tags():
     op = doc["paths"]["/api/v1/events"]["get"]
     assert op.get("tags") == ["stream"]
     assert op.get("summary") == "EV"
+
+
+def test_sse_decorator_zero_arg_and_request_handlers():
+    """`.sse` handlers may take no parameters or a single `request`."""
+    from justapi import JustAPIApp, JustAPITestClient
+
+    app = JustAPIApp()
+
+    @app.sse("/zero")
+    async def zero_arg():
+        for i in range(3):
+            yield f"data: {i}\n\n"
+
+    @app.sse("/with-request")
+    async def with_request(request):
+        path = request["path"]
+        yield f"data: {path}\n\n"
+
+    client = JustAPITestClient(app)
+
+    r = client.get("/zero")
+    assert r["status"] == 200
+    body = bytes(r["body"]).decode()
+    assert "data: 0" in body and "data: 2" in body
+
+    r = client.get("/with-request")
+    assert r["status"] == 200
+    assert "data: /with-request" in bytes(r["body"]).decode()

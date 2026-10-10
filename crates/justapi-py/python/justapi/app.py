@@ -2162,14 +2162,26 @@ class JustAPIApp:
 
 
     def _wrap_sse_handler(self, func):
-        """Wrap a generator/async-generator handler into a TokenStreamResponse."""
+        """Wrap a generator/async-generator handler into a TokenStreamResponse.
+
+        The handler may take zero parameters or a single ``request`` parameter;
+        each yielded item is streamed as an SSE event.
+        """
+        try:
+            takes_request = len(inspect.signature(func).parameters) > 0
+        except (ValueError, TypeError):
+            takes_request = True
+
+        def _call(request):
+            return func(request) if takes_request else func()
+
         if inspect.isasyncgenfunction(func):
             def wrapper(request):
-                return TokenStreamResponse(func(request))
+                return TokenStreamResponse(_call(request))
             return wrapper
 
         def wrapper(request):
-            gen = func(request)
+            gen = _call(request)
 
             async def agen():
                 for item in gen:
