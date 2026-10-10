@@ -384,21 +384,19 @@ impl AnyPool {
     /// positional `$1`, `$2`, ...; SQLite and MySQL accept `?` natively so the
     /// SQL is returned unchanged. This lets callers always pass `?` regardless
     /// of the backing engine.
-    fn normalize_sql(&self, sql: &str) -> String {
-        if self.kind != DbKind::Postgres {
-            return sql.to_string();
-        }
-        let mut out = String::with_capacity(sql.len());
-        let mut idx: usize = 0;
-        for ch in sql.chars() {
-            if ch == '?' {
-                idx += 1;
-                out.push_str(&format!("${}", idx));
-            } else {
-                out.push(ch);
-            }
-        }
-        out
+    ///
+    /// For Postgres each placeholder is additionally pinned to a concrete type
+    /// (`$1::int8`, `$2::float8`, ...) derived from the bound value. sqlx's
+    /// `Any` driver caches prepared statements per SQL text, and the cached
+    /// statement's parameter types come from the *first* execution — a later
+    /// execution binding a different Rust type at the same position (e.g. an
+    /// `int` amount after a `float` one) would be encoded against the stale
+    /// type, silently writing reinterpreted bytes (`950` stored as
+    /// `4.69e-321` in a `double precision` column). Pinning the type makes the
+    /// SQL text — and therefore the cached statement — a function of the bound
+    /// value types, so every execution is encoded correctly.
+    fn normalize_sql(&self, sql: &str, params: &[Param]) -> String {
+        normalize_placeholders(sql, params, self.kind)
     }
 
     pub fn default_isolation(&self) -> Option<IsolationLevel> {
@@ -500,7 +498,7 @@ impl AnyPool {
         sql: &str,
         params: &[Param],
     ) -> Result<serde_json::Value, sqlx::Error> {
-        let sql = self.normalize_sql(sql);
+        let sql = self.normalize_sql(sql, params);
         let mut q = sqlx::query(&sql);
         for p in params {
             q = bind_param(q, p);
@@ -521,7 +519,7 @@ impl AnyPool {
 
     /// Like [`AnyPool::execute_with_params`] but accepts typed [`Param`]s.
     pub async fn execute_with(&self, sql: &str, params: &[Param]) -> Result<u64, sqlx::Error> {
-        let sql = self.normalize_sql(sql);
+        let sql = self.normalize_sql(sql, params);
         let mut q = sqlx::query(&sql);
         for p in params {
             q = bind_param(q, p);
@@ -543,7 +541,7 @@ impl AnyPool {
         chunk: usize,
     ) -> Result<Vec<serde_json::Value>, sqlx::Error> {
         let chunk = chunk.max(1);
-        let sql = self.normalize_sql(sql);
+        let sql = self.normalize_sql(sql, params);
         let mut q = sqlx::query(&sql);
         for p in params {
             q = bind_param(q, p);
@@ -600,7 +598,7 @@ impl AnyPool {
         let mut last_rows: serde_json::Value = serde_json::Value::Null;
         let mut total_affected: u64 = 0;
         for (sql, params) in stmts {
-            let sql = self.normalize_sql(sql);
+            let sql = self.normalize_sql(sql, params);
             let mut q = sqlx::query(&sql);
             for p in params {
                 q = bind_param(q, p);
@@ -689,6 +687,112 @@ impl AnyPool {
         }
         let rows = q.fetch_all(&self.inner).await?;
         rows_to_json(rows)
+    }
+}
+
+/// Rewrite `?` placeholders for the target driver.
+///
+/// SQLite/MySQL accept `?` as-is. Postgres gets positional `$N` plus a type
+/// pin derived from each bound value (see [`AnyPool::normalize_sql`] for why).
+/// The scanner skips string literals, quoted identifiers and comments, so a
+/// literal `'?'` or a `-- what?` comment is never rewritten.
+fn normalize_placeholders(sql: &str, params: &[Param], kind: DbKind) -> String {
+    if kind != DbKind::Postgres {
+        return sql.to_string();
+    }
+    #[derive(PartialEq)]
+    enum State {
+        Normal,
+        Single,
+        Double,
+        LineComment,
+        BlockComment,
+    }
+
+    let mut out = String::with_capacity(sql.len() + params.len() * 10);
+    let mut idx: usize = 0;
+    let mut state = State::Normal;
+    let mut chars = sql.chars().peekable();
+    while let Some(c) = chars.next() {
+        match state {
+            State::Normal => match c {
+                '\'' => {
+                    state = State::Single;
+                    out.push(c);
+                }
+                '"' => {
+                    state = State::Double;
+                    out.push(c);
+                }
+                '-' if chars.peek() == Some(&'-') => {
+                    state = State::LineComment;
+                    out.push(c);
+                }
+                '/' if chars.peek() == Some(&'*') => {
+                    state = State::BlockComment;
+                    out.push(c);
+                }
+                '?' => {
+                    idx += 1;
+                    out.push_str(&format!("${}", idx));
+                    if let Some(p) = params.get(idx - 1) {
+                        out.push_str(param_cast(p));
+                    }
+                }
+                _ => out.push(c),
+            },
+            State::Single => {
+                out.push(c);
+                if c == '\'' {
+                    if chars.peek() == Some(&'\'') {
+                        out.push(chars.next().expect("peeked quote"));
+                    } else {
+                        state = State::Normal;
+                    }
+                }
+            }
+            State::Double => {
+                out.push(c);
+                if c == '"' {
+                    if chars.peek() == Some(&'"') {
+                        out.push(chars.next().expect("peeked quote"));
+                    } else {
+                        state = State::Normal;
+                    }
+                }
+            }
+            State::LineComment => {
+                out.push(c);
+                if c == '\n' {
+                    state = State::Normal;
+                }
+            }
+            State::BlockComment => {
+                out.push(c);
+                if c == '*' && chars.peek() == Some(&'/') {
+                    out.push(chars.next().expect("peeked slash"));
+                    state = State::Normal;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The explicit Postgres cast pinning a bound value's type in the SQL text.
+///
+/// `None` and JSON params get no cast: an untyped `$N` lets Postgres infer the
+/// type from context (and JSON is bound as text today). Callers needing a
+/// specific type for a `NULL` can write `?::int` — the placeholder rewrite
+/// keeps user-written casts valid (`$1::int8::int`).
+fn param_cast(p: &Param) -> &'static str {
+    match p {
+        Param::Bool(_) => "::bool",
+        Param::Int(_) => "::int8",
+        Param::Float(_) => "::float8",
+        Param::Text(_) => "::text",
+        Param::Bytes(_) => "::bytea",
+        Param::Null | Param::Json(_) => "",
     }
 }
 
@@ -879,6 +983,70 @@ impl PoolManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_normalize_placeholders_sqlite_unchanged() {
+        let sql = "SELECT * FROM t WHERE a = ? AND b = ?";
+        let out =
+            normalize_placeholders(sql, &[Param::Int(1), Param::Text("x".into())], DbKind::Sqlite);
+        assert_eq!(out, sql);
+    }
+
+    #[test]
+    fn test_normalize_placeholders_postgres_casts() {
+        let out = normalize_placeholders(
+            "INSERT INTO t (i, f, s, b, n, j) VALUES (?, ?, ?, ?, ?, ?)",
+            &[
+                Param::Int(1),
+                Param::Float(1.5),
+                Param::Text("x".into()),
+                Param::Bytes(vec![1, 2]),
+                Param::Null,
+                Param::Json(serde_json::json!({"a": 1})),
+            ],
+            DbKind::Postgres,
+        );
+        assert_eq!(
+            out,
+            "INSERT INTO t (i, f, s, b, n, j) VALUES ($1::int8, $2::float8, $3::text, $4::bytea, $5, $6)"
+        );
+    }
+
+    #[test]
+    fn test_normalize_placeholders_skips_literals_and_comments() {
+        // `?` inside a string literal, a doubled-quote escape, a quoted
+        // identifier, a line comment and a block comment must not be rewritten.
+        let out = normalize_placeholders(
+            "SELECT '?', 'it''s ?', \"we?ird\" -- trailing ?\nFROM t /* ? */ WHERE a = ?",
+            &[Param::Int(7)],
+            DbKind::Postgres,
+        );
+        assert_eq!(
+            out,
+            "SELECT '?', 'it''s ?', \"we?ird\" -- trailing ?\nFROM t /* ? */ WHERE a = $1::int8"
+        );
+    }
+
+    #[test]
+    fn test_normalize_placeholders_keeps_user_cast_valid() {
+        // A user-written cast after `?` still parses (`$1::int8::int`).
+        let out = normalize_placeholders(
+            "INSERT INTO t (n) VALUES (?::int)",
+            &[Param::Int(3)],
+            DbKind::Postgres,
+        );
+        assert_eq!(out, "INSERT INTO t (n) VALUES ($1::int8::int)");
+    }
+
+    #[test]
+    fn test_normalize_placeholders_bool() {
+        let out = normalize_placeholders(
+            "SELECT * FROM t WHERE flag = ?",
+            &[Param::Bool(true)],
+            DbKind::Postgres,
+        );
+        assert_eq!(out, "SELECT * FROM t WHERE flag = $1::bool");
+    }
 
     #[test]
     fn test_db_kind_from_url() {

@@ -157,3 +157,49 @@ async def test_async_client_no_db():
         resp = await c.get("/ping")
         assert_ok(resp)
         assert_json(resp, {"pong": True})
+
+
+# ---------------------------------------------------------------------------
+# Postgres (opt-in): parameter type consistency
+# ---------------------------------------------------------------------------
+
+PG_URL = __import__("os").environ.get("JUSTAPI_TEST_POSTGRES_URL")
+
+
+@pytest.mark.skipif(not PG_URL, reason="set JUSTAPI_TEST_POSTGRES_URL to run")
+def test_postgres_same_sql_different_param_types():
+    """The same SQL executed with a float then an int must store both correctly.
+
+    sqlx's `Any` driver caches a prepared statement per SQL text with the
+    parameter types from the first execution; a later execution binding a
+    different Rust type at the same position used to be encoded against the
+    stale type — an int written into a `double precision` column landed as
+    reinterpreted bits (`950` -> `4.69e-321`). The pool now pins each
+    Postgres placeholder to the bound value's type (`$1::float8`,
+    `$2::int8`, ...) so the SQL text tracks the value types.
+    """
+    app = JustAPIApp()
+    app.set_database(PG_URL)
+    db = app.db
+    db.execute("DROP TABLE IF EXISTS param_type_consistency")
+    try:
+        db.execute(
+            "CREATE TABLE param_type_consistency (id SERIAL PRIMARY KEY, f DOUBLE PRECISION)"
+        )
+        # Same SQL text, different parameter types.
+        db.execute("INSERT INTO param_type_consistency (f) VALUES (?)", [1.5])
+        db.execute("INSERT INTO param_type_consistency (f) VALUES (?)", [950])
+        db.execute("INSERT INTO param_type_consistency (f) VALUES (?)", [2.25])
+        rows = db.query("SELECT f FROM param_type_consistency ORDER BY id")
+        assert [row["f"] for row in rows] == [1.5, 950.0, 2.25]
+
+        # Placeholder rewriting must not touch `?` inside literals/comments.
+        literal = db.query("SELECT '?' AS q, ? AS v", [7])[0]
+        assert literal == {"q": "?", "v": 7}
+
+        # A user-written cast after `?` still parses.
+        db.execute("DELETE FROM param_type_consistency")
+        db.execute("INSERT INTO param_type_consistency (f) VALUES (?::int)", [3])
+        assert db.query("SELECT f FROM param_type_consistency")[0]["f"] == 3.0
+    finally:
+        db.execute("DROP TABLE IF EXISTS param_type_consistency")

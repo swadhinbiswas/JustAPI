@@ -3877,3 +3877,53 @@ including a subprocess live-server test for the decorator status); live
 server curl run covering CRUD statuses (201/200/204/400/404/422), filters,
 all five analytics endpoints, SSE, `/ready`, background audit rows, and the
 OpenAPI `$ref` schemas.
+
+## ADR-100 — 2026-10-10 — Postgres portability: type-pinned placeholders; example runs on both engines
+
+**Context.** Running `examples/expense_analytics` against a real Postgres 16
+container (the "production database" path) exposed three defects:
+
+1. **Silent data corruption via sqlx's `Any` statement cache.** The `Any`
+   driver caches prepared statements per SQL text; the cached statement's
+   parameter types come from the *first* execution. The seed's
+   `INSERT INTO expenses (...) VALUES (?, ?, ?, ?)` was first executed with a
+   float amount and later with an int (`950` for rent) — the int was encoded
+   against the cached `float8` type, writing the i64 *bits* into the column:
+   `950` stored as `4.69e-321`. Every affected row was silently wrong
+   (`SUM(amount)` 11,013 instead of 22,403).
+2. **`TIMESTAMPTZ` is not decodable by the `Any` driver** ("Any driver does
+   not support the Postgres type PgTypeInfo(Timestamptz)") — every
+   `RETURNING *` on a table with a `timestamptz` column raised at runtime.
+3. **A `NULL` bound parameter is typed as text**, so `INSERT ... VALUES
+   (?, ?)` with `None` for an integer column fails with `column ... is of
+   type integer but expression is of type text`.
+
+**Decision.**
+
+- `normalize_sql` now rewrites `?` → `$N::<type>` for Postgres, pinning each
+  placeholder to the bound value's Rust type (`int8`, `float8`, `bool`,
+  `text`, `bytea`; no cast for `NULL`/JSON, letting Postgres infer). Because
+  the SQL text is a function of the value types, the cached statement can
+  never be reused with a mismatched encoding. The scanner also became
+  quote/comment-aware, so a `'?'` literal, a `"-- what?"` comment or a
+  `"we?ird"` identifier is no longer rewritten (previously it was).
+- `NULL` params keep no cast (Postgres infers from context in most positions);
+  where the position is an integer column, callers omit the column or write
+  `?::int` — the rewrite keeps user casts valid (`$1::int8::int`). Documented
+  in the example and covered by the opt-in Postgres test.
+- The example uses dialect-appropriate DDL (`SERIAL` / `TEXT` timestamps via
+  `now()::text` on Postgres) and does its rounding in Python instead of SQL
+  (`ROUND(double precision, int)` does not exist in Postgres, and `NUMERIC`
+  is not decodable through `Any`). `?` placeholders and the `app.db` API are
+  identical on both engines.
+- CI gained a `postgres:16-alpine` service in the pytest job and sets
+  `JUSTAPI_TEST_POSTGRES_URL`, so the opt-in Postgres tests run on every push.
+
+**Consequences.** Postgres users get correct parameter encoding at the cost
+of one `format!` per placeholder (statement text differs per value-type
+combination — the statement cache still holds one entry per *type signature*,
+not per execution). Verified: 5 unit tests for the rewriter; opt-in
+integration test (same SQL with float→int→float, literal `'?'`, user cast);
+live example on Postgres 16 — seed (294 rows, `SUM` exact), create/patch/
+delete (201/200/204), analytics summary/by-category/monthly/trend/top,
+background audit rows; SQLite suite unchanged (267 passed, 3 skipped).
