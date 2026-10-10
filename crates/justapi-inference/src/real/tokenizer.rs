@@ -102,7 +102,20 @@ impl Tokenizer {
                 "prepend_scheme": "always",
                 "split": true,
             });
-            (metaspace.clone(), metaspace)
+            // Decoder side: `▁` → space and `<0xNN>` byte-fallback tokens →
+            // their bytes. NOTE: no `Strip` step here — the per-token decode
+            // used for streaming must keep the leading space of each token;
+            // the artificial leading space of a *full* sequence is removed by
+            // `Tokenizer::decode` instead.
+            let llama_decoder = serde_json::json!({
+                "type": "Sequence",
+                "decoders": [
+                    {"type": "Replace", "pattern": {"String": "▁"}, "content": " "},
+                    {"type": "ByteFallback"},
+                    {"type": "Fuse"}
+                ]
+            });
+            (metaspace, llama_decoder)
         } else {
             let byte_level = serde_json::json!({
                 "type": "ByteLevel",
@@ -151,15 +164,26 @@ impl Tokenizer {
     }
 
     /// Decode a sequence of token IDs to text.
+    ///
+    /// SentencePiece vocabularies prepend `▁` to the first token, which the
+    /// decoder turns into a leading space; it is removed here so a full
+    /// round-trip returns the original text.
     pub fn decode(&self, ids: &[u32]) -> Result<String, ModelError> {
-        self.inner
+        let text = self
+            .inner
             .decode(ids, true)
-            .map_err(|e| ModelError::Generation(format!("tokenizer decode failed: {e}")))
+            .map_err(|e| ModelError::Generation(format!("tokenizer decode failed: {e}")))?;
+        Ok(text.strip_prefix(' ').map(str::to_owned).unwrap_or(text))
     }
 
-    /// Decode a single token ID to text.
+    /// Decode a single token ID to text, **keeping** its leading space.
+    ///
+    /// Used for streaming: token texts are concatenated, so each piece must
+    /// carry its own `▁` → space conversion.
     pub fn decode_token(&self, id: u32) -> Result<String, ModelError> {
-        self.decode(&[id])
+        self.inner
+            .decode(&[id], true)
+            .map_err(|e| ModelError::Generation(format!("tokenizer decode failed: {e}")))
     }
 
     /// Vocabulary size.

@@ -393,7 +393,7 @@ impl Model for RealModel {
         for step in 0..params.max_tokens {
             let text = self
                 .tokenizer
-                .decode(&[token])
+                .decode_token(token)
                 .map_err(|e| ModelError::Generation(e.to_string()))?;
             let is_stop = params.stop_tokens.contains(&token);
             let finish = if is_stop { Some(FinishReason::Stop) } else { None };
