@@ -11,12 +11,29 @@ JustAPI returns `200 OK` by default for successful responses that don't use a
 
 ## Explicit Status Code
 
-The `status_code=` route decorator kwarg (e.g. `@app.post("/items", status_code=201)`)
-is **OpenAPI documentation metadata only** — it documents the expected success
-code in the generated schema but does **not** alter the actual HTTP status of a
-plain dict/JSON return (which is still `200`).
+Set the success status directly on the decorator (FastAPI parity):
 
-To actually set the response status, return a `Response` object:
+```python
+@app.post("/items", status_code=201)
+def create_item():
+    return {"message": "created"}
+```
+
+The decorator's `status_code=` is applied to plain dict/list/scalar returns.
+Explicit responses always win over it:
+
+| Return value | Status sent |
+|---|---|
+| `@app.post(..., status_code=201)` + dict | `201` |
+| `JSONResponse(..., status_code=207)` on a `status_code=202` route | `207` |
+| `{"status": 204}` envelope on a `status_code=201` route | `204` |
+
+A data dict that merely *contains* a `status` key (e.g.
+`{"status": "ok", "n": 1}`) is not an envelope — it is serialized as JSON and
+the decorator status applies.
+
+To return a status dynamically (e.g. depending on the outcome), return a
+`Response` object:
 
 ```python
 from justapi import JustAPIApp, JSONResponse

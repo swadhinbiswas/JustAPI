@@ -3814,3 +3814,66 @@ tuning.
 
 **Evidence:** `crates/justapi-inference/tests/real_weights.rs` (ignored test,
 `JUSTAPI_REAL_MODEL_DIR`), BENCHMARKS.md entry 2026-10-10.
+
+## ADR-099 — 2026-10-10 — Example-app dogfooding: PEP 563, applied `status_code=`, SSE arity
+
+**Context.** Building `examples/expense_analytics/` (a full SQLite + analytics
+app with 20 end-to-end tests) surfaced four real gaps that unit tests had not
+hit, because the example used idiomatic modern Python that the test suite did
+not:
+
+1. **PEP 563 (`from __future__ import annotations`) broke parameter
+   resolution.** Annotations were read raw from `inspect.signature`, so a
+   stringified `item: ExpenseCreate` was not recognised as a Pydantic model
+   ("field required"), `int`/`float`/`Enum` query values stayed strings, and
+   `Query` numeric constraints silently passed (`"0" < 1` never ran because
+   the value was not a number). FastAPI evaluates string annotations; users
+   migrating real codebases (where the future import is common) would have hit
+   this immediately.
+2. **`status_code=` on the route decorator was metadata-only.** It appeared in
+   the OpenAPI document but the response was still `200`. FastAPI applies it;
+   the documented "metadata only" behaviour was a JustAPI quirk, not a design
+   win.
+3. **OpenAPI lost request bodies for handler-annotated models.** The
+   `requestBody` fell back to `{"type": "object"}` because the body schema was
+   only taken from an explicit `body_schema=` kwarg, and required
+   `Query(...)` params were marked optional (the `Ellipsis` default leaked
+   through as `info["default"]`).
+4. **`@app.sse` always passed `request`** to the handler, so the documented
+   "a generator yielding strings" form raised `TypeError` for zero-argument
+   handlers.
+
+**Decision.**
+
+- Resolve annotations once at registration via a `_resolve_signature` helper
+  (`typing.get_type_hints` with a raw-signature fallback), and use it for
+  route handlers *and* dependency callables. This is Python-side glue over
+  user callables (AGENTS.md §2 allows binding glue; the resolution is done
+  once per route, not per request).
+- `status_code=` is now **applied** to plain dict/list/scalar returns (Rust
+  side: per-handler status tracked at registration, threaded through
+  `dispatch → call → handle_ok_result → serialize_response`). Explicit
+  `Response` objects, envelope dicts and streaming responses keep their own
+  status — they win over the decorator. Pydantic model returns gained a Rust
+  fast path (`model_dump_json`) so the flagship
+  `def create(item: Item): return item` pattern no longer round-trips through
+  Python `wrap_result` (and picks up the decorator status).
+- OpenAPI: body schemas detected from handler annotations are registered in
+  `components.schemas` and referenced with `$ref`; `Query(...)` with
+  `Ellipsis` is `required: true` and no longer emits a bogus default.
+- `@app.sse` inspects the handler signature: zero-arg generators and
+  `request`-taking generators both work.
+
+**Consequences.** This is a **behaviour change** for anyone who relied on
+`status_code=` being decorative (their routes now return the documented
+status). It is the FastAPI-compatible behaviour and is called out in
+`CHANGELOG.md` (2.1.0). The annotation resolution adds one `get_type_hints`
+call per route registration (startup cost only). The Pydantic fast path
+removes a GIL-bound `wrap_result` call per model return.
+
+**Verified.** 20/20 example tests; 245 Python tests green (18 new regression
+tests in `test_pep563_annotations.py` + `test_status_code_parity.py`,
+including a subprocess live-server test for the decorator status); live
+server curl run covering CRUD statuses (201/200/204/400/404/422), filters,
+all five analytics endpoints, SSE, `/ready`, background audit rows, and the
+OpenAPI `$ref` schemas.

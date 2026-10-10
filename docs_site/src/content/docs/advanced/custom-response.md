@@ -114,8 +114,8 @@ def pretty():
 ## Response + Status Code
 
 Set a non-default status by returning a response object with an explicit
-`status_code` (the route-decorator `status_code=` kwarg is OpenAPI metadata,
-not applied to the response):
+`status_code` (it always wins over the route decorator's `status_code=`,
+which applies to plain dict/list/scalar returns):
 
 ```python
 from justapi import JSONResponse
