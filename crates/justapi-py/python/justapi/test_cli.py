@@ -46,3 +46,46 @@ def test_serve_parser_accepts_workers_and_reload():
     assert args.workers == 1
     assert args.reload is False
     assert args.addr == "127.0.0.1:8000"
+
+
+def test_load_app_module_registers_in_sys_modules(tmp_path, monkeypatch):
+    """`justapi serve` must register the app module in sys.modules.
+
+    Pydantic resolves a model's own annotations through
+    `sys.modules[cls.__module__]`; without registration, models using
+    `from __future__ import annotations` stay "not fully defined" and every
+    validated request returns 422 (found by serving examples/expense_analytics
+    with `justapi serve --workers 4`).
+    """
+    import sys
+
+    (tmp_path / "app.py").write_text(
+        "from __future__ import annotations\n"
+        "\n"
+        "from datetime import date\n"
+        "\n"
+        "from pydantic import BaseModel\n"
+        "\n"
+        "from justapi import JustAPIApp\n"
+        "\n"
+        "\n"
+        "class Item(BaseModel):\n"
+        "    spent_on: date\n"
+        "\n"
+        "\n"
+        "app = JustAPIApp()\n"
+        "\n"
+        "\n"
+        "@app.post('/items', status_code=201)\n"
+        "def create(item: Item):\n"
+        "    return {'day': str(item.spent_on)}\n"
+    )
+    monkeypatch.chdir(tmp_path)
+    try:
+        module = cli._load_app_module("app.py")
+        assert sys.modules.get("app") is module
+        # The model resolves its `date` annotation (this failed before the fix).
+        item = module.Item.model_validate({"spent_on": "2026-10-10"})
+        assert str(item.spent_on) == "2026-10-10"
+    finally:
+        sys.modules.pop("app", None)

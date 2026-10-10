@@ -53,6 +53,24 @@ def cmd_version(args: argparse.Namespace) -> None:
     print(f"Python {sys.version.split()[0]} · PyPI package")
 
 
+def _load_app_module(app_file: str):
+    """Import the user's app module, registering it in ``sys.modules``.
+
+    Registration matters: Pydantic (and dataclasses / typing introspection)
+    resolve a class's own annotations through ``sys.modules[cls.__module__]``.
+    An unregistered module makes models declared with ``from __future__
+    import annotations`` permanently "not fully defined", so every validated
+    request fails with 422.
+    """
+    module_name = os.path.splitext(app_file)[0].replace("/", ".")
+    spec = importlib.util.spec_from_file_location(module_name, app_file)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def _load_and_run(app_file: str, addr: str, reuse_port: bool = False) -> None:
     """Import the app module and start the server (blocking).
 
@@ -60,12 +78,8 @@ def _load_and_run(app_file: str, addr: str, reuse_port: bool = False) -> None:
     share one address (`justapi serve --workers N`).
     """
     # Import the app module — its `app.run(...)` (or `if __name__`) starts the server.
-    module_name = os.path.splitext(app_file)[0].replace("/", ".")
-    spec = importlib.util.spec_from_file_location(module_name, app_file)
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
     sys.argv = [app_file, addr]
-    spec.loader.exec_module(module)
+    module = _load_app_module(app_file)
     # If the module only defines `app` without calling run(), call it for the user.
     app = getattr(module, "app", None)
     if app is not None and not getattr(module, "_justapi_ran", False):
@@ -122,13 +136,27 @@ def _serve_prefork(args: argparse.Namespace, app_file: str, workers: int) -> Non
     print(f"justapi {__version__} — serving {app_file} on {args.addr} with {workers} workers")
     children: list = []
     stop = {"flag": False}
+    parent_pid = os.getpid()
 
     def _spawn():
-        proc = ctx.Process(target=_load_and_run, args=(app_file, args.addr, True))
+        def _child_entry():
+            # The parent installed supervision signal handlers *before* fork;
+            # in the child those close over the parent's `Process` objects and
+            # crash (`AssertionError: can only test a child process`) when a
+            # signal arrives. Reset to defaults so the server's own graceful
+            # shutdown handling (installed during `app.run`) takes over.
+            signal.signal(signal.SIGTERM, signal.SIG_DFL)
+            signal.signal(signal.SIGINT, signal.SIG_DFL)
+            _load_and_run(app_file, args.addr, True)
+
+        proc = ctx.Process(target=_child_entry)
         proc.start()
         return proc
 
     def _shutdown(_signum, _frame):
+        # Defensive: never run supervision logic in a forked child.
+        if os.getpid() != parent_pid:
+            return
         stop["flag"] = True
         for proc in children:
             if proc.is_alive():
