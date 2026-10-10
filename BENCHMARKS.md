@@ -2123,3 +2123,31 @@ decode strips the artificial first space — roundtrip stays exact).
 Known gaps (not bugs): chat templates are not applied (messages are flattened),
 EOS from GGUF metadata is not wired (runs to `max_tokens`), and
 `--scheduled`/speculative paths remain MockModel-only for real weights.
+
+### Example-app load test — `examples/expense_analytics` (2026-10-10)
+
+A real application (SQLite-backed handlers through the full Python path),
+served with `justapi serve --workers N`, `oha -z 10s -c 50` against
+localhost. Server and load generator share the dev box (20-thread
+i5-13600K) — treat as relative, not absolute, capacity.
+
+| Endpoint | 1 worker | 4 workers | Scaling |
+|---|---|---|---|
+| `GET /analytics/summary` | 2,453 rps · p50 20.2 ms · p99 25.4 ms | 8,007 rps · p50 6.1 ms · p99 8.6 ms | 3.26× |
+| `GET /expenses?limit=10` | 1,535 rps · p50 33.0 ms · p99 42.6 ms | 4,910 rps · p50 10.3 ms · p99 13.8 ms | 3.20× |
+| `GET /analytics/by-category` | 1,834 rps · p50 27.4 ms · p99 32.5 ms | 6,845 rps · p50 6.5 ms · p99 11.7 ms | 3.73× |
+
+Correctness under the same 4-worker setup:
+
+- 40 concurrent writes (20 parallel) → **40×201**, all 40 rows persisted, all
+  40 background-task audit rows written (SQLite WAL + `busy_timeout=5000`).
+- `SIGTERM` to one worker → graceful drain (`Waiting for N active
+  connections to drain...`), supervisor respawns it, zero downtime.
+- `SIGTERM` to the supervisor → all workers drain and exit cleanly, no
+  tracebacks.
+
+Two framework bugs were found by this run and fixed (commit `c2dfaad`):
+`justapi serve` did not register the app module in `sys.modules` (Pydantic
+models using `from __future__ import annotations` stayed "not fully
+defined" → every validated write returned 422), and forked workers inherited
+the supervisor's signal handlers (crash on shutdown instead of draining).
