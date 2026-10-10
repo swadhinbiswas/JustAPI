@@ -19,6 +19,10 @@ struct Cli {
     command: Commands,
 }
 
+/// CLI command tree. Constructed once at startup and matched immediately —
+/// the size difference between variants (the `Serve` variant carries every
+/// serve flag) is irrelevant here.
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 enum Commands {
     /// Start the JustAPI HTTP server
@@ -1247,20 +1251,20 @@ fn build_engines(
         None => None,
     };
 
-    let scheduler_engine: Option<std::sync::Arc<justapi_inference::SchedulerEngine>> = if scheduled
-        && engine.is_some()
-    {
-        use justapi_inference::{KvBlockPool, Scheduler, SchedulerConfig, SchedulerEngine};
-        let eng = engine.as_ref().unwrap().clone();
-        let pool = KvBlockPool::new(pool_blocks.max(64));
-        let config = SchedulerConfig { max_num_seqs: max_seqs.max(1), ..Default::default() };
-        let scheduler = std::sync::Arc::new(std::sync::Mutex::new(Scheduler::new(config, pool)));
-        let se = std::sync::Arc::new(SchedulerEngine::new(eng, scheduler));
-        tracing::info!(pool_blocks, max_seqs, "Scheduler-enabled serving path");
-        Some(se)
-    } else {
-        None
-    };
+    let scheduler_engine: Option<std::sync::Arc<justapi_inference::SchedulerEngine>> =
+        if let (true, Some(eng)) = (scheduled, engine.as_ref()) {
+            use justapi_inference::{KvBlockPool, Scheduler, SchedulerConfig, SchedulerEngine};
+            let eng = eng.clone();
+            let pool = KvBlockPool::new(pool_blocks.max(64));
+            let config = SchedulerConfig { max_num_seqs: max_seqs.max(1), ..Default::default() };
+            let scheduler =
+                std::sync::Arc::new(std::sync::Mutex::new(Scheduler::new(config, pool)));
+            let se = std::sync::Arc::new(SchedulerEngine::new(eng, scheduler));
+            tracing::info!(pool_blocks, max_seqs, "Scheduler-enabled serving path");
+            Some(se)
+        } else {
+            None
+        };
 
     Ok((engine, scheduler_engine))
 }
