@@ -253,6 +253,35 @@ def _is_pydantic_model(annotation) -> bool:
     )
 
 
+def _resolve_signature(func) -> inspect.Signature:
+    """Return ``func``'s signature with PEP 563 string annotations resolved.
+
+    Modules that start with ``from __future__ import annotations`` store every
+    annotation as a string. Without evaluation the parameter resolver cannot
+    recognise Pydantic models, ``int``/``float``/``Enum`` types, or
+    ``BackgroundTasks``, and ``Query`` constraints silently degrade to
+    no-ops. ``typing.get_type_hints`` evaluates the strings against the
+    function's module globals (the same resolution FastAPI performs); if a
+    hint cannot be evaluated we fall back to the raw signature.
+    """
+    sig = inspect.signature(func)
+    try:
+        hints = typing.get_type_hints(func)
+    except Exception:
+        return sig
+    if not hints:
+        return sig
+    try:
+        return sig.replace(
+            parameters=[
+                p.replace(annotation=hints.get(name, p.annotation))
+                for name, p in sig.parameters.items()
+            ]
+        )
+    except Exception:
+        return sig
+
+
 def _build_model(model, data, alias: str):
     """Validate ``data`` (dict or raw JSON bytes) into a Pydantic model.
 
@@ -718,7 +747,7 @@ class JustAPIApp:
             request["_dep_cleanup"] = []
             
         for dep in deps:
-            dep_sig = inspect.signature(dep.dependency)
+            dep_sig = _resolve_signature(dep.dependency)
             dep_kwargs = await self._resolve_kwargs(dep_sig, request)
             
             if dep.use_cache and dep.dependency in request["_dep_cache"]:
@@ -763,7 +792,7 @@ class JustAPIApp:
                     kwargs[name] = request["_dep_cache"][param.default.dependency]
                     continue
                     
-                dep_sig = inspect.signature(param.default.dependency)
+                dep_sig = _resolve_signature(param.default.dependency)
                 dep_kwargs = await self._resolve_kwargs(dep_sig, request)
                 
                 is_gen = inspect.isasyncgenfunction(param.default.dependency)
@@ -915,7 +944,7 @@ class JustAPIApp:
             request["_dep_cleanup"] = []
             
         for dep in deps:
-            dep_sig = inspect.signature(dep.dependency)
+            dep_sig = _resolve_signature(dep.dependency)
             dep_kwargs = self._resolve_kwargs_sync(dep_sig, request)
             
             if dep.use_cache and dep.dependency in request["_dep_cache"]:
@@ -952,7 +981,7 @@ class JustAPIApp:
                     kwargs[name] = request["_dep_cache"][param.default.dependency]
                     continue
                     
-                dep_sig = inspect.signature(param.default.dependency)
+                dep_sig = _resolve_signature(param.default.dependency)
                 dep_kwargs = self._resolve_kwargs_sync(dep_sig, request)
                 
                 is_sync_gen = inspect.isgeneratorfunction(param.default.dependency)
@@ -1130,7 +1159,7 @@ class JustAPIApp:
                 "into the native validation schema."
             )
 
-        sig = inspect.signature(handler)
+        sig = _resolve_signature(handler)
         route_deps = route_dependencies or []
         all_deps = self.dependencies + route_deps
 
