@@ -25,12 +25,68 @@ cd examples/expense_analytics
 # Optional: fill the DB with 6 months of demo data (deterministic)
 python seed.py            # --force to wipe and reseed
 
-# Start the server (SQLite file: ./expenses.db by default)
-python app.py             # http://127.0.0.1:8000, docs at /docs
+# Development: single process, auto-restart on *.py changes
+justapi serve --addr 127.0.0.1:8000 --reload
+
+# Production: 4 prefork workers sharing the port (SO_REUSEPORT)
+justapi serve --addr 0.0.0.0:8000 --workers 4
 
 # Or point at another database file / port
 EXPENSES_DB=/tmp/demo.db PORT=9000 python app.py
 ```
+
+## Deploy it (Docker)
+
+```bash
+cd examples/expense_analytics
+
+# docker compose (recommended)
+docker compose up --build          # http://127.0.0.1:8000
+docker compose logs -f api
+docker compose down                # keeps the SQLite volume
+
+# or plain docker
+docker build -t expense-analytics .
+docker run --rm -p 8000:8000 -v expense-data:/data expense-analytics
+```
+
+The image runs as a non-root user, serves with `WORKERS=4` prefork workers,
+stores the SQLite database in the `/data` volume, and ships a `/live`
+healthcheck. `docker compose` reads `JUSTAPI_SPEC` from the environment, so a
+local wheel works before the release is on PyPI:
+
+```bash
+docker compose build --build-arg JUSTAPI_SPEC=./justapi-2.1.0-cp311-abi3-manylinux_2_34_x86_64.whl
+```
+
+## Observability
+
+- **`GET /metrics`** — Prometheus text format (requests/errors/bytes counters,
+  latency), ready to scrape from Prometheus or a Grafana agent.
+- **Structured logs** — `LOG_FORMAT=json` emits one JSON object per event
+  (`timestamp`, `level`, `http.method`, `http.path`, `http.status_code`,
+  `latency_ms`) for Loki/CloudWatch/Datadog; the default is readable text.
+  `LOG_LEVEL=debug` turns up verbosity.
+- **Health** — `GET /health` (liveness) and `GET /ready` (readiness; probes
+  the database via `register_health_check`).
+- **Tracing** — `justapi.logging.init_otlp_tracing(endpoint, service_name)`
+  before `app.run()` exports spans over OTLP gRPC (OpenTelemetry).
+
+## Measured performance
+
+`oha -z 10s -c 50` against the real app (SQLite-backed handlers), same
+machine as the load generator — relative numbers, not capacity claims:
+
+| Endpoint | 1 worker | 4 workers |
+|---|---|---|
+| `GET /analytics/summary` | 2,453 rps · p99 25 ms | 8,007 rps · p99 9 ms |
+| `GET /expenses?limit=10` | 1,535 rps · p99 43 ms | 4,910 rps · p99 14 ms |
+| `GET /analytics/by-category` | 1,834 rps · p99 33 ms | 6,845 rps · p99 12 ms |
+
+Also verified: 40 concurrent writes across 4 workers → 40×201 with every row
+and background audit row persisted; worker `SIGTERM` drains in-flight
+requests and is respawned; supervisor `SIGTERM` stops all workers cleanly.
+Full details in `BENCHMARKS.md`.
 
 ## Test it
 

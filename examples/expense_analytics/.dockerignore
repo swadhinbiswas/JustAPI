@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+expenses.db
+expenses.db-wal
+expenses.db-shm
+# NOTE: *.whl is intentionally NOT ignored — local-wheel builds
+# (--build-arg JUSTAPI_SPEC=/wheels/<name>.whl) bind-mount the context.

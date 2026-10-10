@@ -35,8 +35,16 @@ from datetime import date
 from pydantic import BaseModel, Field
 
 from justapi import BackgroundTasks, HTTPException, JustAPIApp, Query
+from justapi.logging import init_json_logging, init_logging
 
 DB_PATH = os.environ.get("EXPENSES_DB", "expenses.db")
+
+# Structured logging for production: LOG_FORMAT=json emits one JSON object per
+# event (ready for Loki/CloudWatch/Datadog); the default is human-readable text.
+if os.environ.get("LOG_FORMAT", "text").strip().lower() == "json":
+    init_json_logging()
+else:
+    init_logging(level=os.environ.get("LOG_LEVEL", "info"))
 
 # Applied by the pool once at startup; `IF NOT EXISTS` makes it idempotent.
 SCHEMA = """

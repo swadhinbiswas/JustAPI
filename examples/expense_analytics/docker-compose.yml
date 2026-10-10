@@ -1,0 +1,30 @@
+# Ready-made production setup for the expense tracker example.
+#
+#   docker compose up --build          # http://127.0.0.1:8000
+#   docker compose logs -f api
+#   docker compose down                # keeps the data volume
+#   docker compose down -v             # also deletes the SQLite volume
+#
+# Before the release is on PyPI, point the build at a local wheel:
+#   docker compose build --build-arg JUSTAPI_SPEC=./justapi-2.1.0-cp311-abi3-manylinux_2_34_x86_64.whl
+# (place the .whl in this directory first).
+
+services:
+  api:
+    build:
+      context: .
+      args:
+        JUSTAPI_SPEC: ${JUSTAPI_SPEC:-justapi==2.1.0}
+    ports:
+      - "8000:8000"
+    environment:
+      WORKERS: "4"
+      # Swap for Postgres in a real deployment; the app code is unchanged.
+      EXPENSES_DB: /data/expenses.db
+    volumes:
+      - expense-data:/data
+    restart: unless-stopped
+    # Healthcheck comes from the image (/live probe).
+
+volumes:
+  expense-data:
