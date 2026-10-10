@@ -38,6 +38,7 @@ from justapi import BackgroundTasks, HTTPException, JustAPIApp, Query
 from justapi.logging import init_json_logging, init_logging
 
 DB_PATH = os.environ.get("EXPENSES_DB", "expenses.db")
+IS_POSTGRES = DB_PATH.startswith(("postgres://", "postgresql://"))
 
 # Structured logging for production: LOG_FORMAT=json emits one JSON object per
 # event (ready for Loki/CloudWatch/Datadog); the default is human-readable text.
@@ -47,7 +48,29 @@ else:
     init_logging(level=os.environ.get("LOG_LEVEL", "info"))
 
 # Applied by the pool once at startup; `IF NOT EXISTS` makes it idempotent.
-SCHEMA = """
+# `app.db.query(...)` accepts `?` placeholders on every driver (sqlx rewrites
+# them for Postgres), so only DDL and date functions differ between dialects.
+if IS_POSTGRES:
+    SCHEMA = """
+CREATE TABLE IF NOT EXISTS expenses (
+    id SERIAL PRIMARY KEY,
+    description TEXT NOT NULL,
+    amount DOUBLE PRECISION NOT NULL CHECK (amount > 0),
+    category TEXT NOT NULL,
+    spent_on TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (now()::text)
+);
+CREATE INDEX IF NOT EXISTS idx_expenses_category ON expenses(category);
+CREATE INDEX IF NOT EXISTS idx_expenses_spent_on ON expenses(spent_on);
+CREATE TABLE IF NOT EXISTS audit_log (
+    id SERIAL PRIMARY KEY,
+    action TEXT NOT NULL,
+    expense_id INTEGER,
+    at TEXT NOT NULL DEFAULT (now()::text)
+);
+"""
+else:
+    SCHEMA = """
 CREATE TABLE IF NOT EXISTS expenses (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     description TEXT NOT NULL,
@@ -99,7 +122,7 @@ app = JustAPIApp(
 )
 
 app.set_database(
-    f"sqlite:{DB_PATH}",
+    DB_PATH if IS_POSTGRES else f"sqlite:{DB_PATH}",
     init_sql=SCHEMA,
     pragmas=["journal_mode=WAL", "synchronous=NORMAL"],
 )
@@ -129,11 +152,19 @@ def _normalize(column: str, value):
 
 
 def _record_audit(action: str, expense_id: int | None) -> None:
-    """Runs as a background task after the response has been sent."""
-    app.db.execute(
-        "INSERT INTO audit_log (action, expense_id) VALUES (?, ?)",
-        [action, expense_id],
-    )
+    """Runs as a background task after the response has been sent.
+
+    When there is no expense id the column is omitted rather than bound as
+    NULL: a NULL parameter is typed as text by the driver, which Postgres
+    rejects for an integer column.
+    """
+    if expense_id is None:
+        app.db.execute("INSERT INTO audit_log (action) VALUES (?)", [action])
+    else:
+        app.db.execute(
+            "INSERT INTO audit_log (action, expense_id) VALUES (?, ?)",
+            [action, expense_id],
+        )
 
 
 def _where_clause(
@@ -288,12 +319,15 @@ def analytics_by_category():
     rows = app.db.query(
         """SELECT category,
                   COUNT(*) AS count,
-                  ROUND(SUM(amount), 2) AS total,
-                  ROUND(AVG(amount), 2) AS average
+                  SUM(amount) AS total,
+                  AVG(amount) AS average
            FROM expenses
            GROUP BY category
-           ORDER BY total DESC"""
+           ORDER BY SUM(amount) DESC"""
     )
+    for row in rows:
+        row["total"] = round(row["total"], 2)
+        row["average"] = round(row["average"], 2)
     grand_total = round(sum(row["total"] for row in rows), 2)
     for row in rows:
         row["share_pct"] = round(100.0 * row["total"] / grand_total, 1) if grand_total else 0.0
@@ -305,26 +339,42 @@ def analytics_monthly():
     rows = app.db.query(
         """SELECT substr(spent_on, 1, 7) AS month,
                   COUNT(*) AS count,
-                  ROUND(SUM(amount), 2) AS total
+                  SUM(amount) AS total
            FROM expenses
            GROUP BY month
            ORDER BY month"""
     )
+    for row in rows:
+        row["total"] = round(row["total"], 2)
     return {"months": rows}
 
 
 @app.get("/analytics/trend", tags=["analytics"], summary="Daily spend for the last N days")
 def analytics_trend(days: int = Query(30, ge=1, le=365)):
-    points = app.db.query(
-        """SELECT spent_on AS day,
-                  ROUND(SUM(amount), 2) AS total,
-                  COUNT(*) AS count
-           FROM expenses
-           WHERE spent_on >= date('now', ?)
-           GROUP BY day
-           ORDER BY day""",
-        [f"-{days - 1} days"],
-    )
+    if IS_POSTGRES:
+        points = app.db.query(
+            """SELECT spent_on AS day,
+                      SUM(amount) AS total,
+                      COUNT(*) AS count
+               FROM expenses
+               WHERE spent_on >= (CURRENT_DATE - (? * INTERVAL '1 day'))::text
+               GROUP BY day
+               ORDER BY day""",
+            [days - 1],
+        )
+    else:
+        points = app.db.query(
+            """SELECT spent_on AS day,
+                      SUM(amount) AS total,
+                      COUNT(*) AS count
+               FROM expenses
+               WHERE spent_on >= date('now', ?)
+               GROUP BY day
+               ORDER BY day""",
+            [f"-{days - 1} days"],
+        )
+    for point in points:
+        point["total"] = round(point["total"], 2)
     return {"days": days, "points": points}
 
 

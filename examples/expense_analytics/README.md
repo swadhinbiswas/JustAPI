@@ -157,10 +157,28 @@ curl -s "http://127.0.0.1:8000/analytics/trend?days=30"
 curl -N http://127.0.0.1:8000/stream/summary
 ```
 
+## Postgres
+
+The same app runs on Postgres — `app.db` and `?` placeholders are identical
+across engines (the pool pins each placeholder to the bound value's type for
+Postgres). Point `EXPENSES_DB` at a Postgres URL:
+
+```bash
+docker run -d --name pg -e POSTGRES_PASSWORD=pass -p 5433:5432 postgres:16-alpine
+EXPENSES_DB=postgres://postgres:pass@127.0.0.1:5433/postgres python seed.py
+EXPENSES_DB=postgres://postgres:pass@127.0.0.1:5433/postgres justapi serve --workers 4
+```
+
+Dialect notes (handled in `app.py`): Postgres uses `SERIAL` + `TEXT`
+timestamps (`now()::text` — the driver cannot decode `timestamptz`), and all
+rounding happens in Python (`ROUND(double precision, int)` does not exist in
+Postgres). A `NULL` bound parameter is typed as text, so rows without an id
+omit the column instead of binding `None`.
+
 ## Notes
 
 - SQLite is perfect for this demo; for production traffic point
-  `set_database` at Postgres (`postgres://...`) — the same `app.db` API and
-  parameter placeholders (`?`) work across drivers.
+  `set_database` at Postgres (see above) — the same `app.db` API works across
+  drivers.
 - The `expenses.db` file (plus `-wal`/`-shm`) is created in this directory;
   delete it to start fresh.

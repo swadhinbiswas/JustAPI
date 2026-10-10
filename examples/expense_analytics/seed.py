@@ -103,14 +103,13 @@ def main() -> int:
             "VALUES (?, ?, ?, ?)",
             [description, amount, category, spent_on],
         )
-    app.db.execute(
-        "INSERT INTO audit_log (action, expense_id) VALUES (?, ?)", ["seed", None]
-    )
+    # No expense id for a bulk seed: omit the column rather than binding NULL
+    # (a NULL parameter is typed as text and Postgres rejects it for an
+    # integer column).
+    app.db.execute("INSERT INTO audit_log (action) VALUES (?)", ["seed"])
 
-    summary = app.db.query(
-        "SELECT COUNT(*) AS count, ROUND(SUM(amount), 2) AS total FROM expenses"
-    )[0]
-    print(f"seeded {summary['count']} expenses, total {summary['total']}")
+    summary = app.db.query("SELECT COUNT(*) AS count, SUM(amount) AS total FROM expenses")[0]
+    print(f"seeded {summary['count']} expenses, total {round(summary['total'], 2)}")
     return 0
 
 
