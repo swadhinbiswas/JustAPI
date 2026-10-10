@@ -662,8 +662,11 @@ pub(crate) fn serialize_response(
     if let Ok(wrapped) = helper.wrap_result.bind(py).call1((res,)) {
         // `wrap_result` synthesizes status 200 when the return value carries no
         // status of its own; in that case the route's decorator default wins.
-        let raw_status: u16 =
-            wrapped.get_item("status").ok().and_then(|v| v.extract::<u16>().ok()).unwrap_or(default_status);
+        let raw_status: u16 = wrapped
+            .get_item("status")
+            .ok()
+            .and_then(|v| v.extract::<u16>().ok())
+            .unwrap_or(default_status);
         let status = if raw_status == 200 { default_status } else { raw_status };
         let headers: Vec<(Vec<u8>, Vec<u8>)> = wrapped
             .get_item("headers")
