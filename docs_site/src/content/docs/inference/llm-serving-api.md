@@ -9,12 +9,22 @@ When the `inference` feature is enabled, JustAPI exposes an OpenAI-compatible AP
 ## Enabling Inference
 
 ```bash
-# Build with inference support
-cargo build --release --features inference
+# Weight-free MockModel (exercises the endpoints; no weights needed)
+cargo build --release -p justapi-cli --features inference
+justapi-cli serve --addr 127.0.0.1:8080 --model my-model
 
-# Run with a model
-justapi serve --model my-model.gguf
+# Real weights: build with `real`, point --model-path at a directory holding
+# a llama-architecture .gguf (or .safetensors + config.json + tokenizer.json)
+cargo build --release -p justapi-cli --features inference,real
+justapi-cli serve --addr 0.0.0.0:8080 \
+  --model tinyllama --model-path /path/to/model-dir --gpu cpu
 ```
+
+Verified end to end (2026-10-10) with TinyLlama-1.1B-Chat Q4_K_M on CPU —
+streaming chat completions, text completions, and `/v1/models` all serve real
+weights. A GPU run is still pending (see the overview status note); without
+`--features real`, `--model-path` exits with a clear error rather than
+silently serving a mock.
 
 ## Chat Completions
 

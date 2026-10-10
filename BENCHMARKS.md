@@ -2100,3 +2100,26 @@ Phase 52's "beats vLLM" claim remains UNTESTED (no CUDA driver on this box).
 Known follow-ups: `openai.rs` still tokenizes with `MockModel` (needs
 `Engine::encode`), EOS/stop-token wiring from GGUF metadata, and decode
 throughput has no batching/KV-reuse tuning yet.
+
+### Addendum — real-model OpenAI serving verified (2026-10-10)
+
+`justapi-cli serve --model tinyllama --model-path <dir> --gpu cpu` with
+`--features inference,real`, TinyLlama-1.1B-Chat Q4_K_M:
+
+| Endpoint | Result |
+|---|---|
+| `GET /v1/models` | lists `tinyllama` |
+| `POST /v1/chat/completions` (non-stream) | 16 tokens in ~1.0 s wall (≈16 tok/s incl. HTTP), usage `{prompt:8, completion:16}` |
+| `POST /v1/chat/completions` (`stream:true`) | SSE `chat.completion.chunk` deltas with correct text; ends `finish_reason:"length"` + `data: [DONE]` |
+| `POST /v1/completions` | `"Once upon a time"` → `", there was a young woman named L"` (coherent) |
+
+The E2E surfaced a decode bug the earlier smoke had masked: the tokenizer used
+the Metaspace decoder alone, so `▁` never became a space and `<0x0A>` stayed
+literal (streamed text was "CapitalofFrance"). Fixed with the Llama decode
+pipeline (`Replace ▁→" "`, `ByteFallback`, `Fuse`) plus a separate
+`decode_token` for streaming (keeps each token's leading space; full-sequence
+decode strips the artificial first space — roundtrip stays exact).
+
+Known gaps (not bugs): chat templates are not applied (messages are flattened),
+EOS from GGUF metadata is not wired (runs to `max_tokens`), and
+`--scheduled`/speculative paths remain MockModel-only for real weights.
