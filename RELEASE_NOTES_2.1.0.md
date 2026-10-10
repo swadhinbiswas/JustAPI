@@ -43,10 +43,14 @@ SIGTERM drains cleanly); `justapi serve --reload` watches `*.py` and restarts.
 - Trivy + CycloneDX SBOM in CI (pinned binary, SHA256-verified); `cargo deny` green with zero ignored advisories (h2/rustls/wasmtime bumped).
 - Docker/K8s entrypoint fixed and verified: `ENTRYPOINT justapi` + `/app/main.py`, Helm `args` work.
 
-### 🤖 First real-weights inference run (ADR-098)
-TinyLlama-1.1B Q4 GGUF on CPU: **22.1 tok/s, TTFT 0.14 s**, fluent output —
-plus fixes for the SentencePiece tokenizer and logits rank bugs that made real
-models unusable. **No GPU run yet** — "beats vLLM" remains untested and unclaimed.
+### 🤖 First real-weights inference run (ADR-098) — and OpenAI serving
+TinyLlama-1.1B Q4 GGUF on CPU: **22.1 tok/s, TTFT 0.14 s**, fluent output.
+`justapi-cli serve --model <id> --model-path <dir>` (features `inference,real`)
+serves streaming `/v1/chat/completions` with correct text and `[DONE]`, plus
+`/v1/completions` and `/v1/models` — verified end to end. Fixed a SentencePiece
+tokenizer bug (was built as GPT-2 BPE), a logits rank mismatch, and the Llama
+decode pipeline (spaces / byte-fallback). **No GPU run yet** — "beats vLLM"
+remains untested and unclaimed.
 
 ### 🛡️ CI made real
 - Free-threaded (3.14t) tests are a **real gate** (previously `|| true`): 223 passed locally.
