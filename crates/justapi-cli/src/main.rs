@@ -111,12 +111,19 @@ enum Commands {
 
         /// Serve a model via the OpenAI-compatible endpoints
         /// (`/v1/chat/completions`, `/v1/completions`, `/v1/embeddings`,
-        /// `/v1/models`). Requires the `inference` feature. The model id is
-        /// registered as a weight-free `MockModel` (use `--features real` +
-        /// `--model-path` for real weights).
+        /// `/v1/models`). Requires the `inference` feature. Without
+        /// `--model-path` the id is registered as a weight-free `MockModel`.
         #[cfg(feature = "inference")]
         #[arg(long)]
         model: Option<String>,
+
+        /// Directory containing real model weights (a `.gguf` file, or
+        /// `.safetensors` + `config.json` + `tokenizer.json`). Requires
+        /// building with `--features inference,real`. The directory is scanned
+        /// for the weights; GGUF tokenizers are read from metadata.
+        #[cfg(feature = "inference")]
+        #[arg(long)]
+        model_path: Option<String>,
 
         /// GPU device ordinal for `--model` (e.g. `0`). Use `cpu` for the
         /// CPU backend (default). Requires the `inference` feature.
@@ -1156,6 +1163,7 @@ fn scaffold_project(
 #[cfg(feature = "inference")]
 fn build_engines(
     model: &Option<String>,
+    model_path: &Option<String>,
     gpu: &str,
     scheduled: bool,
     pool_blocks: usize,
@@ -1178,9 +1186,42 @@ fn build_engines(
                 justapi_inference::Engine::new(device)
                     .map_err(|e| anyhow::anyhow!("failed to start inference engine: {e}"))?,
             );
-            eng.register_mock(id);
 
-            if gamma > 0 || branch > 0 {
+            // Real weights when `--model-path` is given; otherwise a
+            // weight-free MockModel so the endpoints are exercisable.
+            let is_real = match model_path {
+                Some(path) => {
+                    #[cfg(feature = "real")]
+                    {
+                        eng.load(id, std::path::Path::new(path)).map_err(|e| {
+                            anyhow::anyhow!("failed to load real model from {path}: {e}")
+                        })?;
+                        tracing::info!(
+                            model = %id, path = %path, device = %gpu,
+                            "Serving REAL model via OpenAI-compatible endpoints"
+                        );
+                        true
+                    }
+                    #[cfg(not(feature = "real"))]
+                    {
+                        anyhow::bail!(
+                            "--model-path requires building the CLI with `--features real` \
+                             (got path: {path})"
+                        )
+                    }
+                }
+                None => {
+                    eng.register_mock(id);
+                    false
+                }
+            };
+
+            if is_real && (gamma > 0 || branch > 0) {
+                tracing::warn!(
+                    "speculative decoding is not supported with real weights yet — \
+                     ignoring --gamma/--branch"
+                );
+            } else if gamma > 0 || branch > 0 {
                 let target = eng.get(id).unwrap();
                 let draft_id = format!("{id}-draft");
                 let draft = eng.register_mock(&draft_id);
@@ -1198,7 +1239,7 @@ fn build_engines(
                         "Serving model via OpenAI-compatible endpoints (draft-target speculative decoding)"
                     );
                 }
-            } else {
+            } else if !is_real {
                 tracing::info!(model = %id, device = %gpu, "Serving model via OpenAI-compatible endpoints");
             }
             Some(eng)
@@ -1333,6 +1374,8 @@ async fn run() -> anyhow::Result<()> {
             #[cfg(feature = "inference")]
             model,
             #[cfg(feature = "inference")]
+            model_path,
+            #[cfg(feature = "inference")]
             gpu,
             #[cfg(feature = "inference")]
             scheduled,
@@ -1358,8 +1401,16 @@ async fn run() -> anyhow::Result<()> {
 
             // Build the inference engines (no-op unless --model supplied).
             #[cfg(feature = "inference")]
-            let (engine, scheduler_engine) =
-                build_engines(&model, &gpu, scheduled, pool_blocks, max_seqs, gamma, branch)?;
+            let (engine, scheduler_engine) = build_engines(
+                &model,
+                &model_path,
+                &gpu,
+                scheduled,
+                pool_blocks,
+                max_seqs,
+                gamma,
+                branch,
+            )?;
 
             // ---- Worker mode: parent handed us a bound listening socket fd. ----
             if let Some(fd) = worker_fd {

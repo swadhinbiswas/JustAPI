@@ -16,6 +16,9 @@ ws = ["justapi-core/ws"]
 compression = ["justapi-core/compression"]
 opentelemetry = ["justapi-core/opentelemetry"]
 inference = ["justapi-core/inference", "dep:justapi-inference"]
+# Real-weight loading for `--model-path` (GGUF/safetensors + tokenizer).
+# Heavy: pulls candle-transformers + tokenizers. Unix-agnostic.
+real = ["inference", "justapi-inference/real"]
 
 [dependencies]
 justapi-core = { workspace = true, features = ["db"] }
