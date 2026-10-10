@@ -79,6 +79,10 @@ impl JustAPITestClient {
         let needs_request = Arc::new(needs_request);
         let native: Vec<bool> = app_ref.native.clone();
         let native = Arc::new(native);
+        // Per-handler default response status from the route decorator's
+        // `status_code=` (FastAPI parity) — mirrors the server pipeline.
+        // Cloned (not taken) so the app can still be used afterwards.
+        let status_codes = Arc::new(app_ref.status_codes.clone());
         let native_async: Vec<bool> = app_ref
             .handlers
             .iter()
@@ -134,6 +138,7 @@ impl JustAPITestClient {
             app_py,
             needs_request,
             native,
+            status_codes,
             native_async,
             sse_specs,
             schema_validators,

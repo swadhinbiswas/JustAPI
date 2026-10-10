@@ -58,10 +58,15 @@ fn profile_gil_path(build_ns: u64, handler_ns: u64) {
 /// responses are pumped into an mpsc stream; everything else goes through the
 /// Rust-side fast serializer. Shared by the sync path and the async resolution
 /// path (`resolve_async_response`).
+///
+/// `default_status` is the route's decorator `status_code=` (FastAPI parity):
+/// it applies to plain dict/list/scalar returns; explicit `Response` objects,
+/// envelope dicts and streaming responses keep their own status.
 fn handle_ok_result(
     py: Python<'_>,
     res: Bound<'_, PyAny>,
     helper: &HelperFunctions,
+    default_status: u16,
 ) -> NativeResponse {
     if let Ok(vs_res) = res.extract::<pyo3::PyRef<'_, super::app::ValidatedStreamResponse>>() {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
@@ -100,7 +105,7 @@ fn handle_ok_result(
     // which mirrors Robyn's `extract_response_type_fast` (orjson
     // directly from Rust for dict/list/scalars, downcast for
     // `Response`, Python `wrap_result` only as a last resort).
-    serialize_response(py, res, helper)
+    serialize_response(py, res, helper, default_status)
 }
 
 /// Parse an `application/x-www-form-urlencoded` body into `(name, value)`
@@ -138,6 +143,7 @@ fn dispatch_python_handler(
     needs_request: bool,
     http_version: String,
     auth_claims: Option<String>,
+    default_status: u16,
 ) -> NativeResponse {
     let mut form_dict_py: Option<pyo3::Py<pyo3::types::PyDict>> = None;
     if let Some(form) = multipart_form_res {
@@ -222,6 +228,7 @@ fn dispatch_python_handler(
         needs_request,
         http_version,
         auth_claims,
+        default_status,
     )
 }
 
@@ -245,6 +252,7 @@ pub(crate) fn call_python_handler(
     needs_request: bool,
     http_version: String,
     auth_claims: Option<String>,
+    default_status: u16,
 ) -> NativeResponse {
     let helper = get_helper(py);
 
@@ -379,7 +387,7 @@ pub(crate) fn call_python_handler(
     };
 
     match final_res {
-        Ok(res) => handle_ok_result(py, res, helper),
+        Ok(res) => handle_ok_result(py, res, helper, default_status),
         Err(e) => handle_py_error(py, e),
     }
 }
@@ -492,6 +500,7 @@ pub(crate) fn serialize_response(
     py: Python<'_>,
     res: Bound<'_, PyAny>,
     helper: &HelperFunctions,
+    default_status: u16,
 ) -> NativeResponse {
     // 1. `Response` (detected via a marker attribute set by the Python
     //    `Response` class) -> read fields directly, zero `to_dict` round-trip.
@@ -614,7 +623,7 @@ pub(crate) fn serialize_response(
                     Vec::new()
                 };
                 return NativeResponse {
-                    status: 200,
+                    status: default_status,
                     headers: vec![(b"content-type".to_vec(), b"application/json".to_vec())],
                     body: NativeBody::Bytes(body),
                 };
@@ -626,18 +635,36 @@ pub(crate) fn serialize_response(
     if res.is_instance_of::<pyo3::types::PyBytes>() {
         if let Ok(body) = res.extract::<Vec<u8>>() {
             return NativeResponse {
-                status: 200,
+                status: default_status,
                 headers: vec![(b"content-type".to_vec(), b"application/octet-stream".to_vec())],
                 body: NativeBody::Bytes(body),
             };
         }
     }
 
+    // 4b. Pydantic model (v2 `model_dump_json`) -> serialize directly from
+    //     Rust instead of the Python `wrap_result` round-trip. Common return
+    //     type for the flagship `def create(item: Item) -> item` pattern.
+    if res.hasattr("model_dump_json").unwrap_or(false) {
+        if let Ok(out) = res.call_method0("model_dump_json") {
+            if let Ok(s) = out.extract::<String>() {
+                return NativeResponse {
+                    status: default_status,
+                    headers: vec![(b"content-type".to_vec(), b"application/json".to_vec())],
+                    body: NativeBody::Bytes(s.into_bytes()),
+                };
+            }
+        }
+    }
+
     // 5. Slow-path fallback: exotic types go through the Python `wrap_result`,
     //    preserving all existing behaviour.
     if let Ok(wrapped) = helper.wrap_result.bind(py).call1((res,)) {
-        let status: u16 =
-            wrapped.get_item("status").ok().and_then(|v| v.extract::<u16>().ok()).unwrap_or(200);
+        // `wrap_result` synthesizes status 200 when the return value carries no
+        // status of its own; in that case the route's decorator default wins.
+        let raw_status: u16 =
+            wrapped.get_item("status").ok().and_then(|v| v.extract::<u16>().ok()).unwrap_or(default_status);
+        let status = if raw_status == 200 { default_status } else { raw_status };
         let headers: Vec<(Vec<u8>, Vec<u8>)> = wrapped
             .get_item("headers")
             .ok()
@@ -666,7 +693,10 @@ pub(crate) fn serialize_response(
 /// `concurrent.futures.Future` (its internal wait releases the GIL), then
 /// serialize the resolved value with the same fast serializer the sync path
 /// uses. Runs on a `spawn_blocking` thread so no worker thread is tied up.
-async fn resolve_async_response(py_future: Py<PyAny>) -> Result<NativeResponse, anyhow::Error> {
+async fn resolve_async_response(
+    py_future: Py<PyAny>,
+    default_status: u16,
+) -> Result<NativeResponse, anyhow::Error> {
     // Callback-driven completion: register a `_DoneNotifier` on the
     // concurrent.futures.Future so we can await completion on the tokio
     // runtime without blocking a thread (no spawn_blocking) or polling.
@@ -705,7 +735,7 @@ async fn resolve_async_response(py_future: Py<PyAny>) -> Result<NativeResponse, 
             match outcome {
                 Ok(res) => {
                     let helper = get_helper(py);
-                    handle_ok_result(py, res.bind(py).into(), helper)
+                    handle_ok_result(py, res.bind(py).into(), helper, default_status)
                 }
                 Err(e) => handle_py_error(py, e),
             }
@@ -923,6 +953,7 @@ pub(crate) fn make_native_handler<B>(
     app: Option<Py<PyAny>>,
     needs_request: Arc<Vec<bool>>,
     native: Arc<Vec<bool>>,
+    status_codes: Arc<Vec<Option<u16>>>,
     _native_async: Arc<Vec<bool>>,
     crud_specs: CrudConfig,
     sse_specs: Arc<Vec<Option<(u64, u64)>>>,
@@ -959,6 +990,7 @@ where
         .to_string();
         let needs_request_clone = needs_request.clone();
         let native_clone = native.clone();
+        let status_codes = status_codes.clone();
         #[cfg(Py_GIL_DISABLED)]
         let native_async_clone = _native_async.clone();
         let crud_specs_clone = crud_specs.clone();
@@ -1068,6 +1100,11 @@ where
             };
 
             let handler_id = *matched.handler;
+
+            // Route's decorator `status_code=` (FastAPI parity): the default
+            // status for plain dict/list/scalar returns. Explicit `Response`
+            // objects, envelope dicts and streams keep their own status.
+            let default_status = status_codes.get(handler_id).copied().flatten().unwrap_or(200);
 
             let urlencoded_form = parse_urlencoded_form(content_type.as_deref(), &body_bytes);
 
@@ -1218,6 +1255,7 @@ where
                         needs_request_clone[handler_id],
                         http_version.clone(),
                         auth_claims,
+                        default_status,
                     )
                 })
                 .await
@@ -1245,6 +1283,7 @@ where
                         needs_request_clone[handler_id],
                         http_version.clone(),
                         auth_claims,
+                        default_status,
                     )
                 })
                 .await
@@ -1255,7 +1294,7 @@ where
             // resolution (GIL released while waiting), so concurrent async
             // requests interleave.
             let nr = match nr.body {
-                NativeBody::Async(fut) => resolve_async_response(fut).await?,
+                NativeBody::Async(fut) => resolve_async_response(fut, default_status).await?,
                 _ => nr,
             };
 
@@ -1285,6 +1324,7 @@ pub fn make_test_handler<B>(
     app: Option<Py<PyAny>>,
     needs_request: Arc<Vec<bool>>,
     native: Arc<Vec<bool>>,
+    status_codes: Arc<Vec<Option<u16>>>,
     _native_async: Arc<Vec<bool>>,
     sse_specs: Arc<Vec<Option<(u64, u64)>>>,
     schema_validators: Arc<Vec<Option<justapi_core::validate::CompiledValidator>>>,
@@ -1312,6 +1352,7 @@ where
         let http_version = http_version.clone();
         let needs_request_clone = needs_request.clone();
         let native_clone = native.clone();
+        let status_codes = status_codes.clone();
         #[cfg(Py_GIL_DISABLED)]
         let native_async_clone = _native_async.clone();
         let sse_specs_clone = sse_specs.clone();
@@ -1411,6 +1452,10 @@ where
 
             let handler_id = *matched.handler;
 
+            // Route's decorator `status_code=` (FastAPI parity): default for
+            // plain dict/list/scalar returns in the test-client pipeline too.
+            let default_status = status_codes.get(handler_id).copied().flatten().unwrap_or(200);
+
             // Rust-native SSE stream (ADR-088): serve events entirely in Rust.
             if let Some(Some((count, interval_ms))) = sse_specs_clone.get(handler_id) {
                 return Ok(justapi_core::server::sse_stream_response(*count, *interval_ms));
@@ -1496,6 +1541,7 @@ where
                         needs_request_clone[handler_id],
                         http_version.clone(),
                         auth_claims.clone(),
+                        default_status,
                     )
                 })
                 .await
@@ -1523,6 +1569,7 @@ where
                         needs_request_clone[handler_id],
                         http_version.clone(),
                         auth_claims.clone(),
+                        default_status,
                     )
                 })
                 .await
@@ -1532,7 +1579,7 @@ where
             // Async handlers: await the future here (GIL released while
             // waiting), mirroring make_native_handler.
             let nr = match nr.body {
-                NativeBody::Async(fut) => resolve_async_response(fut).await?,
+                NativeBody::Async(fut) => resolve_async_response(fut, default_status).await?,
                 _ => nr,
             };
 

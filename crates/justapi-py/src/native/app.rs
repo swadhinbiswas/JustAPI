@@ -48,6 +48,10 @@ pub struct JustAPIApp {
     pub router: Router<usize>,
     pub handlers: Vec<Py<PyAny>>,
     pub native: Vec<bool>,
+    /// Per-handler default response status from the route decorator's
+    /// `status_code=` (FastAPI parity). Indexed by handler id; `None` means
+    /// the framework default (200).
+    pub status_codes: Vec<Option<u16>>,
     /// Per-handler Rust-native CRUD config (ADR-056 Step C). `Some((table,
     /// columns, id_column))` means this route is served entirely in Rust by
     /// `crud_dispatch_bytes`, with no GIL hop. The operation is inferred from
@@ -475,6 +479,7 @@ impl JustAPIApp {
             router: Router::new(),
             handlers: Vec::new(),
             native: Vec::new(),
+            status_codes: Vec::new(),
             crud: Vec::new(),
             sse_specs: Vec::new(),
             schemas: Vec::new(),
@@ -981,6 +986,7 @@ impl JustAPIApp {
         if let Some(&id) = self.route_indices.get(&key) {
             self.handlers[id] = handler;
             self.native[id] = is_native;
+            self.status_codes[id] = status_code;
             self.crud[id] = crud_spec;
             self.schemas[id] = None;
             self.schema_jsons[id] = None;
@@ -988,6 +994,7 @@ impl JustAPIApp {
         } else {
             let id = self.handlers.len();
             self.handlers.push(handler);
+            self.status_codes.push(status_code);
             self.native.push(is_native);
             self.crud.push(crud_spec);
             self.sse_specs.push(None);
@@ -1051,6 +1058,7 @@ impl JustAPIApp {
     ) -> PyResult<()> {
         let id = self.handlers.len();
         self.handlers.push(handler);
+        self.status_codes.push(status_code);
         self.native.push(native.unwrap_or(false));
         self.crud.push(make_crud_spec(crud_table, crud_columns)?);
         self.sse_specs.push(None);
@@ -1111,6 +1119,7 @@ impl JustAPIApp {
     ) -> PyResult<()> {
         let id = self.handlers.len();
         self.handlers.push(handler);
+        self.status_codes.push(status_code);
         self.native.push(native.unwrap_or(false));
         self.crud.push(make_crud_spec(crud_table, crud_columns)?);
         self.sse_specs.push(None);
@@ -1171,6 +1180,7 @@ impl JustAPIApp {
     ) -> PyResult<()> {
         let id = self.handlers.len();
         self.handlers.push(handler);
+        self.status_codes.push(status_code);
         self.native.push(native.unwrap_or(false));
         self.crud.push(make_crud_spec(crud_table, crud_columns)?);
         self.sse_specs.push(None);
@@ -1227,6 +1237,7 @@ impl JustAPIApp {
     ) -> PyResult<()> {
         let id = self.handlers.len();
         self.handlers.push(handler);
+        self.status_codes.push(status_code);
         self.native.push(native.unwrap_or(false));
         self.crud.push(make_crud_spec(crud_table, crud_columns)?);
         self.sse_specs.push(None);
@@ -1290,6 +1301,7 @@ impl JustAPIApp {
         let experimental = experimental.unwrap_or(false);
         let id = self.handlers.len();
         self.handlers.push(handler);
+        self.status_codes.push(status_code);
         self.native.push(native.unwrap_or(false));
         self.crud.push(make_crud_spec(crud_table, crud_columns)?);
         self.sse_specs.push(None);
@@ -1354,6 +1366,7 @@ impl JustAPIApp {
         } else {
             let id = self.handlers.len();
             self.handlers.push(handler);
+            self.status_codes.push(None);
             self.native.push(false);
             self.crud.push(None);
             self.sse_specs.push(Some((count, interval_ms)));
@@ -1410,6 +1423,7 @@ impl JustAPIApp {
     ) -> PyResult<()> {
         let id = self.handlers.len();
         self.handlers.push(handler);
+        self.status_codes.push(status_code);
         self.native.push(native.unwrap_or(false));
         self.crud.push(make_crud_spec(crud_table, crud_columns)?);
         self.sse_specs.push(None);
@@ -1466,6 +1480,7 @@ impl JustAPIApp {
     ) -> PyResult<()> {
         let id = self.handlers.len();
         self.handlers.push(handler);
+        self.status_codes.push(status_code);
         self.native.push(native.unwrap_or(false));
         self.crud.push(make_crud_spec(crud_table, crud_columns)?);
         self.sse_specs.push(None);
@@ -1522,6 +1537,7 @@ impl JustAPIApp {
     ) -> PyResult<()> {
         let id = self.handlers.len();
         self.handlers.push(handler);
+        self.status_codes.push(status_code);
         self.native.push(native.unwrap_or(false));
         self.crud.push(make_crud_spec(crud_table, crud_columns)?);
         self.sse_specs.push(None);
@@ -1892,6 +1908,11 @@ impl JustAPIApp {
         // (schema-backed, response = validated request body, no Python call)?
         let native: Vec<bool> = std::mem::take(&mut app.native);
         let native = Arc::new(native);
+        // Per-handler default response status from the route decorator's
+        // `status_code=` (FastAPI parity): applied to plain dict/list/scalar
+        // returns; explicit responses/envelopes/streams keep their own status.
+        // Tracked per handler id at registration time.
+        let status_codes = Arc::new(std::mem::take(&mut app.status_codes));
         // Per-handler Rust-native CRUD config (ADR-056 Step C). `Some((table,
         // columns, id_column))` means the route is served by `crud_dispatch_bytes`
         // with the operation inferred from the request method. The pool is
@@ -2126,6 +2147,7 @@ impl JustAPIApp {
                     app_py_http1,
                     needs_request.clone(),
                     native.clone(),
+                    status_codes.clone(),
                     native_async.clone(),
                     crud_specs.clone(),
                     sse_specs.clone(),
@@ -2152,6 +2174,7 @@ impl JustAPIApp {
                         Python::attach(|py| app_py_http3.as_ref().as_ref().map(|a| a.clone_ref(py)));
                     let h3_needs = needs_request.clone();
                     let h3_native = native.clone();
+                    let h3_status = status_codes.clone();
                     let h3_native_async = native_async.clone();
                     let h3_crud = crud_specs.clone();
                     let h3_sse = sse_specs.clone();
@@ -2171,6 +2194,7 @@ impl JustAPIApp {
                         h3_app,
                         h3_needs,
                         h3_native,
+                        h3_status,
                         h3_native_async,
                         h3_crud,
                         h3_sse,
