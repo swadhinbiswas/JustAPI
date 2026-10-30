@@ -134,6 +134,24 @@ CORS is also secure-by-default (no permissive `*` unless you configure it).
 - **Logs:** structured logs via `tracing`; avoid logging request bodies in
   production (they may contain PII/secrets). The body cap (§4) bounds memory
   even if you do sample payloads.
+- **Request IDs:** call `app.enable_request_id()` (default header
+  `x-request-id`, or pass e.g. `X-Correlation-ID`). An incoming id is honoured
+  (1-128 printable ASCII), otherwise a 128-bit hex id is generated. The id is
+  visible to handlers as a request header, echoed on the response (including
+  401/429/504s and CORS preflights), and appears in the structured access log
+  as `http.request_id` — the join key between gateway logs and app logs:
+
+  ```python
+  app.enable_request_id()          # x-request-id
+  app.enable_request_id("X-Correlation-ID")  # reuse your gateway's header
+  ```
+
+  ```json
+  {"message":"request completed","http.method":"GET","http.path":"/orders",
+   "http.request_id":"77491bde080d2b7b8f49aeaf87d78bfc","http.status_code":200}
+  ```
+
+  If OTel tracing is enabled, correlate `http.request_id` with the trace id.
 
 ---
 
@@ -205,3 +223,34 @@ server {
 - [ ] Request timeout set; proxy idle timeout ≥ justapi timeout.
 - [ ] Graceful shutdown verified (SIGTERM drains cleanly).
 - [ ] No request bodies logged in production.
+- [ ] `enable_request_id()` enabled; gateway forwards/propagates the header.
+- [ ] `/metrics` alert thresholds set for 5xx ratio and p99 (e.g. p99 > 2x
+      the pre-deploy baseline for 10 min).
+
+---
+
+## 12. Production-readiness evidence (2026-10-30)
+
+The claims below are backed by recorded runs, not estimates:
+
+| Area | Evidence |
+|---|---|
+| Tests (GIL) | 267 Python tests, 312 core lib tests, 151 inference tests |
+| Tests (free-threaded 3.14t) | 246 Python tests with `PYTHON_GIL=0` |
+| Lint/supply chain | `cargo fmt --check`, `clippy -D warnings`, `cargo deny` (0 ignored advisories), Trivy + CycloneDX SBOM |
+| Latency gate | p99 A/B vs main is a **hard CI gate** (≤5% and <0.2 ms absolute) since 2026-10-23 — §13 |
+| Multi-worker | 4 prefork workers: 3.20–3.73× RPS, p99 down ~2/3 (BENCHMARKS.md) |
+| Graceful shutdown | Worker SIGTERM drains in-flight requests and is respawned; supervisor SIGTERM stops all workers cleanly |
+| Database correctness | SQLite + Postgres 16 (same app): parameter types pinned per value, WAL/busy_timeout, background tasks |
+| Deployment | Docker two-stage image (non-root, healthcheck, `/data` volume) built + smoke-tested on every PR |
+| Observability | Prometheus `/metrics`, JSON access logs with request IDs, `/health` + `/ready`, OTLP tracing |
+| Recovery | crash-fast + supervisor restart model (§2); server-side panics abort without UB (§2) |
+
+### Benchmark gate policy
+
+- p99 regression vs `main` >5% **and** ≥0.2 ms absolute fails CI
+  (`p99-gate.yml`). The absolute floor absorbs shared-runner jitter on
+  sub-millisecond baselines; real regressions on the ~2 ms Python path move
+  well past it.
+- Throughput numbers are trend-only across entries; compare like-for-like
+  builds within one session (see BENCHMARKS.md methodology notes).

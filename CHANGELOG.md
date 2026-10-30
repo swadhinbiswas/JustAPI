@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`status_code=` on the route decorator is applied to the response** (FastAPI parity; previously OpenAPI metadata only). Plain dict/list/scalar returns use it; explicit `Response` objects, envelope dicts and streams keep their own status. Pydantic model returns gained a Rust fast path (`model_dump_json`) and also honor the decorator status. **Behaviour change** — see ADR-099.
 - **OpenAPI request bodies from handler annotations:** a Pydantic model parameter now produces `requestBody: {$ref: ...}` with the model registered under `components.schemas` (previously `{"type": "object"}` unless `body_schema=` was passed). Required `Query(...)` params are `required: true` (no more leaked `Ellipsis` default).
 - **`@app.sse` handlers may take zero arguments** or a single `request` (previously `request` was always passed, so the documented zero-arg generator form raised `TypeError`).
+- **Request IDs (production correlation):** `app.enable_request_id()` (or a
+  custom header, e.g. `X-Correlation-ID`) honours an incoming id or generates
+  a 128-bit hex one, exposes it to handlers, echoes it on responses — including
+  401/429/504s and CORS preflights — and records it in the structured access
+  log as `http.request_id`. Implemented in `justapi-core` (`RequestId`
+  middleware) and wired into both the server and TestClient pipelines.
 - **New example app:** `examples/expense_analytics/` — SQLite + full CRUD + five analytics endpoints + SSE + background audit log + health checks, with 20 end-to-end tests (`pytest test_app.py`).
 - **Real-model OpenAI serving (verified end to end):** `justapi-cli serve --model <id> --model-path <dir>` with `--features inference,real` serves real GGUF weights over `/v1/chat/completions` (streaming SSE), `/v1/completions` and `/v1/models`. Verified with TinyLlama-1.1B Q4 on CPU: streaming deltas carry correct text (spaces/newlines), `[DONE]` terminator, coherent completions. Fixed the Llama decode pipeline found by this test (`▁`→space + byte-fallback for `<0xNN>` tokens).
 - **Real-weights inference support (first real run, ADR-098):** `Engine::encode/decode/generate_text` — real models are now drivable from text; GGUF SentencePiece tokenizers are built correctly (Metaspace, `unk_token`, `fuse_unk`); `quantized_llama` logits are rank-normalized for the sampler; generation errors are surfaced instead of silently closing the stream. Verified: TinyLlama-1.1B Q4 on CPU — 22.1 tok/s, TTFT 0.14 s, fluent output (`JUSTAPI_REAL_MODEL_DIR=... cargo test -p justapi-inference --features real --test real_weights -- --ignored --nocapture`).
@@ -49,6 +55,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **RustSec sweep (2026-10-30):** bumped `rustls` 0.23.46 (RUSTSEC-2026-0346/0347/0348/0349: TLS secret exposure, ECH buffered-data leak, 1 GiB Brotli allocation, downgrade), `rustls-webpki` 0.103.16 (RUSTSEC-2026-0382), `tokio` 1.54.1 (RUSTSEC-2026-0386, I/O safety), `wasmtime` 49.0.5 (RUSTSEC-2026-0353–0379: component-model panics, br_table miscompile), `webpki-roots` 1.0.11 (RUSTSEC-2026-0381). `wasmtime`'s default features were trimmed to what the WASM middleware uses (`anyhow`, `async`, `cranelift`, `runtime`, `std`, `wat`), which drops the module-cache chain that pulled `zstd`, `zstd-safe`, `zstd-sys` (RUSTSEC-2026-0391/0398/0403/0410). The remaining `zip` 8.6 advisories are documented in `deny.toml` as unreachable (candle-core's NumPy `.npz` reader only; justapi loads GGUF/safetensors). `cargo deny check` green.
 - Dropped `rustls-pemfile` (RUSTSEC-2025-0134) in favour of `rustls-pki-types` PEM loaders.
 - Bumped `h2` → 0.4.20 (RUSTSEC-2026-0258), `rustls` → 0.23.45 (RUSTSEC-2026-0285) and `wasmtime` → 49.0.2 (five RUSTSEC-2026 advisories: fuel accounting, GC heap corruption, stack overflow in async-lifted callbacks). `cargo deny check` is green again — no ignored advisories remain.
 - Trivy CI job (filesystem scan: vulnerabilities, secrets, misconfigurations; HIGH/CRITICAL, fixed-only) + CycloneDX SBOM artifact; pinned Trivy binary verified by SHA256 (the `trivy-action` was compromised in 2026).
@@ -59,7 +66,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Free-threaded (3.14t) tests are now a real gate.** The job previously swallowed every failure with `|| true`; it now fails on any `FAILED`/`ERROR` and only tolerates the known interpreter-teardown segfault after a clean pass. The previously skipped websocket/GraphQL/hot-reload/max-body-size files now run on free-threaded (verified: 212 passed locally on 3.14t).
 - **Integration tests re-enabled.** The job was disabled after always failing (it curled a nonexistent `/` route and `justapi serve` found no app in CI). It now boots the Rust server, waits for readiness with retries, and exercises health, metrics, OpenAPI, echo and a real WebSocket round-trip.
 - Per-PR short fuzz gate (`fuzz_body`, `fuzz_headers`, `fuzz_jwt`).
-- p99 A/B latency workflow (warn-only until 2026-10-23).
+- **p99 latency gate is now a hard gate** (the warn-only window closed
+  2026-10-23): the PR-vs-main A/B fails when p99 regresses >5% **and** by at
+  least 0.2 ms absolute; the floor absorbs shared-runner jitter. Policy in
+  `BENCHMARKS.md` + `PRODUCTION.md`.
+- **Docker image for the example app built and smoke-tested on every PR:**
+  wheel build → `docker build --build-arg JUSTAPI_SPEC=<wheel>` → container
+  runs, `/ready` healthy, seeded data present, `POST` → 201, request-id echoed,
+  container healthcheck reaches `healthy`.
 
 ## [2.0.10] - 2026-08-08
 

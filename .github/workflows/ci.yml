@@ -517,6 +517,83 @@ jobs:
           cache-to: type=gha,mode=max
 
   # ============================================================
+  # Stage 7b: Example app — production image build + smoke test
+  # ============================================================
+
+  docker-example:
+    name: Docker image (expense_analytics example)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv + Python
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Build wheel
+        run: |
+          uv venv --clear
+          uv pip install maturin
+          uv run maturin build --release -m crates/justapi-py/Cargo.toml --out /tmp/wheels
+          ls -l /tmp/wheels
+
+      - name: Build the example image with the freshly built wheel
+        run: |
+          set -euo pipefail
+          WHEEL=$(basename /tmp/wheels/justapi-*.whl)
+          cp "/tmp/wheels/$WHEEL" examples/expense_analytics/
+          docker build \
+            --build-arg "JUSTAPI_SPEC=./$WHEEL" \
+            -t expense-analytics:ci \
+            examples/expense_analytics
+
+      - name: Smoke test the production image
+        run: |
+          set -euo pipefail
+          docker run -d --name expense-smoke -p 8000:8000 expense-analytics:ci
+          trap 'docker rm -f expense-smoke >/dev/null 2>&1 || true' EXIT
+
+          for i in $(seq 1 40); do
+            if curl -sf http://127.0.0.1:8000/live >/dev/null; then break; fi
+            sleep 1
+          done
+
+          # Readiness probes the database through the Python health check.
+          curl -sf http://127.0.0.1:8000/ready | grep -q '"healthy"'
+
+          # Seed inside the container as the non-root runtime user. The demo
+          # seed spans the last 180 days, so the row count depends on today's
+          # date — assert a healthy range, not an exact number.
+          docker exec -u appuser expense-smoke python seed.py
+          count=$(curl -sf http://127.0.0.1:8000/analytics/summary \
+            | python3 -c "import json,sys; print(json.load(sys.stdin)['count'])")
+          test "$count" -gt 200 || { echo "unexpected seeded count: $count"; exit 1; }
+
+          # Writes validate + return the declared status.
+          code=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+            http://127.0.0.1:8000/expenses \
+            -H 'Content-Type: application/json' \
+            -d '{"description":"ci","amount":1.5,"category":"ci","spent_on":"2026-10-30"}')
+          test "$code" = "201" || { echo "POST returned $code"; exit 1; }
+
+          # Request-ID propagation through the production image.
+          curl -s -D - -o /dev/null http://127.0.0.1:8000/analytics/summary \
+            | grep -qi '^x-request-id:'
+
+          # Healthcheck reaches "healthy".
+          for i in $(seq 1 12); do
+            status=$(docker inspect --format '{{.State.Health.Status}}' expense-smoke)
+            [ "$status" = "healthy" ] && break
+            sleep 5
+          done
+          test "$status" = "healthy" || { echo "health: $status"; exit 1; }
+
+          echo "example image smoke test OK"
+
+  # ============================================================
   # Stage 8: PyPI Publish (on release)
   # ============================================================
 

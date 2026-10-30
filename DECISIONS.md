@@ -3927,3 +3927,52 @@ integration test (same SQL with float→int→float, literal `'?'`, user cast);
 live example on Postgres 16 — seed (294 rows, `SUM` exact), create/patch/
 delete (201/200/204), analytics summary/by-category/monthly/trend/top,
 background audit rows; SQLite suite unchanged (267 passed, 3 skipped).
+
+## ADR-101 — 2026-10-30 — Production hardening: request IDs, hard p99 gate, dependency sweep
+
+**Context.** A production-readiness pass (20 days after the 2.1.0 prep) found
+three gaps: (a) no request-correlation primitive — production logs had no join
+key between gateway, app, and error logs; (b) the p99 A/B workflow was still
+warn-only although its observation window closed 2026-10-23; (c) a fresh
+`cargo deny` run found **17 new RustSec advisories** published since the last
+scan (TLS secret exposure and ECH leaks in rustls, a tokio I/O-safety unsound
+advisory, wasmtime component-model panics/miscompiles, zstd uninitialized
+memory, webpki-roots distrusted intermediates).
+
+**Decision.**
+
+- **Request IDs (`RequestId` middleware, `app.enable_request_id()`)**: honours
+  an incoming header (validated: 1–128 printable ASCII) or generates 128 bits
+  of randomness (the workspace already depends on `rand`), injects it into the
+  request so handlers see it, echoes it on responses (including 401/429/504
+  and CORS preflights, because it is added **outermost**), and stores it in
+  response extensions so the access log can report `http.request_id` without
+  knowing the configured header name. Opt-in: no cost when disabled.
+- **p99 gate is now hard**: `continue-on-error` removed; CI fails when the PR's
+  p99 regresses >5% **and** ≥0.2 ms absolute. The floor is deliberate — on the
+  ~2 ms Python path, shared-runner jitter regularly exceeds 5% of a
+  sub-millisecond delta, and a flaky gate is worse than a slightly looser one.
+  Policy recorded in BENCHMARKS.md and PRODUCTION.md.
+- **Dependency sweep**: rustls 0.23.46, rustls-webpki 0.103.16, tokio 1.54.1,
+  wasmtime 49.0.5, webpki-roots 1.0.11. wasmtime's default features were
+  trimmed to `anyhow, async, cranelift, runtime, std, wat` — the exact set the
+  WASM middleware uses — which removes the module-cache chain and with it
+  zstd/zstd-safe/zstd-sys. The remaining `zip` 8.6 advisories are reachable
+  only through candle-core's NumPy `.npz` reader (we load GGUF/safetensors);
+  they are documented as ignores in `deny.toml` with a removal condition.
+  `cargo deny check` is green.
+- **CI builds and smoke-tests the example's Docker image on every PR**
+  (wheel → image → container: `/ready` healthy, seed present, `POST` 201,
+  request-id echoed, Docker healthcheck `healthy`). The seed assertion checks
+  a range, not an exact row count, because the demo data is date-relative.
+
+**Consequences.** Request IDs add one header insertion and one extension per
+request when enabled, and nothing when disabled. The p99 gate may still flake
+under pathological runner noise; the 0.2 ms floor bounds that. The zip ignores
+must be removed when candle-core adopts zip ≥ 9 — noted in `deny.toml`.
+
+**Verified.** 316 core Rust lib tests, 151 inference, 271 Python (GIL),
+251 Python (free-threaded 3.14t), fmt/clippy clean, `cargo deny` green,
+Docker image built + smoke-tested locally with the patched dependencies,
+request-id propagation checked live (generated id, incoming id, 404, JSON log
+field).
