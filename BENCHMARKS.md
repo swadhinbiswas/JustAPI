@@ -5,6 +5,19 @@
 
 ---
 
+## Gate policy
+
+- **p99 latency:** the `p99-gate.yml` A/B (PR vs `main`, same runner, same
+  build profile) is a **hard CI gate** since 2026-10-30. It fails when the
+  PR's p99 regresses >5% **and** by at least 0.2 ms absolute; the absolute
+  floor keeps shared-runner jitter on sub-millisecond baselines from
+  flapping the gate.
+- **Throughput:** compare like-for-like builds within one session. Absolute
+  RPS is not comparable across harnesses/builds (see the methodology notes
+  in the Phase-53 entries).
+
+---
+
 ## Hardware fixture
 
 *Recorded 2026-07-03. All benchmarks must use this same machine.*

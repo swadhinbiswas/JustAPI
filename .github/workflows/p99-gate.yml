@@ -2,10 +2,11 @@ name: p99 Latency Gate
 
 # A/B p99 latency check: PR vs main, same runner, same build profile.
 #
-# This is WARN-ONLY until 2026-10-23 (shared runners are noisy; we need two
-# weeks of data before letting latency block merges). To promote it to a hard
-# gate, remove the `continue-on-error: true` below and the explicit
-# `exit 0` after the comparison.
+# HARD GATE since 2026-10-23 (the two-week warn-only observation window is
+# over). A PR whose p99 regresses >5% vs main — and by at least 0.2 ms
+# absolute, to absorb shared-runner jitter on sub-millisecond baselines —
+# fails CI. The absolute floor is recorded in BENCHMARKS.md; adjust it there
+# and here together if the benchmark changes shape.
 #
 # Methodology (skills/benchmark-harness): warm up before measuring, measure
 # the default Python-handler path (not the native fast path), compare only
@@ -17,9 +18,8 @@ on:
 
 jobs:
   p99:
-    name: p99 regression (warn-only)
+    name: p99 regression (hard gate)
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
@@ -96,19 +96,27 @@ jobs:
           echo "MAIN_P99=$MAIN_P99" >> "$GITHUB_ENV"
           echo "main p99: $(echo "$MAIN_P99" | awk '{printf "%.3f ms", $1*1000}')"
 
-      - name: Compare (warn-only)
+      - name: Compare (hard gate)
         run: |
           python - <<'EOF'
           import os
+          import sys
+
           pr = float(os.environ["PR_P99"])
           main = float(os.environ["MAIN_P99"])
           ratio = pr / main if main > 0 else 1.0
-          print(f"p99 A/B: PR {pr*1000:.3f} ms vs main {main*1000:.3f} ms (ratio {ratio:.3f})")
-          if ratio > 1.05:
+          delta_ms = (pr - main) * 1000
+          print(f"p99 A/B: PR {pr*1000:.3f} ms vs main {main*1000:.3f} ms "
+                f"(ratio {ratio:.3f}, delta {delta_ms:+.3f} ms)")
+
+          # >5% relative regression AND >=0.2 ms absolute. The floor keeps
+          # shared-runner jitter from flapping the gate on sub-millisecond p99s;
+          # real regressions on the ~2 ms Python path move it well past it.
+          if ratio > 1.05 and delta_ms >= 0.2:
               pct = (ratio - 1) * 100
-              print(f"::warning title=p99 regression::p99 regressed {pct:.1f}% vs main (>5% threshold). See BENCHMARKS.md gate policy.")
-          else:
-              print("p99 within acceptable bounds (<=5%).")
-          # WARN-ONLY: never fail the job. Flip to `sys.exit(1)` when
-          # promoting this workflow to a hard gate (see header comment).
+              print(f"::error title=p99 regression::p99 regressed {pct:.1f}% "
+                    f"({delta_ms:+.3f} ms) vs main — exceeds the 5% gate. "
+                    f"See BENCHMARKS.md gate policy.")
+              sys.exit(1)
+          print("p99 within gate (<=5% or <0.2 ms absolute).")
           EOF
