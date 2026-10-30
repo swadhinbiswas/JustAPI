@@ -38,6 +38,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Database outages are retryable, not fatal (ADR-102).** `app.db.*` now raises
+  `DatabaseUnavailable` when the pool cannot acquire a connection within
+  `request_acquire_timeout` (3 s default) or the server is unreachable; the
+  request layer answers **503 + `Retry-After: 5`** instead of 500. The server
+  **starts even when the database is down at boot** (previously it exited with
+  "Database init error"), `/ready` reports 503, and the pool reconnects lazily
+  on the next request once the database returns — no restart. Verified live
+  with Postgres: down at boot → 503s; start Postgres → `/ready` 200 and
+  requests recover. The exception is catchable for graceful degradation.
+- **`/ready` in the TestClient now evaluates registered health checks.**
+  Previously it always returned 200 (the check registry only existed inside
+  `app.run()`), so tests could not cover readiness. Checks are evaluated on
+  the Python side, which also fixes a re-entrancy hazard (`Already borrowed`)
+  when a check touches `app.db`.
 - **`justapi serve` broke Pydantic models (`from __future__ import annotations`).** The CLI imported the app module without registering it in `sys.modules`, so Pydantic could not resolve a model's own annotations through `sys.modules[cls.__module__]` — every validated write returned `422 "ExpenseCreate is not fully defined"` under `justapi serve` while `python app.py` worked. Found by serving the example app with `--workers 4`; regression test added.
 - **Forked workers crashed on shutdown instead of draining.** Children inherited the supervisor's `SIGTERM`/`SIGINT` handlers, which close over the parent's `Process` objects (`AssertionError: can only test a child process`). Children now reset signals to defaults so the server's own graceful drain applies — verified: worker `SIGTERM` drains in-flight connections, is respawned, zero tracebacks; supervisor `SIGTERM` stops all workers cleanly.
 - **Postgres: silent data corruption from parameter type reuse (ADR-100).** sqlx's `Any` driver caches a prepared statement per SQL text with the parameter types from the first execution; the same `INSERT ... VALUES (?, ?, ?, ?)` executed with a float and later an int encoded the int against the cached `float8` type, writing reinterpreted bits (`950` stored as `4.69e-321`). `?` placeholders are now rewritten to `$N::<type>` for Postgres based on the bound value, so the SQL text (and cached statement) tracks the value types. The rewriter is also quote/comment-aware (`'?'`, `-- ?`, `"we?ird"` are left alone).
@@ -70,6 +84,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   2026-10-23): the PR-vs-main A/B fails when p99 regresses >5% **and** by at
   least 0.2 ms absolute; the floor absorbs shared-runner jitter. Policy in
   `BENCHMARKS.md` + `PRODUCTION.md`.
+- **Workflow supply chain hardened:** all 63 `uses:` references are pinned to
+  full commit SHAs (with the version in a comment), every workflow declares
+  least-privilege `permissions:` (`contents: read`, escalating per job:
+  `packages: write` for the image push, `id-token`/`contents: write` for the
+  release), and a new `verify-actions-pinned` job fails CI if an unpinned
+  action is added. Dependabot keeps the pins current.
 - **Docker image for the example app built and smoke-tested on every PR:**
   wheel build → `docker build --build-arg JUSTAPI_SPEC=<wheel>` → container
   runs, `/ready` healthy, seeded data present, `POST` → 201, request-id echoed,

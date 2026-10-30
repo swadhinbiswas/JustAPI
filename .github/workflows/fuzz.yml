@@ -5,15 +5,20 @@ on:
     - cron: '0 2 * * *' # Run at 2 AM every day
   workflow_dispatch:
 
+
+# Least-privilege default: every job that needs more declares it.
+permissions:
+  contents: read
+
 jobs:
   fuzz:
     name: cargo-fuzz
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Install Rust nightly
-        uses: dtolnay/rust-toolchain@nightly
+        uses: dtolnay/rust-toolchain@2c76c034f9e32a5d6e2c104dc4df23a22476db04 # nightly
 
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz
