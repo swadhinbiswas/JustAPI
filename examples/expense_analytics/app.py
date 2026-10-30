@@ -128,6 +128,7 @@ app.set_database(
 )
 app.enable_secure_headers()
 app.enable_timeout(30)
+app.enable_request_id()  # x-request-id: exposed to handlers, echoed, logged
 app.register_health_check("database", lambda: len(app.db.query("SELECT 1")) == 1)
 
 

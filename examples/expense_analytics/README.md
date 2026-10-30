@@ -67,6 +67,10 @@ docker compose build --build-arg JUSTAPI_SPEC=./justapi-2.1.0-cp311-abi3-manylin
   (`timestamp`, `level`, `http.method`, `http.path`, `http.status_code`,
   `latency_ms`) for Loki/CloudWatch/Datadog; the default is readable text.
   `LOG_LEVEL=debug` turns up verbosity.
+- **Request IDs** — `enable_request_id()` honours an incoming `x-request-id`
+  (or generates a 128-bit one), exposes it to handlers, echoes it on responses
+  (including 404/500s) and logs it as `http.request_id` — correlate gateway
+  and app logs with one value.
 - **Health** — `GET /health` (liveness) and `GET /ready` (readiness; probes
   the database via `register_health_check`).
 - **Tracing** — `justapi.logging.init_otlp_tracing(endpoint, service_name)`

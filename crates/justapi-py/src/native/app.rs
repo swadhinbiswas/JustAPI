@@ -89,6 +89,9 @@ pub struct JustAPIApp {
     /// core `TimeoutMiddleware` returns 504 after this duration.
     pub timeout_secs: Option<f64>,
     pub coalesce_headers: Option<Vec<String>>,
+    /// Request-ID middleware (header propagation), enabled via
+    /// ``app.enable_request_id()``.
+    pub request_id: Option<justapi_core::middleware::RequestId>,
     /// HTTP/3 (QUIC) TLS certificate/key paths, set via `enable_http3(...)`.
     /// When Some, `run()` also starts a UDP/QUIC listener serving the same
     /// application handler over HTTP/3 (feature `http3` on justapi-core).
@@ -498,6 +501,7 @@ impl JustAPIApp {
             circuit_breaker_config: None,
             timeout_secs: None,
             coalesce_headers: None,
+            request_id: None,
             http3_cert: None,
             http3_key: None,
             secure_headers: false,
@@ -702,6 +706,21 @@ impl JustAPIApp {
     #[pyo3(name = "enable_request_coalescing")]
     fn enable_request_coalescing(&mut self, headers: Option<Vec<String>>) {
         self.coalesce_headers = Some(headers.unwrap_or_default());
+    }
+
+    /// Ensure every request carries a correlation id: honour an incoming
+    /// header (or generate one), expose it to handlers, echo it on the
+    /// response, and include it in the access log.
+    #[pyo3(name = "enable_request_id")]
+    #[pyo3(signature = (header=None))]
+    fn enable_request_id(&mut self, header: Option<String>) -> PyResult<()> {
+        let mw = match header {
+            Some(name) => justapi_core::middleware::RequestId::with_header(&name)
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?,
+            None => justapi_core::middleware::RequestId::new(),
+        };
+        self.request_id = Some(mw);
+        Ok(())
     }
 
     /// Enable an HTTP/3 (QUIC) listener on the same address `run()` binds
@@ -1963,6 +1982,7 @@ impl JustAPIApp {
         let timeout_secs = app.timeout_secs;
         let user_rate_limit = app.user_rate_limit;
         let coalesce_headers = app.coalesce_headers.take();
+        let request_id = app.request_id.take();
         let health_checks = std::mem::take(&mut app.health_checks);
         let secure_headers = app.secure_headers;
         let secure_headers_config = app.secure_headers_config.take();
@@ -2274,6 +2294,17 @@ impl JustAPIApp {
                         ..Default::default()
                     };
                     server = server.add_circuit_breaker(config);
+                }
+
+                // Request IDs go outermost so 401/429/504 responses and CORS
+                // preflights carry the id too, and so each request gets its
+                // own id before request coalescing can share a response.
+                if let Some(rid) = request_id {
+                    tracing::info!(
+                        "Request-ID middleware enabled (header: {})",
+                        rid.header_name()
+                    );
+                    server = server.add_middleware(rid);
                 }
 
                 if let Some(secs) = timeout_secs {

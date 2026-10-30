@@ -1650,6 +1650,21 @@ class JustAPIApp:
         """
         self._app.enable_timeout(float(seconds))
 
+    def enable_request_id(self, header: str = "x-request-id"):
+        """Propagate a correlation ID on every request.
+
+        Honours an incoming ``header`` value (1-128 printable ASCII chars) or
+        generates a 128-bit hex id; the id is exposed to handlers as a request
+        header, echoed on the response (including 401/429/504s and CORS
+        preflights), and included in the structured access log as
+        ``http.request_id``.
+
+        Args:
+            header: Header name to read/write (case-insensitive). Use
+                ``X-Correlation-ID`` etc. if your gateway already sets one.
+        """
+        self._app.enable_request_id(header)
+
     def enable_user_rate_limit(self, requests_per_second: int = 10):
         """Per-authenticated-user rate limit, keyed on the JWT ``sub`` claim.
 

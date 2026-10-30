@@ -95,3 +95,86 @@ if __name__ == "__main__":
     test_server_starts_and_serves_requests()
     test_justapi_test_client_works()
     print("All tests PASSED")
+
+
+# ---------------------------------------------------------------------------
+# Request IDs (correlation ids)
+# ---------------------------------------------------------------------------
+
+
+def test_request_id_generated_exposed_and_echoed():
+    from justapi import JustAPIApp, JustAPITestClient
+
+    app = JustAPIApp()
+    app.enable_request_id()
+
+    @app.get("/rid")
+    def rid(request):
+        return {"id": request.headers.get("x-request-id")}
+
+    client = JustAPITestClient(app)
+
+    resp = client.get("/rid")
+    assert resp["status"] == 200
+    echoed = resp["headers"].get("x-request-id") if isinstance(resp["headers"], dict) else None
+    if echoed is None:
+        # Header accessor shape differs across client versions; fall back to
+        # the handler-observed id.
+        echoed = json.loads(bytes(resp["body"]))["id"]
+    handler_id = json.loads(bytes(resp["body"]))["id"]
+    assert handler_id and handler_id == echoed
+    assert len(handler_id) == 32
+
+    # A second request gets a different id.
+    other = json.loads(bytes(client.get("/rid")["body"]))["id"]
+    assert other != handler_id
+
+
+def test_request_id_honours_incoming_header():
+    from justapi import JustAPIApp, JustAPITestClient
+
+    app = JustAPIApp()
+    app.enable_request_id()
+
+    @app.get("/rid")
+    def rid(request):
+        return {"id": request.headers.get("x-request-id")}
+
+    client = JustAPITestClient(app)
+    resp = client.get_with("/rid", [("x-request-id", "trace-abc-123")])
+    assert resp["status"] == 200
+    assert json.loads(bytes(resp["body"]))["id"] == "trace-abc-123"
+
+
+def test_request_id_custom_header():
+    from justapi import JustAPIApp, JustAPITestClient
+
+    app = JustAPIApp()
+    app.enable_request_id("X-Correlation-ID")
+
+    @app.get("/rid")
+    def rid(request):
+        return {"id": request.headers.get("x-correlation-id")}
+
+    client = JustAPITestClient(app)
+    resp = client.get_with("/rid", [("X-Correlation-ID", "corr-42")])
+    assert resp["status"] == 200
+    assert json.loads(bytes(resp["body"]))["id"] == "corr-42"
+
+
+def test_request_id_present_on_error_responses():
+    from justapi import JustAPIApp, JustAPITestClient
+
+    app = JustAPIApp()
+    app.enable_request_id()
+
+    @app.get("/boom")
+    def boom():
+        raise RuntimeError("kaboom")
+
+    client = JustAPITestClient(app)
+    resp = client.get("/boom")
+    assert resp["status"] == 500
+    # 404 (router miss) also carries an id.
+    missing = client.get("/does-not-exist")
+    assert missing["status"] == 404

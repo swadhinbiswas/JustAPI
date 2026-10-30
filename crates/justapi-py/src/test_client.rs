@@ -151,6 +151,11 @@ impl JustAPITestClient {
         // run() afterwards or serve several test clients.
         let mut chain = MiddlewareChain::new(handler);
 
+        // Request IDs outermost (mirrors the server chain).
+        if let Some(rid) = app_ref.request_id.as_ref() {
+            chain.add(rid.clone());
+        }
+
         if let Some(headers) = app_ref.coalesce_headers.as_ref() {
             let mut coalescer = RequestCoalescer::new();
             if !headers.is_empty() {
