@@ -3976,3 +3976,55 @@ must be removed when candle-core adopts zip ≥ 9 — noted in `deny.toml`.
 Docker image built + smoke-tested locally with the patched dependencies,
 request-id propagation checked live (generated id, incoming id, 404, JSON log
 field).
+
+## ADR-102 — 2026-10-30 — Database outages are retryable (503), and startup survives a cold DB
+
+**Context.** An adversarial production pass (zero-data, date extremes, huge
+ids, concurrent writes, DB kill/restart) found two operational defects:
+
+1. **`app.run()` exited when the database was unreachable at boot** — it
+   eagerly connected and returned `Database init error: pool timed out ...`.
+   Kubernetes then crash-loops the pod (`RestartPolicy`), which is exactly the
+   wrong reaction to a dependency outage: the process is healthy, the database
+   is not.
+2. **DB failures surfaced as `500 Internal Server Error`.** sqlx's
+   `PoolTimedOut` (and connection refused/reset) reached Python as a generic
+   `RuntimeError`, which the request layer maps to 500 — so load balancers
+   could not distinguish "we are broken" from "retry later".
+
+A third, smaller defect: `/ready` in the **TestClient** always returned 200
+because the health registry is only built inside `app.run()`; tests could not
+exercise readiness.
+
+**Decision.**
+
+- `justapi_core::db::is_db_unavailable(&sqlx::Error)` classifies
+  `PoolTimedOut`, `PoolClosed`, `Io`, and connection-refused/reset/closed
+  messages as retryable.
+- `justapi-py`'s DB bridge tags those errors and raises
+  `justapi.exceptions.DatabaseUnavailable` (a `RuntimeError` subclass, so
+  existing `except RuntimeError` code keeps working). The native error mapper
+  turns it into **503 + `Retry-After: 5`** with
+  `{"detail": "database unavailable"}`.
+- `run()` treats a failed eager connect as a **warning**, not an error: the
+  server starts, `/ready` is 503, DB requests are 503, and `app.db` retries the
+  connection on every access — so recovery is automatic once the database
+  returns. `app.db` returns `None` only when **no** database was configured
+  (new `get_database()` check); a configured-but-down database raises.
+- Readiness is evaluated on the Python side (`_builtin_ready` iterates the
+  registered checks) instead of calling Python callbacks while holding a
+  `&self` borrow of the PyO3 app object — which raised
+  `RuntimeError: Already borrowed` for checks touching `app.db`. The live
+  server's health registry still drives its own probe path.
+
+**Consequences.** A DB outage no longer takes the service out of rotation at
+the wrong layer: `/live` stays 200, `/ready` goes 503, and dependent requests
+fail fast with a retryable status. Handlers can catch `DatabaseUnavailable` to
+serve cached data. The acquire wait is bounded by `request_acquire_timeout`
+(3 s default) — tune it down for latency-sensitive deployments.
+
+**Verified.** 4 regression tests (`test_db_unavailable.py`: 503 + Retry-After,
+catchable, no-DB → None, `/ready` 503); live Postgres kill/restart cycle:
+boot with PG down → server up, `/ready` 503, requests 503 + `Retry-After` in
+3.0 s; start PG → `/ready` 200, requests 200, no restart; startup logs one
+warning. Full suites: 275 Python (GIL), 255 (free-threaded), 312 core Rust.

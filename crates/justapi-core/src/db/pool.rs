@@ -260,6 +260,25 @@ pub enum DbAcquireError {
     Other(sqlx::Error),
 }
 
+/// True when a database error means the database is unreachable or the pool is
+/// saturated — a retryable outage rather than a bad query. Request layers map
+/// this to `503 Service Unavailable` (so load balancers can retry or route
+/// away) instead of a generic `500`.
+pub fn is_db_unavailable(err: &sqlx::Error) -> bool {
+    match err {
+        sqlx::Error::PoolTimedOut | sqlx::Error::PoolClosed | sqlx::Error::Io(_) => true,
+        other => {
+            let msg = other.to_string();
+            msg.contains("pool timed out")
+                || msg.contains("Connection refused")
+                || msg.contains("connection refused")
+                || msg.contains("connection closed")
+                || msg.contains("connection reset")
+                || msg.contains("error communicating with database")
+        }
+    }
+}
+
 impl From<sqlx::Error> for DbAcquireError {
     fn from(e: sqlx::Error) -> Self {
         match e {

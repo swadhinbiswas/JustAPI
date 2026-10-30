@@ -186,6 +186,29 @@ impl DbParam {
 /// parameters** — no string interpolation — so it is injection-safe. The DB
 /// round-trip runs with the GIL released (`py.detach`), so Python threads can
 /// make progress while waiting on the database (ADR-056 follow-up / AGENTS.md §2).
+/// Marker for a retryable database outage (pool timeout, unreachable server).
+/// Converted to `justapi.exceptions.DatabaseUnavailable` at the Python
+/// boundary so the request layer answers 503 instead of 500.
+#[derive(Debug)]
+struct DbUnavailable(String);
+
+impl std::fmt::Display for DbUnavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::error::Error for DbUnavailable {}
+
+/// Map a `sqlx` error into an `anyhow` error, tagging retryable outages.
+fn db_err(e: justapi_core::sqlx::Error) -> anyhow::Error {
+    if justapi_core::db::is_db_unavailable(&e) {
+        anyhow::anyhow!(DbUnavailable(e.to_string()))
+    } else {
+        anyhow::anyhow!(e.to_string())
+    }
+}
+
 #[pyclass(name = "DbPool", from_py_object)]
 #[derive(Clone)]
 pub struct DbPool {
@@ -239,7 +262,18 @@ impl DbPool {
             // (avoids the re-entrant block_on deadlock).
             rx.recv().map_err(|_| anyhow::anyhow!("db task dropped before completion"))?
         });
-        res.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+        res.map_err(|e| {
+            if e.downcast_ref::<DbUnavailable>().is_some() {
+                if let Ok(exc_mod) = py.import("justapi.exceptions") {
+                    if let Ok(cls) = exc_mod.getattr("DatabaseUnavailable") {
+                        if let Ok(inst) = cls.call1((e.to_string(),)) {
+                            return pyo3::PyErr::from_value(inst);
+                        }
+                    }
+                }
+            }
+            pyo3::exceptions::PyRuntimeError::new_err(e.to_string())
+        })
     }
 }
 
@@ -263,10 +297,7 @@ impl DbPool {
         };
         let inner = self.inner.clone();
         let rows: serde_json::Value = self.run_blocking(py, async move {
-            inner
-                .query_with_params(&sql, &params_json)
-                .await
-                .map_err(|e| anyhow::anyhow!(e.to_string()))
+            inner.query_with_params(&sql, &params_json).await.map_err(db_err)
         })?;
         json_to_python(py, &rows)
     }
@@ -288,10 +319,7 @@ impl DbPool {
         };
         let inner = self.inner.clone();
         let affected: u64 = self.run_blocking(py, async move {
-            inner
-                .execute_with_params(&sql, &params_json)
-                .await
-                .map_err(|e| anyhow::anyhow!(e.to_string()))
+            inner.execute_with_params(&sql, &params_json).await.map_err(db_err)
         })?;
         Ok(affected.into_pyobject(py)?.into_any())
     }
@@ -324,12 +352,9 @@ impl DbPool {
         let inner = self.inner.clone();
         let rt = self.rt.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let rows: serde_json::Value = rt
-                .spawn(async move {
-                    inner
-                        .query_with_params(&sql, &params_json)
-                        .await
-                        .map_err(|e| anyhow::anyhow!(e.to_string()))
+            let rows: serde_json::Value =
+                rt.spawn(async move {
+                    inner.query_with_params(&sql, &params_json).await.map_err(db_err)
                 })
                 .await
                 .map_err(|e| {
@@ -363,10 +388,7 @@ impl DbPool {
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let affected: u64 = rt
                 .spawn(async move {
-                    inner
-                        .execute_with_params(&sql, &params_json)
-                        .await
-                        .map_err(|e| anyhow::anyhow!(e.to_string()))
+                    inner.execute_with_params(&sql, &params_json).await.map_err(db_err)
                 })
                 .await
                 .map_err(|e| {
@@ -414,14 +436,9 @@ impl DbPool {
                             (s.clone(), p.iter().map(justapi_core::db::Param::from).collect())
                         })
                         .collect();
-                    inner
-                        .transaction_with_isolation(&typed, Some(level))
-                        .await
-                        .map_err(|e| anyhow::anyhow!(e.to_string()))
+                    inner.transaction_with_isolation(&typed, Some(level)).await.map_err(db_err)
                 }
-                None => {
-                    inner.transaction(&stmts_json).await.map_err(|e| anyhow::anyhow!(e.to_string()))
-                }
+                None => inner.transaction(&stmts_json).await.map_err(db_err),
             }
         })?;
         json_to_python(py, &res)
@@ -447,10 +464,7 @@ impl DbPool {
         let inner = self.inner.clone();
         let chunks: Vec<serde_json::Value> = self.run_blocking(py, async move {
             let typed: Vec<_> = params_json.iter().map(justapi_core::db::Param::from).collect();
-            inner
-                .query_stream(&sql, &typed, chunk)
-                .await
-                .map_err(|e| anyhow::anyhow!(e.to_string()))
+            inner.query_stream(&sql, &typed, chunk).await.map_err(db_err)
         })?;
         json_to_python(py, &serde_json::Value::Array(chunks))
     }
@@ -471,10 +485,7 @@ impl DbPool {
         });
         let inner = self.inner.clone();
         let row: serde_json::Value = self.run_blocking(py, async move {
-            inner
-                .insert_returning(&table, &cols, &data_json)
-                .await
-                .map_err(|e| anyhow::anyhow!(e.to_string()))
+            inner.insert_returning(&table, &cols, &data_json).await.map_err(db_err)
         })?;
         json_to_python(py, &row)
     }
@@ -482,10 +493,8 @@ impl DbPool {
     /// Ping the database; raises on failure.
     fn health<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        self.run_blocking(py, async move {
-            inner.health_check().await.map_err(|e| anyhow::anyhow!(e.to_string()))
-        })
-        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        self.run_blocking(py, async move { inner.health_check().await.map_err(db_err) })
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
         Ok(true.into_pyobject(py)?.as_any().clone())
     }
 }

@@ -5,6 +5,11 @@ pub mod coalesce;
 pub mod compress;
 #[cfg(feature = "db")]
 pub mod db;
+
+/// Re-export of `sqlx` for crates that wrap the DB API (e.g. typed error
+/// handling in `justapi-py`) without declaring their own `sqlx` dependency.
+#[cfg(feature = "db")]
+pub use sqlx;
 pub mod dx;
 pub mod error;
 pub mod error_catalog;

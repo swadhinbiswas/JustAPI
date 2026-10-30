@@ -1954,18 +1954,18 @@ impl JustAPIApp {
         let database_config = app.database.as_ref().map(|d| d.to_config());
 
         // Eagerly resolve the pool now (if configured and not already connected)
-        // so the rest of `run` and any handler sees a ready `app.db`. `connect_database`
-        // reads `self.database`, so we keep it (no `.take()`).
+        // so the rest of `run` and any handler sees a ready `app.db`. A database
+        // outage at boot must NOT prevent the process from starting: the server
+        // stays up, `/ready` reports 503, and DB requests fail with 503 until the
+        // pool connects lazily on a later access (Kubernetes then keeps the pod
+        // out of rotation instead of crash-looping it).
         if database_config.is_some() && app.db_pool.is_none() {
-            let connect_err = match app.connect_database(py) {
-                Ok(()) => None,
-                Err(e) => Some(e.to_string()),
-            };
-            if let Some(msg) = connect_err {
-                return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
-                    "Database init error: {}",
-                    msg
-                )));
+            if let Err(e) = app.connect_database(py) {
+                tracing::warn!(
+                    "Database unavailable at startup ({}): serving without a pool; \
+                     /ready reports 503 and DB requests return 503 until it reconnects",
+                    e
+                );
             }
         }
         // Capture the (now resolved) pool before the borrow is released, so the

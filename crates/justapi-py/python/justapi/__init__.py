@@ -57,7 +57,7 @@ except ImportError:
 from ._justapi import Database, DbPool, DbParam  # type: ignore[import-untyped]
 from .app import JustAPIApp, JustAPI, JustAPP, Depends, Security, Mailer, adaptive_batch, native_async, APIRouter, Controller, controller, route_get, route_post, route_put, route_patch, route_delete, route_query, route_sse, route_websocket, JustAPITestClient, RequestValidationError, Session
 from .system import build_help, build_openapi, register_system_routes
-from .exceptions import HTTPException, WebSocketException
+from .exceptions import DatabaseUnavailable, HTTPException, WebSocketException
 from .websockets import WebSocket, WebSocketState, WebSocketDisconnect
 from .templating import Jinja2Templates
 from .background import BackgroundTasks
@@ -331,6 +331,7 @@ __all__ = [
     "FileResponse",
     "UploadFile", "RequestValidationError", "Param", "Path", "Query", "Header", 
     "Cookie", "Body", "File", "Form", "status", "HTTPException", "WebSocketException",
+    "DatabaseUnavailable",
     "WebSocketState", "WebSocketDisconnect", "JwtAuth", "OAuth2PasswordBearer",
     "OAuth2PasswordRequestForm", "OAuth2PasswordRequestFormStrict",
     "HTTPBearer", "HTTPBasic", "APIKeyHeader", "APIKeyQuery", "APIKeyCookie",

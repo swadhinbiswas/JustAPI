@@ -15,3 +15,6 @@ class WebSocketException(Exception):
     def __init__(self, code: int = 1000, reason: Optional[str] = None) -> None: ...
     code: int
     reason: Optional[str]
+
+class DatabaseUnavailable(RuntimeError):
+    """Retryable database outage (rendered as 503 + Retry-After)."""

@@ -106,6 +106,33 @@ app.run("0.0.0.0:8000", max_body_size=1024 * 1024)   # 1 MiB cap
   stub). Scrape it with Prometheus; alert on `request` error rates, p99 latency,
   and `connection` saturation.
 
+### Database outages (verified behavior)
+
+A database outage is **not** a crash and **not** a 500:
+
+| Situation | Behavior |
+|---|---|
+| DB down at process start | Server **starts normally**; `/live` 200, `/ready` 503, DB requests 503. Logs one warning. |
+| DB goes down while running | `/ready` 503; DB-backed requests return **503 + `Retry-After: 5`** after the acquire window (`request_acquire_timeout`, 3 s default) — no hang, no 500. |
+| DB comes back | The pool reconnects **lazily on the next request**; `/ready` returns 200 and traffic resumes — **no restart required**. |
+| Query still running when the acquire window expires | `DatabaseUnavailable` is raised; the request fails fast instead of queueing behind a dead server. |
+
+Handlers can degrade gracefully:
+
+```python
+from justapi import DatabaseUnavailable
+
+@app.get("/report")
+def report():
+    try:
+        return {"rows": app.db.query("SELECT ...")}
+    except DatabaseUnavailable:
+        return {"cached": True}   # serve a cached/static view
+```
+
+Kubernetes users: rely on `readinessProbe: /ready` rather than a startup
+probe that kills the pod — the process is healthy, its dependency is not.
+
 ---
 
 ## 6. Security headers (opt-in)
@@ -235,8 +262,8 @@ The claims below are backed by recorded runs, not estimates:
 
 | Area | Evidence |
 |---|---|
-| Tests (GIL) | 267 Python tests, 312 core lib tests, 151 inference tests |
-| Tests (free-threaded 3.14t) | 246 Python tests with `PYTHON_GIL=0` |
+| Tests (GIL) | 275 Python tests, 312 core lib tests, 151 inference tests |
+| Tests (free-threaded 3.14t) | 255 Python tests with `PYTHON_GIL=0` |
 | Lint/supply chain | `cargo fmt --check`, `clippy -D warnings`, `cargo deny` (0 ignored advisories), Trivy + CycloneDX SBOM |
 | Latency gate | p99 A/B vs main is a **hard CI gate** (≤5% and <0.2 ms absolute) since 2026-10-23 — §13 |
 | Multi-worker | 4 prefork workers: 3.20–3.73× RPS, p99 down ~2/3 (BENCHMARKS.md) |
@@ -244,7 +271,8 @@ The claims below are backed by recorded runs, not estimates:
 | Database correctness | SQLite + Postgres 16 (same app): parameter types pinned per value, WAL/busy_timeout, background tasks |
 | Deployment | Docker two-stage image (non-root, healthcheck, `/data` volume) built + smoke-tested on every PR |
 | Observability | Prometheus `/metrics`, JSON access logs with request IDs, `/health` + `/ready`, OTLP tracing |
-| Recovery | crash-fast + supervisor restart model (§2); server-side panics abort without UB (§2) |
+| Recovery | crash-fast + supervisor restart model (§2); server-side panics abort without UB (§2); DB outages → 503 + `Retry-After`, lazy reconnect without restart |
+| Supply chain | Actions pinned to full commit SHAs (enforced by a CI job), least-privilege `permissions:` per workflow/job, OIDC publishing, Dependabot for pins, `cargo deny` green |
 
 ### Benchmark gate policy
 

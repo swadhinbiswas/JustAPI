@@ -427,6 +427,21 @@ fn handle_py_error(py: Python<'_>, e: pyo3::PyErr) -> NativeResponse {
             return NativeResponse { status: 422, headers, body: NativeBody::Bytes(body) };
         }
     }
+    if let Some(exc_cls) = justapi.as_ref().and_then(|m| m.getattr("DatabaseUnavailable").ok()) {
+        if val.is_instance(&exc_cls).unwrap_or(false) {
+            // Retryable outage: 503 + Retry-After so LBs and clients back off
+            // instead of treating it as a code defect (500).
+            tracing::error!("Database unavailable: {}", e);
+            return NativeResponse {
+                status: 503,
+                headers: vec![
+                    (b"content-type".to_vec(), b"application/json".to_vec()),
+                    (b"retry-after".to_vec(), b"5".to_vec()),
+                ],
+                body: NativeBody::Bytes(b"{\"detail\":\"database unavailable\"}".to_vec()),
+            };
+        }
+    }
     // Exception surfaced from the Python handler (or the call wrapper).
     // Log the detail server-side only; never leak it to the client.
     tracing::error!("Native handler error: {}", e);

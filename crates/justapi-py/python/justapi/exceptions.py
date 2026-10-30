@@ -26,6 +26,24 @@ class HTTPException(Exception):
         self.headers = headers
 
 
+class DatabaseUnavailable(RuntimeError):
+    """The database is unreachable or the pool is saturated (retryable).
+
+    Raised by ``app.db.*`` when a connection cannot be acquired within the
+    request window (``request_acquire_timeout``, 3s by default) or the server
+    refuses/resets the connection. The request layer renders it as
+    ``503 Service Unavailable`` with a ``Retry-After`` header instead of a
+    generic 500, so load balancers and clients can back off and retry.
+
+    Handlers may catch it to degrade gracefully::
+
+        try:
+            rows = app.db.query(...)
+        except DatabaseUnavailable:
+            return {"cached": True}
+    """
+
+
 class WebSocketException(Exception):
     def __init__(self, code: int = 1000, reason: Optional[str] = None) -> None:
         super().__init__(reason)

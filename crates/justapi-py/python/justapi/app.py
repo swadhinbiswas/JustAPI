@@ -6,7 +6,7 @@ import typing
 import warnings
 from urllib.parse import quote
 from ._justapi import _JustAPIApp, TokenStreamResponse, ValidatedStreamResponse, Database, Mailer as _Mailer
-from .exceptions import WebSocketException
+from .exceptions import DatabaseUnavailable, WebSocketException
 from .websockets import WebSocket
 from .system import register_system_routes, build_help, build_openapi
 from .responses import PlainTextResponse, HTMLResponse, JSONResponse
@@ -37,6 +37,29 @@ def _builtin_live():
 
 
 def _builtin_ready(self):
+    checks = getattr(self, "_health_checks", None) or {}
+    if checks:
+        components = []
+        ready = True
+        for name, check in checks.items():
+            try:
+                healthy = bool(check())
+                status = {"status": "healthy"} if healthy else {"status": "unhealthy"}
+            except Exception as exc:  # noqa: BLE001 - a probe failure means unhealthy
+                healthy = False
+                status = {
+                    "status": "unhealthy",
+                    "message": f"health check '{name}' raised: {exc}",
+                }
+            ready = ready and healthy
+            components.append({"name": name, "status": status})
+        payload = {
+            "status": "healthy" if ready else "unhealthy",
+            "components": components,
+        }
+        return JSONResponse(payload, status_code=200 if ready else 503)
+
+    # No Python-side checks: fall back to the server-scoped registry (if any).
     ready, report = self._app.health_ready()
     try:
         payload = json.loads(report)
@@ -575,6 +598,7 @@ class JustAPIApp:
         self.redoc_url = redoc_url
         self.scalar_url = scalar_url
         self.exception_handlers = {}
+        self._health_checks = {}
         self.middlewares = []
         self._named_routes = {}
         self.routes = []
@@ -1605,10 +1629,14 @@ class JustAPIApp:
             def reports(request):
                 return app.db.query("SELECT * FROM items WHERE qty > ?", [3])
         """
+        if self._app.get_database() is None:
+            return None
         try:
             self._app.connect_database()
         except Exception as e:
-            warnings.warn(f"Database connection failed: {e}")
+            # Configured but unreachable: a retryable outage (503 + Retry-After),
+            # not a programming error (500).
+            raise DatabaseUnavailable(f"database connection failed: {e}") from e
         return self._app.db_pool()
         
     def enable_gateway(self, config_path: str):
@@ -1741,6 +1769,7 @@ class JustAPIApp:
         ``/ready`` return 503. The ``name`` identifies the component in the
         readiness report.
         """
+        self._health_checks[name] = check
         self._app.register_health_check(name, check)
 
     def set_grpc_addr(self, addr: str):
