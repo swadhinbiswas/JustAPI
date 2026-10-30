@@ -1,7 +1,9 @@
 import inspect
+import threading
 import functools
 import json
 import re
+import time
 import typing
 import warnings
 from urllib.parse import quote
@@ -599,6 +601,12 @@ class JustAPIApp:
         self.scalar_url = scalar_url
         self.exception_handlers = {}
         self._health_checks = {}
+        # Lazily-resolved DB pool handle + single-flight connection. Caching the
+        # handle keeps the request hot path free of app-object borrows (which
+        # conflict under free-threaded Python).
+        self._db_pool_cache = None
+        self._db_connect_lock = threading.Lock()
+        self._db_retry_after = 0.0
         self.middlewares = []
         self._named_routes = {}
         self.routes = []
@@ -1602,6 +1610,8 @@ class JustAPIApp:
         # `Option`/`f64` fields off a `Database` instance from Rust hits a
         # pyo3 reconstruction quirk and returns defaults, so we never pass the
         # object directly across the FFI.
+        self._db_pool_cache = None
+        self._db_retry_after = 0.0
         self._app.set_database(db.config_dict())
 
     def connect_database(self):
@@ -1629,15 +1639,28 @@ class JustAPIApp:
             def reports(request):
                 return app.db.query("SELECT * FROM items WHERE qty > ?", [3])
         """
-        if self._app.get_database() is None:
-            return None
-        try:
-            self._app.connect_database()
-        except Exception as e:
-            # Configured but unreachable: a retryable outage (503 + Retry-After),
-            # not a programming error (500).
-            raise DatabaseUnavailable(f"database connection failed: {e}") from e
-        return self._app.db_pool()
+        pool = self._db_pool_cache
+        if pool is not None:
+            return pool
+        now = time.monotonic()
+        if now < self._db_retry_after:
+            # Correlated failures fail fast instead of stampeding the database
+            # (each acquire attempt would otherwise wait the full window).
+            raise DatabaseUnavailable("database unavailable (retry shortly)")
+        with self._db_connect_lock:
+            if self._db_pool_cache is not None:
+                return self._db_pool_cache
+            if self._app.get_database() is None:
+                return None
+            try:
+                self._app.connect_database()
+            except Exception as e:
+                # Configured but unreachable: a retryable outage (503 +
+                # Retry-After), not a programming error (500).
+                self._db_retry_after = time.monotonic() + 1.0
+                raise DatabaseUnavailable(f"database connection failed: {e}") from e
+            self._db_pool_cache = self._app.db_pool()
+            return self._db_pool_cache
         
     def enable_gateway(self, config_path: str):
         self._app.enable_gateway(config_path)
