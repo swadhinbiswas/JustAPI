@@ -178,3 +178,19 @@ def test_request_id_present_on_error_responses():
     # 404 (router miss) also carries an id.
     missing = client.get("/does-not-exist")
     assert missing["status"] == 404
+
+
+def test_init_logging_is_idempotent():
+    """Calling init_logging twice must not panic (module reloads, tests, --reload)."""
+    import subprocess
+    import sys
+
+    code = (
+        "import justapi.logging as logging\n"
+        "logging.init_logging()\n"
+        "logging.init_logging()\n"
+        "print('ok')\n"
+    )
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert "ok" in result.stdout

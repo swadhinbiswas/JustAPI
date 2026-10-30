@@ -179,7 +179,13 @@ pub fn init_logging(config: &LoggingConfig) -> Result<()> {
         layers.push(fmt_layer);
     }
 
-    tracing_subscriber::registry().with(env_filter).with(layers).init();
+    // Logging is process-global. A second initialisation happens in real life
+    // (module reloads, a second app instance in tests, embedding, --reload
+    // supervision) and must never panic: with `panic = "abort"` that would kill
+    // the process. Keep the existing subscriber and say so once.
+    if let Err(err) = tracing_subscriber::registry().with(env_filter).with(layers).try_init() {
+        eprintln!("justapi: logging already initialised ({err}); keeping the existing subscriber");
+    }
 
     Ok(())
 }
