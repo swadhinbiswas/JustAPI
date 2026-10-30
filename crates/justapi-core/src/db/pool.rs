@@ -709,13 +709,49 @@ impl AnyPool {
     }
 }
 
+/// Run a query inside an interactive transaction.
+///
+/// Shares placeholder rewriting and parameter binding with the pool path, so
+/// `?` placeholders and type pinning behave identically inside `with
+/// app.db.begin() as tx` blocks.
+pub async fn tx_query(
+    tx: &mut sqlx::Transaction<'static, sqlx::Any>,
+    kind: DbKind,
+    sql: &str,
+    params: &[Param],
+) -> Result<serde_json::Value, sqlx::Error> {
+    let sql = normalize_placeholders(sql, params, kind);
+    let mut q = sqlx::query(&sql);
+    for p in params {
+        q = bind_param(q, p);
+    }
+    let rows = q.fetch_all(&mut **tx).await?;
+    rows_to_json(rows)
+}
+
+/// Run a write inside an interactive transaction. Returns rows affected.
+pub async fn tx_execute(
+    tx: &mut sqlx::Transaction<'static, sqlx::Any>,
+    kind: DbKind,
+    sql: &str,
+    params: &[Param],
+) -> Result<u64, sqlx::Error> {
+    let sql = normalize_placeholders(sql, params, kind);
+    let mut q = sqlx::query(&sql);
+    for p in params {
+        q = bind_param(q, p);
+    }
+    let res = q.execute(&mut **tx).await?;
+    Ok(res.rows_affected())
+}
+
 /// Rewrite `?` placeholders for the target driver.
 ///
 /// SQLite/MySQL accept `?` as-is. Postgres gets positional `$N` plus a type
 /// pin derived from each bound value (see [`AnyPool::normalize_sql`] for why).
 /// The scanner skips string literals, quoted identifiers and comments, so a
 /// literal `'?'` or a `-- what?` comment is never rewritten.
-fn normalize_placeholders(sql: &str, params: &[Param], kind: DbKind) -> String {
+pub fn normalize_placeholders(sql: &str, params: &[Param], kind: DbKind) -> String {
     if kind != DbKind::Postgres {
         return sql.to_string();
     }

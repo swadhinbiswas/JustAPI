@@ -1,6 +1,8 @@
 use pyo3::prelude::*;
 use pyo3::types::{PyAnyMethods, PyDict, PyList};
 
+use std::sync::Mutex;
+
 use justapi_core::db::{DatabaseConfig, IsolationLevel};
 
 /// A database connection pool configuration for JustAPI.
@@ -200,12 +202,205 @@ impl std::fmt::Display for DbUnavailable {
 
 impl std::error::Error for DbUnavailable {}
 
+/// Convert an `anyhow` error into the Python exception the request layer maps
+/// to a status code: retryable outages become `DatabaseUnavailable` (503),
+/// everything else a `RuntimeError` (500).
+fn map_anyhow_error(py: Python<'_>, e: anyhow::Error) -> pyo3::PyErr {
+    if e.downcast_ref::<DbUnavailable>().is_some() {
+        if let Ok(exc_mod) = py.import("justapi.exceptions") {
+            if let Ok(cls) = exc_mod.getattr("DatabaseUnavailable") {
+                if let Ok(inst) = cls.call1((e.to_string(),)) {
+                    return pyo3::PyErr::from_value(inst);
+                }
+            }
+        }
+    }
+    pyo3::exceptions::PyRuntimeError::new_err(e.to_string())
+}
+
 /// Map a `sqlx` error into an `anyhow` error, tagging retryable outages.
 fn db_err(e: justapi_core::sqlx::Error) -> anyhow::Error {
     if justapi_core::db::is_db_unavailable(&e) {
         anyhow::anyhow!(DbUnavailable(e.to_string()))
     } else {
         anyhow::anyhow!(e.to_string())
+    }
+}
+
+/// An interactive database transaction (`with app.db.begin() as tx`).
+///
+/// The underlying connection is taken out of the mutex for the duration of one
+/// statement and put back afterwards, so Python can run several statements on
+/// the same connection without holding the GIL during I/O. The context manager
+/// commits on a clean exit and rolls back when the body raises.
+#[pyclass]
+pub struct DbTransaction {
+    tx: Mutex<Option<justapi_core::sqlx::Transaction<'static, justapi_core::sqlx::Any>>>,
+    rt: tokio::runtime::Handle,
+    kind: justapi_core::db::DbKind,
+}
+
+impl DbTransaction {
+    fn take_tx(
+        &self,
+    ) -> PyResult<justapi_core::sqlx::Transaction<'static, justapi_core::sqlx::Any>> {
+        let mut guard = self
+            .tx
+            .lock()
+            .map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("transaction lock poisoned"))?;
+        guard.take().ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err(
+                "transaction already committed or rolled back",
+            )
+        })
+    }
+
+    fn restore(&self, tx: justapi_core::sqlx::Transaction<'static, justapi_core::sqlx::Any>) {
+        if let Ok(mut guard) = self.tx.lock() {
+            *guard = Some(tx);
+        }
+    }
+
+    /// Run one async operation on the pool runtime with the transaction moved
+    /// in, then restore it unless the operation consumed it (commit/rollback).
+    fn bridge<T, F>(&self, py: Python<'_>, op: F) -> PyResult<T>
+    where
+        T: Send + 'static,
+        F: std::future::Future<
+                Output = (
+                    Option<justapi_core::sqlx::Transaction<'static, justapi_core::sqlx::Any>>,
+                    anyhow::Result<T>,
+                ),
+            > + Send
+            + 'static,
+    {
+        let rt = self.rt.clone();
+        let (sender, receiver) = std::sync::mpsc::channel::<(
+            Option<justapi_core::sqlx::Transaction<'static, justapi_core::sqlx::Any>>,
+            anyhow::Result<T>,
+        )>();
+        let outcome = py.detach(move || {
+            rt.spawn(async move {
+                let (tx, res) = op.await;
+                let _ = sender.send((tx, res));
+            });
+            receiver
+                .recv()
+                .map_err(|_| anyhow::anyhow!("transaction task dropped before completion"))
+        });
+        match outcome {
+            Ok((tx, res)) => {
+                if let Some(tx) = tx {
+                    self.restore(tx);
+                }
+                match res {
+                    Ok(value) => Ok(value),
+                    Err(e) => Err(map_anyhow_error(py, e)),
+                }
+            }
+            Err(e) => Err(pyo3::exceptions::PyRuntimeError::new_err(e.to_string())),
+        }
+    }
+}
+
+#[pymethods]
+impl DbTransaction {
+    /// Run a query on the transaction's connection; returns row dicts.
+    #[pyo3(signature = (sql, params=None))]
+    fn query<'py>(
+        &self,
+        py: Python<'py>,
+        sql: String,
+        params: Option<Vec<Py<PyAny>>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let params_json: Vec<serde_json::Value> = match params {
+            Some(ps) => {
+                ps.iter().map(|p| python_to_json(py, p.bind(py))).collect::<PyResult<Vec<_>>>()?
+            }
+            None => Vec::new(),
+        };
+        let params = justapi_core::db::Param::from_json_slice(&params_json);
+        let kind = self.kind;
+        let tx = self.take_tx()?;
+        let value = self.bridge(py, async move {
+            let mut tx = tx;
+            let res =
+                justapi_core::db::tx_query(&mut tx, kind, &sql, &params).await.map_err(db_err);
+            (Some(tx), res)
+        })?;
+        json_to_python(py, &value)
+    }
+
+    /// Run a write on the transaction's connection; returns rows affected.
+    #[pyo3(signature = (sql, params=None))]
+    fn execute(
+        &self,
+        py: Python<'_>,
+        sql: String,
+        params: Option<Vec<Py<PyAny>>>,
+    ) -> PyResult<u64> {
+        let params_json: Vec<serde_json::Value> = match params {
+            Some(ps) => {
+                ps.iter().map(|p| python_to_json(py, p.bind(py))).collect::<PyResult<Vec<_>>>()?
+            }
+            None => Vec::new(),
+        };
+        let params = justapi_core::db::Param::from_json_slice(&params_json);
+        let kind = self.kind;
+        let tx = self.take_tx()?;
+        self.bridge(py, async move {
+            let mut tx = tx;
+            let res =
+                justapi_core::db::tx_execute(&mut tx, kind, &sql, &params).await.map_err(db_err);
+            (Some(tx), res)
+        })
+    }
+
+    /// Commit. Using the transaction afterwards raises.
+    fn commit(&self, py: Python<'_>) -> PyResult<()> {
+        let tx = self.take_tx()?;
+        self.bridge(py, async move {
+            let res = tx.commit().await.map_err(db_err);
+            (None, res)
+        })
+    }
+
+    /// Roll back. Using the transaction afterwards raises. Idempotent when the
+    /// transaction is already finished.
+    fn rollback(&self, py: Python<'_>) -> PyResult<()> {
+        let tx = match self.take_tx() {
+            Ok(tx) => tx,
+            Err(_) => return Ok(()),
+        };
+        self.bridge(py, async move {
+            let res = tx.rollback().await.map_err(db_err);
+            (None, res)
+        })
+    }
+
+    fn __enter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    #[pyo3(signature = (exc_type, exc_value=None, traceback=None))]
+    fn __exit__(
+        &self,
+        py: Python<'_>,
+        exc_type: Option<Bound<'_, PyAny>>,
+        exc_value: Option<Bound<'_, PyAny>>,
+        traceback: Option<Bound<'_, PyAny>>,
+    ) -> PyResult<bool> {
+        let _ = (&exc_value, &traceback);
+        let raised = exc_type.map(|t| !t.is_none()).unwrap_or(false);
+        if raised {
+            // Preserve the body's exception: a rollback failure is logged.
+            if let Err(e) = self.rollback(py) {
+                tracing::warn!("transaction rollback failed: {e}");
+            }
+        } else {
+            self.commit(py)?;
+        }
+        Ok(false)
     }
 }
 
@@ -262,18 +457,7 @@ impl DbPool {
             // (avoids the re-entrant block_on deadlock).
             rx.recv().map_err(|_| anyhow::anyhow!("db task dropped before completion"))?
         });
-        res.map_err(|e| {
-            if e.downcast_ref::<DbUnavailable>().is_some() {
-                if let Ok(exc_mod) = py.import("justapi.exceptions") {
-                    if let Ok(cls) = exc_mod.getattr("DatabaseUnavailable") {
-                        if let Ok(inst) = cls.call1((e.to_string(),)) {
-                            return pyo3::PyErr::from_value(inst);
-                        }
-                    }
-                }
-            }
-            pyo3::exceptions::PyRuntimeError::new_err(e.to_string())
-        })
+        res.map_err(|e| map_anyhow_error(py, e))
     }
 }
 
@@ -300,6 +484,23 @@ impl DbPool {
             inner.query_with_params(&sql, &params_json).await.map_err(db_err)
         })?;
         json_to_python(py, &rows)
+    }
+
+    /// Begin an interactive transaction: `with app.db.begin() as tx: ...`.
+    ///
+    /// Every statement executed through `tx` runs on the same connection, so
+    /// multi-step, conditional logic (check stock -> write order -> decrement)
+    /// is atomic. The `with` block commits on success and rolls back on any
+    /// exception. An uncommitted transaction rolls back when garbage collected.
+    ///
+    /// The connection is held until the block exits — keep transactions short.
+    #[pyo3(signature = (isolation=None))]
+    fn begin(&self, py: Python<'_>, isolation: Option<String>) -> PyResult<DbTransaction> {
+        let iso = isolation.as_deref().and_then(parse_isolation);
+        let inner = self.inner.clone();
+        let tx =
+            self.run_blocking(py, async move { inner.begin_with(iso).await.map_err(db_err) })?;
+        Ok(DbTransaction { tx: Mutex::new(Some(tx)), rt: self.rt.clone(), kind: self.inner.kind() })
     }
 
     /// Run a write (INSERT/UPDATE/DELETE/DDL) with optional bound parameters.

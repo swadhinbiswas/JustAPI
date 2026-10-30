@@ -23,7 +23,7 @@ mod websocket;
 
 pub use auth::PyJwtAuth;
 pub use dag::{Dag, DagNode};
-pub use database::{Database, DbParam, DbPool};
+pub use database::{Database, DbParam, DbPool, DbTransaction};
 #[cfg(feature = "mail")]
 pub use mail::PyMailer;
 pub use multipart::UploadFile;
@@ -83,6 +83,7 @@ fn _justapi(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<UploadFile>()?;
     m.add_class::<Database>()?;
     m.add_class::<DbPool>()?;
+    m.add_class::<DbTransaction>()?;
     m.add_class::<DbParam>()?;
     m.add_class::<Dag>()?;
     m.add_class::<DagNode>()?;
