@@ -1,0 +1,43 @@
+# Order Platform — local production-like stack.
+#
+#   docker compose up --build
+#   docker compose exec api python seed.py
+#   curl -H 'X-API-Key: admin-dev-key' http://127.0.0.1:8000/admin/stats
+#
+# SQLite is the default; uncomment the Postgres service and set PLATFORM_DB to
+# run the identical app on Postgres.
+
+services:
+  api:
+    build:
+      context: .
+      args:
+        JUSTAPI_SPEC: ${JUSTAPI_SPEC:-justapi==2.1.0}
+    ports:
+      - "8000:8000"
+    environment:
+      WORKERS: "4"
+      PLATFORM_DB: /data/platform.db
+      # PLATFORM_DB: postgres://postgres:pass@db:5432/platform
+    volumes:
+      - order-data:/data
+    restart: unless-stopped
+    # depends_on:
+    #   db:
+    #     condition: service_healthy
+
+  # db:
+  #   image: postgres:16-alpine
+  #   environment:
+  #     POSTGRES_PASSWORD: pass
+  #     POSTGRES_DB: platform
+  #   volumes:
+  #     - pg-data:/var/lib/postgresql/data
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U postgres"]
+  #     interval: 5s
+  #     retries: 10
+
+volumes:
+  order-data:
+  # pg-data:
