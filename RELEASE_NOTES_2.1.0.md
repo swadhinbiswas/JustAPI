@@ -43,6 +43,17 @@ SIGTERM drains cleanly); `justapi serve --reload` watches `*.py` and restarts.
 - Trivy + CycloneDX SBOM in CI (pinned binary, SHA256-verified); `cargo deny` green with zero ignored advisories (h2/rustls/wasmtime bumped).
 - Docker/K8s entrypoint fixed and verified: `ENTRYPOINT justapi` + `/app/main.py`, Helm `args` work.
 
+### 🧾 Production-shaped reference app + interactive transactions
+`examples/order_platform/` proves the runtime on a real service shape: API-key
+auth with roles, inventory, **atomic orders** via `with app.db.begin() as tx`,
+idempotency keys (including a concurrent retry storm), ownership isolation,
+cancel-with-restore, pagination, and admin analytics — 42 tests, verified on
+SQLite and Postgres and with 4 worker processes (20 buyers / 5 units → exactly
+5 orders, zero negative stock). Load: 4,755 rps reads, 1,127 transactional
+writes/s. Building it found and fixed three production issues: missing
+interactive transactions, a free-threaded PyO3 borrow race in `app.db`, and a
+logging double-init panic (ADR-103).
+
 ### 🤖 First real-weights inference run (ADR-098) — and OpenAI serving
 TinyLlama-1.1B Q4 GGUF on CPU: **22.1 tok/s, TTFT 0.14 s**, fluent output.
 `justapi-cli serve --model <id> --model-path <dir>` (features `inference,real`)

@@ -106,6 +106,31 @@ app.run("0.0.0.0:8000", max_body_size=1024 * 1024)   # 1 MiB cap
   stub). Scrape it with Prometheus; alert on `request` error rates, p99 latency,
   and `connection` saturation.
 
+### Transactions
+
+Use `with app.db.begin() as tx:` for multi-step flow that must be atomic — the
+block commits on success, rolls back on any exception, and holds one connection
+for the duration (keep it short):
+
+```python
+with app.db.begin() as tx:
+    row = tx.query("UPDATE stock SET qty = qty - ? WHERE sku = ? AND qty >= ? RETURNING price_cents",
+                   [qty, sku, qty])
+    if not row:
+        raise HTTPException(409, "insufficient stock")   # rolls back
+    tx.execute("INSERT INTO orders (...) VALUES (...)", [...])
+```
+
+Rules that keep it fast and deadlock-free:
+
+- Do the **write first** (`UPDATE ... WHERE ... RETURNING`) so conditional logic
+  is atomic and SQLite takes the write lock immediately (avoids the
+  read-to-write upgrade busy-error).
+- For multi-row updates, touch rows in a **consistent order** (e.g. sort by
+  primary key) to avoid cross-transaction deadlocks.
+- An interactive transaction holds a pooled connection; a leaked one rolls back
+  on GC but still reduces pool capacity until then.
+
 ### Database outages (verified behavior)
 
 A database outage is **not** a crash and **not** a 500:
@@ -262,13 +287,14 @@ The claims below are backed by recorded runs, not estimates:
 
 | Area | Evidence |
 |---|---|
-| Tests (GIL) | 275 Python tests, 312 core lib tests, 151 inference tests |
-| Tests (free-threaded 3.14t) | 255 Python tests with `PYTHON_GIL=0` |
+| Tests (GIL) | 317 Python tests (framework + 2 production examples), 312 core lib tests, 151 inference tests |
+| Tests (free-threaded 3.14t) | 317 Python tests with `PYTHON_GIL=0` |
 | Lint/supply chain | `cargo fmt --check`, `clippy -D warnings`, `cargo deny` (0 ignored advisories), Trivy + CycloneDX SBOM |
 | Latency gate | p99 A/B vs main is a **hard CI gate** (≤5% and <0.2 ms absolute) since 2026-10-23 — §13 |
 | Multi-worker | 4 prefork workers: 3.20–3.73× RPS, p99 down ~2/3 (BENCHMARKS.md) |
 | Graceful shutdown | Worker SIGTERM drains in-flight requests and is respawned; supervisor SIGTERM stops all workers cleanly |
-| Database correctness | SQLite + Postgres 16 (same app): parameter types pinned per value, WAL/busy_timeout, background tasks |
+| Database correctness | SQLite + Postgres 16 (same app): parameter types pinned per value, WAL/busy_timeout, background tasks; **interactive transactions** (commit/rollback, multi-item atomicity) |
+| Inventory/invariant proof | Order platform: 12 concurrent buyers / 5 units → exactly 5 orders (4 workers, SQLite **and** Postgres); idempotency storm → one order; zero negative stock; 1,127 transactional writes/s |
 | Deployment | Docker two-stage image (non-root, healthcheck, `/data` volume) built + smoke-tested on every PR |
 | Observability | Prometheus `/metrics`, JSON access logs with request IDs, `/health` + `/ready`, OTLP tracing |
 | Recovery | crash-fast + supervisor restart model (§2); server-side panics abort without UB (§2); DB outages → 503 + `Retry-After`, lazy reconnect without restart |

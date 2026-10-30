@@ -20,6 +20,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   401/429/504s and CORS preflights — and records it in the structured access
   log as `http.request_id`. Implemented in `justapi-core` (`RequestId`
   middleware) and wired into both the server and TestClient pipelines.
+- **Interactive transactions: `with app.db.begin() as tx:`** (ADR-103). A
+  transaction is bound to one pooled connection; `tx.query/execute` run on it,
+  the block commits on success and rolls back on any exception, and an
+  uncommitted transaction rolls back on garbage collection. This makes
+  conditional multi-statement flows (check stock -> write order -> decrement)
+  genuinely atomic. `?` placeholders and type pinning behave exactly as on the
+  pool. Verified under concurrency: 20 concurrent increment transactions ->
+  exactly 20; 12 simultaneous buyers against 5 units -> exactly 5 succeed.
+- **New example app: `examples/order_platform/`** — the production-shaped
+  reference: API-key auth with roles, products/inventory, atomic orders,
+  idempotency keys (including a concurrent retry storm), ownership isolation,
+  cancel-with-stock-restore, pagination/filter/sort, admin analytics, 42
+  end-to-end tests. Verified on SQLite and Postgres, and with
+  `justapi serve --workers 4` (20 concurrent orders on 5 units -> exactly 5
+  across processes; idempotency storm -> one order). Load: 4,755 rps
+  `GET /products`, 1,127 transactional `POST /orders`/s on 4 workers.
 - **New example app:** `examples/expense_analytics/` — SQLite + full CRUD + five analytics endpoints + SSE + background audit log + health checks, with 20 end-to-end tests (`pytest test_app.py`).
 - **Real-model OpenAI serving (verified end to end):** `justapi-cli serve --model <id> --model-path <dir>` with `--features inference,real` serves real GGUF weights over `/v1/chat/completions` (streaming SSE), `/v1/completions` and `/v1/models`. Verified with TinyLlama-1.1B Q4 on CPU: streaming deltas carry correct text (spaces/newlines), `[DONE]` terminator, coherent completions. Fixed the Llama decode pipeline found by this test (`▁`→space + byte-fallback for `<0xNN>` tokens).
 - **Real-weights inference support (first real run, ADR-098):** `Engine::encode/decode/generate_text` — real models are now drivable from text; GGUF SentencePiece tokenizers are built correctly (Metaspace, `unk_token`, `fuse_unk`); `quantized_llama` logits are rank-normalized for the sampler; generation errors are surfaced instead of silently closing the stream. Verified: TinyLlama-1.1B Q4 on CPU — 22.1 tok/s, TTFT 0.14 s, fluent output (`JUSTAPI_REAL_MODEL_DIR=... cargo test -p justapi-inference --features real --test real_weights -- --ignored --nocapture`).
@@ -38,6 +54,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Free-threaded `app.db` access raced on PyO3's exclusive borrow.** Under
+  free-threaded Python (3.14t), concurrent first access to `app.db` called
+  `connect_database` from several threads while the lazy connect held an
+  exclusive borrow across the DB round-trip — requests failed with
+  `RuntimeError: Already borrowed` (500/503). The pool handle is now cached
+  after the first successful connect (no app-object borrow on the request hot
+  path), first-connect is single-flight, and correlated failures fail fast for
+  1 s instead of stampeding the database. The order-platform concurrency suite
+  now passes identically on GIL and 3.14t builds (317 tests each).
+- **`init_logging()` panicked when called twice (ADR-103).** Module reloads, a
+  second app instance, tests, or `--reload` supervision hit
+  `SetGlobalDefaultError` and — with `panic = "abort"` — could kill the
+  process. Initialisation is now idempotent: the existing subscriber is kept
+  and a note is printed.
 - **Database outages are retryable, not fatal (ADR-102).** `app.db.*` now raises
   `DatabaseUnavailable` when the pool cannot acquire a connection within
   `request_acquire_timeout` (3 s default) or the server is unreachable; the

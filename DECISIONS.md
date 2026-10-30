@@ -4028,3 +4028,53 @@ catchable, no-DB → None, `/ready` 503); live Postgres kill/restart cycle:
 boot with PG down → server up, `/ready` 503, requests 503 + `Retry-After` in
 3.0 s; start PG → `/ready` 200, requests 200, no restart; startup logs one
 warning. Full suites: 275 Python (GIL), 255 (free-threaded), 312 core Rust.
+
+## ADR-103 — 2026-10-30 — Interactive transactions; free-threaded pool handle; idempotent logging
+
+**Context.** Building a production-shaped order API (`examples/order_platform`)
+exposed three gaps:
+
+1. `app.db.transaction(stmts)` is a **batch** API and cannot express
+   "check stock, branch on the result, write the order, decrement" atomically.
+2. Under free-threaded Python (3.14t), concurrent first access to `app.db`
+   failed with `RuntimeError: Already borrowed`: the property called
+   `connect_database()` (a `&mut self` PyO3 method) which held an exclusive
+   borrow across the GIL-released DB round-trip, so parallel requests collided
+   with it (observed as 500/503 in the concurrency suite).
+3. `init_logging()` called `.init()` on the tracing subscriber and **panicked**
+   on a second initialisation (`SetGlobalDefaultError`) — a process killer with
+   `panic = "abort"` when an app module is reloaded, tested twice, or embedded.
+
+**Decision.**
+
+- **Interactive transactions** (`DbTransaction`): `app.db.begin()` acquires a
+  connection and starts a transaction; `tx.query/execute` move the
+  `sqlx::Transaction` through a mutex, run the statement on the pool's tokio
+  runtime (same runtime that owns the connection), and put it back. The context
+  manager commits on a clean exit and rolls back when the body raises;
+  dropping the object rolls back. Core owns SQL rewriting/binding
+  (`justapi_core::db::tx_query/tx_execute`), so `?` placeholders and the
+  Postgres type pins are identical to the pool path.
+- **Pool handle caching**: `app.db` returns a cached `DbPool` after the first
+  successful connect (the request hot path performs no app-object borrow), the
+  first connect is single-flight behind a `threading.Lock`, and a failed
+  connect trips a 1-second fail-fast window so correlated requests do not all
+  wait the 3-second acquire window. `set_database` resets the cache.
+- **Idempotent logging**: use `try_init()`; when a subscriber already exists,
+  print one note and keep it.
+- The order flow writes before reading (`UPDATE ... WHERE stock >= ? RETURNING`)
+  and sorts lines by SKU to keep lock ordering consistent; cancel performs the
+  conditional status UPDATE first for the same reason.
+
+**Consequences.** Multi-statement atomicity is now available from Python at the
+cost of holding a connection per open transaction (documented). The 1-second
+fail-fast window means recovery from a DB outage can lag by up to one second —
+acceptable, and far better than a request stampede. Free-threaded and GIL
+builds now behave identically under the concurrency suite.
+
+**Verified.** Transactions: commit/rollback/use-after-finish, exception
+rollback, 20 concurrent increments. Order platform: 42 tests × SQLite and
+Postgres; the suite passes three consecutive runs on 3.14t; 4-worker
+cross-process oversell test (SQLite and Postgres) → exactly 5 of 20 orders,
+stock 0, no negative rows; idempotency storm → 1 order; 1,127 transactional
+POSTs/s; Docker image built and smoke-tested.

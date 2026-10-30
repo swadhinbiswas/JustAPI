@@ -2164,3 +2164,29 @@ Two framework bugs were found by this run and fixed (commit `c2dfaad`):
 models using `from __future__ import annotations` stayed "not fully
 defined" → every validated write returned 422), and forked workers inherited
 the supervisor's signal handlers (crash on shutdown instead of draining).
+
+
+### Order platform (complex API) — load + invariants (2026-10-30)
+
+`examples/order_platform` — API-key auth, pagination, and **interactive
+transactions** (stock check + order + items + event). `justapi serve --workers 4`,
+SQLite WAL, localhost, oha:
+
+| Workload | RPS | p50 | p99 | Status |
+|---|---:|---:|---:|---|
+| `GET /products?limit=20` (c=50) | 4,755 | 10.5 ms | 14.9 ms | 38,001 × 200 |
+| `POST /orders` (c=20, transactional) | 1,127 | 12.6 ms | 110 ms | 8,997 × 201 |
+
+Write-path invariants after the run: 9,004 orders, 9,004 order_items,
+`stock = 1,000,000 − 9,004` exactly, **zero negative-stock rows**.
+
+Concurrency proofs (same app, 4 separate worker processes):
+
+| Scenario | SQLite | Postgres 16 |
+|---|---|---|
+| 20 concurrent orders, 5 units in stock | 5 × 201 / 15 × 409, stock 0 | 5 × 201 / 15 × 409, stock 0 |
+| 10 concurrent retries, one idempotency key | 1 order, 1 decrement | 1 order, 1 decrement |
+| cancel + re-order race | one cancel wins, stock consistent | one cancel wins, stock consistent |
+
+Free-threaded (3.14t): the same 42-test suite plus the 20-concurrent-order case
+passes with `PYTHON_GIL=0`.
