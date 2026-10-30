@@ -8,7 +8,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use futures::future::BoxFuture;
 use governor::clock::Clock;
-use http::HeaderValue;
+use http::{HeaderName, HeaderValue};
 use http_body_util::combinators::UnsyncBoxBody;
 use http_body_util::BodyExt;
 use hyper::body::{Bytes, Incoming};
@@ -426,6 +426,108 @@ impl<B: Send + 'static> Middleware<B> for SecurityHeaders {
 
         headers.insert("x-xss-protection", HeaderValue::from_static("0"));
         Ok(resp)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Request ID
+// ---------------------------------------------------------------------------
+
+/// Ensures every request carries a correlation id.
+///
+/// - Honours an incoming `x-request-id` header so clients and upstream proxies
+///   control the id (1-128 printable ASCII bytes; anything else is replaced).
+/// - Otherwise generates a 128-bit random hex id.
+/// - Injects the header into the request (handlers can read it) and echoes it
+///   on the response — including error responses produced by inner
+///   middleware (401/429/504, CORS preflight).
+///
+/// Add it outermost so those responses carry the id too.
+#[derive(Clone)]
+pub struct RequestId {
+    header: HeaderName,
+}
+
+impl RequestId {
+    /// Build a middleware using the conventional `x-request-id` header.
+    pub fn new() -> Self {
+        Self { header: HeaderName::from_static("x-request-id") }
+    }
+
+    /// Build a middleware using a custom header (case-insensitive), e.g.
+    /// `X-Correlation-ID`.
+    pub fn with_header(header: &str) -> Result<Self> {
+        let name = HeaderName::from_bytes(header.trim().to_ascii_lowercase().as_bytes())
+            .map_err(|e| anyhow::anyhow!("invalid request-id header name {header:?}: {e}"))?;
+        Ok(Self { header: name })
+    }
+
+    /// The header this middleware reads and writes.
+    pub fn header_name(&self) -> &HeaderName {
+        &self.header
+    }
+
+    /// Accept a caller-supplied id only when it is a safe header value.
+    fn is_valid_id(value: &str) -> bool {
+        let trimmed = value.trim();
+        !trimmed.is_empty()
+            && trimmed.len() <= 128
+            && trimmed.bytes().all(|b| (0x20..=0x7e).contains(&b))
+    }
+
+    /// 128-bit random id as 32 lowercase hex characters.
+    fn generate() -> String {
+        use rand::Rng;
+        let bytes: [u8; 16] = rand::thread_rng().gen();
+        let mut out = String::with_capacity(32);
+        for byte in bytes {
+            use std::fmt::Write as _;
+            let _ = write!(out, "{byte:02x}");
+        }
+        out
+    }
+}
+
+impl Default for RequestId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// The correlation id resolved for a request, stored in response extensions
+/// by [`RequestId`] so access logs can report it regardless of the configured
+/// header name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RequestIdValue(pub String);
+
+#[async_trait]
+impl<B: Send + 'static> Middleware<B> for RequestId {
+    async fn handle(
+        &self,
+        mut req: Request<B>,
+        next: Next<'_, B>,
+    ) -> Result<Response<ResponseBody>> {
+        let incoming = req
+            .headers()
+            .get(&self.header)
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim)
+            .filter(|value| Self::is_valid_id(value))
+            .map(str::to_owned);
+        let id = incoming.unwrap_or_else(Self::generate);
+
+        if let Ok(value) = HeaderValue::from_str(&id) {
+            req.headers_mut().insert(self.header.clone(), value);
+        }
+
+        let mut response = next.run(req).await?;
+        if let Ok(value) = HeaderValue::from_str(&id) {
+            response.headers_mut().insert(self.header.clone(), value);
+        }
+        // Also carry the id in response extensions so access logging can
+        // report it without knowing the configured header name.
+        response.extensions_mut().insert(RequestIdValue(id));
+        Ok(response)
     }
 }
 
@@ -2290,5 +2392,64 @@ mod tests {
         let mut req = test_req(Method::GET, "/x");
         req.extensions_mut().insert(serde_json::json!({"sub": "bob"}));
         assert_eq!(chain.run(req).await.unwrap().status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn request_id_validates_incoming_values() {
+        assert!(RequestId::is_valid_id("abc-123"));
+        assert!(RequestId::is_valid_id("  trace/42  "));
+        assert!(!RequestId::is_valid_id(""));
+        assert!(!RequestId::is_valid_id("   "));
+        assert!(!RequestId::is_valid_id("line\nbreak"));
+        assert!(!RequestId::is_valid_id(&"x".repeat(129)));
+    }
+
+    #[test]
+    fn request_id_generates_32_hex_chars() {
+        let id = RequestId::generate();
+        assert_eq!(id.len(), 32);
+        assert!(id.bytes().all(|b| b.is_ascii_hexdigit()));
+        assert_ne!(id, RequestId::generate(), "ids must not repeat");
+    }
+
+    #[test]
+    fn request_id_custom_header_is_normalized() {
+        let mw = RequestId::with_header("X-Correlation-ID").unwrap();
+        assert_eq!(mw.header_name().as_str(), "x-correlation-id");
+        assert!(RequestId::with_header("bad header name").is_err());
+    }
+
+    #[tokio::test]
+    async fn request_id_header_is_injected_and_echoed() {
+        let handler: HandlerFn<TestBody> = Arc::new(|req: Request<TestBody>| {
+            Box::pin(async move {
+                let id = req
+                    .headers()
+                    .get("x-request-id")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or_default()
+                    .to_string();
+                let mut resp = json_response(StatusCode::OK, "ok");
+                resp.headers_mut().insert(
+                    "x-handler-saw",
+                    HeaderValue::from_str(&id).expect("valid header value"),
+                );
+                Ok(resp)
+            })
+        });
+        let mut chain = MiddlewareChain::new(handler);
+        chain.add(RequestId::new());
+
+        // Caller-supplied id is honoured end to end.
+        let mut req = test_req(Method::GET, "/x");
+        req.headers_mut().insert("x-request-id", HeaderValue::from_static("trace-abc"));
+        let resp = chain.run(req).await.unwrap();
+        assert_eq!(resp.headers().get("x-request-id").unwrap(), "trace-abc");
+        assert_eq!(resp.headers().get("x-handler-saw").unwrap(), "trace-abc");
+
+        // Without one, an id is generated and echoed.
+        let resp = chain.run(test_req(Method::GET, "/x")).await.unwrap();
+        let id = resp.headers().get("x-request-id").unwrap().to_str().unwrap();
+        assert_eq!(id.len(), 32);
     }
 }

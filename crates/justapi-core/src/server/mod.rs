@@ -1585,9 +1585,15 @@ async fn serve_connection(
             match &result {
                 Ok(resp) => {
                     let status = resp.status();
+                    let request_id = resp
+                        .extensions()
+                        .get::<crate::middleware::RequestIdValue>()
+                        .map(|v| v.0.as_str())
+                        .unwrap_or("-");
                     tracing::info!(
                         http.method = %method,
                         http.path = %path,
+                        http.request_id = %request_id,
                         http.status_code = status.as_u16(),
                         latency_ms = format!("{:.2}", start.elapsed().as_secs_f64() * 1000.0),
                         "request completed"
