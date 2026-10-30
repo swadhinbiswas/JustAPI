@@ -11,6 +11,15 @@ ignore = [
     "RUSTSEC-2024-0436",  # paste: unmaintained, transitive via candle-core/gemm — no replacement available
     "RUSTSEC-2023-0071",  # rsa: Marvin Attack timing side-channel, transitive via sqlx-mysql — no fix yet
     # spin 0.9.8: yanked, transitive via flume → sqlx-sqlite — no impact on our usage
+    # zip 8.6 (RUSTSEC-2026-0367/0368/0369: SUID/SGID preservation, symlink
+    # and permission escapes in ZipArchive::extract). Transitive via
+    # candle-core 0.11.0, which pins zip ^8.6 (no 8.x patch exists). NOT
+    # reachable from justapi: zip is used only by candle-core's NumPy `.npz`
+    # reader/writer; justapi-inference loads GGUF/safetensors and never calls
+    # it. Remove these when candle-core moves to zip >= 9.
+    "RUSTSEC-2026-0367",
+    "RUSTSEC-2026-0368",
+    "RUSTSEC-2026-0369",
 ]
 
 [licenses]

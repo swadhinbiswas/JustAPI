@@ -70,7 +70,17 @@ http = "1.4.2"
 http-body = "1.0"
 multer = "3.1"
 bytes = "1.12.0"
-wasmtime = { version = "49.0.2", optional = true }
+# Only what the WASM middleware uses (core modules, sync API, WAT input).
+# The default feature set pulls the module cache -> zstd, component model,
+# GC, async, profiling — none of which this middleware needs.
+wasmtime = { version = "49.0.2", optional = true, default-features = false, features = [
+    "anyhow",
+    "async",
+    "cranelift",
+    "runtime",
+    "std",
+    "wat",
+] }
 redis = { version = "1.3.0", features = ["tokio-comp", "connection-manager"], optional = true }
 notify = "8.2.0"
 arc-swap = "1.9.2"
